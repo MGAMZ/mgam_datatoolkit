@@ -362,7 +362,7 @@ class BroxOpticalFlow_LabelAugment(OpticalFlow_BaseLabelAugment):
         super().__init__(*args, **kwargs)
         cv2.cuda.setDevice(gpu_id)
         if use_mp:
-            self.mpp = Pool(2)
+            self.mpp = Pool(4)
         self.OF = cv2.cuda.BroxOpticalFlow.create(
             alpha=15, gamma=0.3, scale_factor=0.5, 
             inner_iterations=4, outer_iterations=16, 
@@ -534,6 +534,11 @@ class BroxOF_20240712(BroxOpticalFlow_LabelAugment):
                            for image in images], dtype=images[0].dtype)
         return BroxOpticalFlow_LabelAugment.Denoise(images, method)
 
+
+    def bilateral_denoise(self, images:np.ndarray) -> np.ndarray:
+        images = np.array([BroxOF_20240712.LowValueClip(image, 0.3) 
+                           for image in images], dtype=images[0].dtype)
+        return super().bilateral_denoise(images)
 
 
 class BroxOF_20240713(BroxOpticalFlow_LabelAugment):
@@ -767,14 +772,14 @@ class OpticalFlowAugmentor_Transform(BaseTransform):
 
 class OpticalFlowAugmentor_RandomDistance(OpticalFlowAugmentor_Transform):
     @staticmethod
-    def warp_preprocess(image) -> np.ndarray:
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    def warp_preprocess(image, kernal_size=(3,3)) -> np.ndarray:
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, kernal_size)
         image = cv2.erode(image, kernel, iterations=2)
         return image
     
     @staticmethod
-    def warp_postprocess(image) -> np.ndarray:
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    def warp_postprocess(image, kernal_size=(3,3)) -> np.ndarray:
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, kernal_size)
         image = cv2.dilate(image, kernel, iterations=2)
         return image
 

@@ -2,12 +2,16 @@ import os
 import pdb
 import torch
 import datetime
+import logging
 from typing import Dict
 
 import pandas as pd
 from mmengine.runner import Runner, IterBasedTrainLoop
+from mmengine.runner.runner import ConfigType
 from mmengine.hooks import LoggerHook
 from mmengine.registry import RUNNERS
+from mmengine.logging import print_log
+from .SA_Med2D import SA_Med2D_Dataset
 
 """
 Runner在执行训练时是最为底层的实现，
@@ -21,10 +25,22 @@ class mgam_Runner(Runner):
         self.custom_env(kwargs.get('env_cfg', {}))
         super().__init__(**kwargs)
 
+    @staticmethod
+    def str_to_log_level(string):
+        idx = getattr(logging, string.upper(), None)
+        if idx is None:
+            raise ValueError(f"Unsupported log level: {string}")
+        else:
+            return idx
+
+
     def custom_env(self, cfg):
         # Avoid device clash with OpenCV
         torch.cuda.set_device(cfg.get('torch_cuda_id', 0))
         # Torch Compile
+        cfg.get('torch_logging_level', logging.WARN)
+        torch._logging.set_logs(all=self.str_to_log_level(cfg.get('torch_logging_level', 'WARN')))
+        torch._logging.set_logs(dynamo=self.str_to_log_level(cfg.get('dynamo_logging_level', 'WARN')))
         torch._dynamo.config.cache_size_limit = cfg.get('dynamo_cache_size', 1) # type:ignore
         torch._dynamo.config.suppress_errors = cfg.get('dynamo_supress_errors', False) # type:ignore
         # cuBLAS matmul
@@ -37,6 +53,29 @@ class mgam_Runner(Runner):
         torch.backends.cudnn.allow_tf32 = cfg.get('allow_tf32', False)
         torch.backends.cudnn.benchmark = cfg.get('benchmark', False)
         torch.backends.cudnn.deterministic = cfg.get('deterministic', False)
+
+    @classmethod
+    def from_cfg(cls, cfg):
+        if  isinstance(cfg, ConfigType) and \
+            issubclass(cfg.train_dataset.type, SA_Med2D_Dataset):
+            
+            union_atom_map, label_map, proxy, union_atom_map_path = \
+            SA_Med2D_Dataset.set_proxy(cfg['modality'], cfg['dataset_source'], True, 'from_mnt')
+            num_classes = len(label_map.keys())
+            cfg = cls.auto_configure_num_classes_from_Databackend(cfg, num_classes)
+        
+        return super().from_cfg(cfg)
+    
+    @staticmethod
+    def auto_configure_num_classes_from_Databackend(cfg:ConfigType, num_classes):
+        for key, value in cfg.items():
+            if key == 'num_classes' or key == 'out_channels':
+                print_log(f"NumClasses Auto Override {cfg.get('type', 'Unknown')}: {cfg['num_classes']} -> {num_classes}",
+                          'current')
+                cfg[key] = num_classes
+            elif isinstance(value, ConfigType):
+                cfg[key] = mgam_Runner.auto_configure_num_classes_from_Databackend(value, num_classes)
+        return cfg
 
 
 

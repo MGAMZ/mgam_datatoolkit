@@ -1,6 +1,7 @@
 import os
 import pdb
 from typing import Dict, List, OrderedDict, Tuple
+from colorama import Fore, Style
 
 import cv2
 import numpy as np
@@ -354,17 +355,21 @@ class ClassRectify(BaseTransform):
         proxy = DatasetBackend_GlobalProxy.get_current_instance()
         self.max_cls_idx = len(proxy.atom_classes) - 1
         self.union_atom_map = proxy.union_atom_map
-        print_log(f"Class Info Check: MaxClsIdx {self.max_cls_idx} | UnionAtomMap {self.union_atom_map}", 
-                  logger=MMLogger.get_current_instance())
+        # print_log(f"Class Info Check: MaxClsIdx {self.max_cls_idx} | UnionAtomMap {self.union_atom_map}", 
+        #           logger=MMLogger.get_current_instance())
     
     def transform(self, results):
-        seg_map = results['gt_seg_map']
-        for i in np.unique(seg_map):
-            new_idx = self.union_atom_map.get(str(i), None)
-            if new_idx:
-                seg_map[seg_map==int(i)] = new_idx
-        if seg_map.max() > self.max_cls_idx:
-            raise ValueError(f"Class index {seg_map.max()} is larger than valid maximum {self.max_cls_idx}")
-        results['gt_seg_map'] = seg_map
+        try:
+            seg_map = results['gt_seg_map']
+            for i in np.unique(seg_map):
+                new_idx = self.union_atom_map.get(str(i), None)
+                if new_idx:
+                    seg_map[seg_map==int(i)] = new_idx
+            if seg_map.max() > self.max_cls_idx:
+                raise ValueError(f"Class index {seg_map.max()} is larger than valid maximum {self.max_cls_idx}")
+            results['gt_seg_map'] = seg_map
+        except Exception as e:
+            print(Fore.RED + f"Encounter exception value after ClassRectify: {seg_map.max()}, expected max value: {self.max_cls_idx}" + Style.RESET_ALL)
+            pdb.set_trace()
         return results
 
