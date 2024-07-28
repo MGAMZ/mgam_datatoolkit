@@ -1,6 +1,6 @@
 import os
 import pdb
-from typing import Dict, List, OrderedDict, Tuple
+from typing import Dict, List, OrderedDict, Tuple, Type
 from colorama import Fore, Style
 
 import cv2
@@ -352,7 +352,7 @@ class ClassFilter(BaseTransform):
 
 class ClassRectify(BaseTransform):
     def __init__(self):
-        proxy = DatasetBackend_GlobalProxy.get_current_instance()
+        proxy:Type = DatasetBackend_GlobalProxy.get_current_instance()
         self.max_cls_idx = len(proxy.atom_classes) - 1
         self.union_atom_map = proxy.union_atom_map
         # print_log(f"Class Info Check: MaxClsIdx {self.max_cls_idx} | UnionAtomMap {self.union_atom_map}", 
@@ -368,8 +368,13 @@ class ClassRectify(BaseTransform):
             if seg_map.max() > self.max_cls_idx:
                 raise ValueError(f"Class index {seg_map.max()} is larger than valid maximum {self.max_cls_idx}")
             results['gt_seg_map'] = seg_map
-        except Exception as e:
-            print(Fore.RED + f"Encounter exception value after ClassRectify: {seg_map.max()}, expected max value: {self.max_cls_idx}" + Style.RESET_ALL)
-            pdb.set_trace()
+        except ValueError as e:
+            print(Fore.RED 
+                  + f"\n\nEncounter exception value after ClassRectify: {seg_map.max()},"
+                    f"expected max value: {self.max_cls_idx}\n" 
+                    f"PROXY: {proxy.__dict__}\n\n"
+                  + Style.RESET_ALL)
+            exit(-2)
+            
         return results
 

@@ -512,7 +512,6 @@ class BroxOpticalFlow_LabelAugment(OpticalFlow_BaseLabelAugment):
         flows = self.FlowPostProcess(flows)
         return flows
 
-
 # Introduce Range Clip Before
 class BroxOF_20240712(BroxOpticalFlow_LabelAugment):
     @staticmethod
@@ -556,7 +555,6 @@ class BroxOF_20240713(BroxOpticalFlow_LabelAugment):
         cliped_image = image / image.max() * original_max
         return cliped_image
 
-
     def OFPreProcess(self, serial:np.ndarray) -> np.ndarray:
         if serial.dtype != np.uint8:
             serial = serial/serial.max()*255
@@ -565,6 +563,32 @@ class BroxOF_20240713(BroxOpticalFlow_LabelAugment):
                            for image in serial], 
                            dtype=serial.dtype)
         return super().OFPreProcess(serial)
+
+
+class BroxOF_20240726(BroxOF_20240713):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.RoI_HistNorm_Mask = self.create_circle_in_square(self.H, self.H//4)
+    
+    def FlowPostProcess(self, flows:np.ndarray) -> np.ndarray:
+        flows = self.FlowPooling(flows, 'max', 5)
+        return flows
+
+
+class BroxOF_FixBasicNorm(BroxOF_20240726):
+    @staticmethod
+    def StandardNorm(images:np.ndarray) -> np.ndarray:
+        images = images.astype(np.float64)
+        images = np.array([image/image.max()*255 for image in images]).astype(np.uint8)
+        return images
+    
+    def OFPreProcess(self, images:np.ndarray) -> np.ndarray:
+        images = self.StandardNorm(images)
+        images = self.RoI_HistNorm(images, self.RoI_HistNorm_Mask)
+        # 针对bilateral设计的算法，为了支持mpp切换整的花活
+        images = self.bilateral_denoise(images)
+        return images
+
 
 # -----OpticalFlow增强预处理-MMSEG框架-----
 
@@ -600,7 +624,6 @@ class BatchSlice_PreProcessor(SegDataPreProcessor):
         data['data_samples'] = labels
         
         return super().forward(data, training)
-
 
 
 class OpticalFlowAugmentor_Transform(BaseTransform):
@@ -769,18 +792,17 @@ class OpticalFlowAugmentor_Transform(BaseTransform):
         return results
 
 
-
 class OpticalFlowAugmentor_RandomDistance(OpticalFlowAugmentor_Transform):
     @staticmethod
-    def warp_preprocess(image, kernal_size=(3,3)) -> np.ndarray:
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, kernal_size)
-        image = cv2.erode(image, kernel, iterations=2)
+    def warp_preprocess(image, kernal_size=(3,3), iterations=1) -> np.ndarray:
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, kernal_size)
+        image = cv2.erode(image, kernel, iterations=iterations)
         return image
     
     @staticmethod
-    def warp_postprocess(image, kernal_size=(3,3)) -> np.ndarray:
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, kernal_size)
-        image = cv2.dilate(image, kernel, iterations=2)
+    def warp_postprocess(image, kernal_size=(3,3), iterations=1) -> np.ndarray:
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, kernal_size)
+        image = cv2.dilate(image, kernel, iterations=iterations)
         return image
 
     @staticmethod
@@ -875,6 +897,8 @@ class OpticalFlowAugmentor_RandomDistance(OpticalFlowAugmentor_Transform):
         results['img'] = selected[-1] # [H,W,C]
         results['gt_seg_map'] = label_at_target_augment_position.squeeze()  # [H,W]
         return results
+
+
 
 
 

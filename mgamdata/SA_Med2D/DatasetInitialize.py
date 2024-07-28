@@ -259,7 +259,7 @@ class DataStructurer(SA_Med2D):
                 count = 0
                 
                 for Case in os.listdir(case_root):
-                    direction_root = os.path.join(case_root,Case)
+                    direction_root = os.path.join(case_root, Case)
                     if not os.path.isdir(direction_root): continue
 
                     for direction in os.listdir(direction_root):
@@ -364,6 +364,41 @@ class DataStructurer(SA_Med2D):
                 json.dump(class_rectify_map,
                           open(rectify_map_path, 'w'),
                           indent=4)
+
+
+    def Create_NumCase_AvgSlice_Map(self):
+        Slices_Dict = json.loads(
+            open(os.path.join(self.ModalityRootAfterInit, f'NumSlice_map.json'), 'r').read())
+        modality_num_slice_map = {'_Num_Cases': {}, '_Avg_Slices_Per_Case': {}}
+        
+        for modality in tqdm(os.listdir(self.ModalityRootAfterInit), desc='Modality'):
+            dataset_root = os.path.join(self.ModalityRootAfterInit, modality)
+            if not os.path.isdir(dataset_root): continue
+            
+            dataset_num_cases_map = {'Num_Cases':{}, 'Avg_Slices_Per_Case': {}}
+            for dataset in tqdm(os.listdir(dataset_root), desc=modality):
+                case_root = os.path.join(dataset_root, dataset)
+                if not os.path.isdir(case_root): continue
+                count = 0
+                
+                for Case in os.listdir(case_root):
+                    direction_root = os.path.join(case_root,Case)
+                    if not os.path.isdir(direction_root): continue
+                    count += len(os.listdir(direction_root))
+                
+                num_slices_dataset = Slices_Dict[modality][dataset]
+                dataset_num_cases_map['Num_Cases'][dataset] = count
+                dataset_num_cases_map['Avg_Slices_Per_Case'][dataset] = round(num_slices_dataset / count, 2)
+                
+            modality_num_slice_map['_Num_Cases'][modality] = sum(dataset_num_cases_map['Num_Cases'].values())
+            modality_num_slice_map['_Avg_Slices_Per_Case'][modality] = np.mean(list(dataset_num_cases_map['Avg_Slices_Per_Case'].values()))
+            modality_num_slice_map[modality] = dataset_num_cases_map
+            json.dump(dataset_num_cases_map, 
+                      open(os.path.join(dataset_root, f'{modality}_NumCase_AvgSlice.json'), 'w'), 
+                      indent=4)
+        json.dump(modality_num_slice_map, 
+                  open(os.path.join(self.ModalityRootAfterInit, f'NumCase_AvgSlice.json'), 'w'), 
+                  indent=4)
 
 
     def Calculate_Dataset_Value_Distributions(self):
@@ -598,6 +633,6 @@ class DataStructurer(SA_Med2D):
 if __name__ == '__main__':
     ROOT_SA_Med2D_16M = 'D:/PostGraduate/DL/SA-Med2D-20M/'
     DEST_ROOT = 'D:/PostGraduate/DL/SA-Med2D-20M'
-    data = DataStructurer(ROOT_SA_Med2D_16M, DEST_ROOT, 'init')
-    data.Create_UnionClass_AtomClass_Rectiry_Map()
+    processor = DataStructurer(ROOT_SA_Med2D_16M, DEST_ROOT, 'init')
+    processor.Create_NumCase_AvgSlice_Map()
 

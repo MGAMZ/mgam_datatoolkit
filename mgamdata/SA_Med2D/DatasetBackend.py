@@ -5,7 +5,7 @@ import random
 import colorama
 colorama.init()
 from warnings import warn
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Iterable, Sequence
 
 import orjson
 import tqdm
@@ -34,6 +34,7 @@ class SA_Med2D_Dataset(SA_Med2D, BaseSegDataset):
                  activate_case_ratio:float|None=None,
                  union_atom_rectify:bool=False,
                  root_path_mode:str='from_linux',
+                 deterministic:bool=False, # 可复现的采样
                  **kwargs,
         ):
         assert split in ['train', 'val', 'test']
@@ -42,6 +43,7 @@ class SA_Med2D_Dataset(SA_Med2D, BaseSegDataset):
         self.modality = modality
         self.dataset_source = dataset_source
         self.debug = debug
+        self.deterministic = deterministic
         self.activate_case_ratio = activate_case_ratio
         self.structured_npz_root = self._structured_npz_root(root_path_mode)
         self.selected_dataset_root = os.path.join(self.structured_npz_root, modality, dataset_source)
@@ -105,6 +107,8 @@ class SA_Med2D_Dataset(SA_Med2D, BaseSegDataset):
                 f"{dataset_source}_exist_class_map.json"), 'r').read())
         if DatasetBackend_GlobalProxy.check_instance_created('union_atom_map'):
             proxy = DatasetBackend_GlobalProxy.get_instance('union_atom_map')
+            proxy.union_atom_map = union_atom_map
+            proxy.atom_classes = label_map
         else:
             proxy = DatasetBackend_GlobalProxy.get_instance(
                 name='union_atom_map', 
@@ -130,6 +134,16 @@ class SA_Med2D_Dataset(SA_Med2D, BaseSegDataset):
             raise ValueError(f'{split} is not supported.')
 
 
+    def sampling_from_set(self, sample_set:Sequence, num_samples:int) -> Iterable:
+        if self.deterministic:
+            return sample_set[:num_samples]
+        else:
+            if isinstance(sample_set, np.ndarray):
+                return np.random.choice(sample_set, size=num_samples, replace=False)
+            else:
+                return random.sample(sample_set, num_samples)
+
+
     def key_to_sample_path(self, key:str) -> Tuple[str, str]:
         key_without_image_mask_prefix = key.split('/')[-1]
         file_name_components = self.analyze_file_name(key_without_image_mask_prefix)
@@ -151,16 +165,17 @@ class SA_Med2D_Dataset(SA_Med2D, BaseSegDataset):
             target_num_used_cases = int(len(used_case_names) * self.activate_case_ratio)
             if target_num_used_cases == 0:
                 target_num_used_cases = 1
-            used_case_names = random.sample(used_case_names, target_num_used_cases)
+            used_case_names = self.sampling_from_set(used_case_names, target_num_used_cases)
         
         for Case in tqdm.tqdm(used_case_names, desc=f"SA-Med2D | {self.modality} | {self.dataset_source} | {self.split}"):
             direction_root = os.path.join(self.selected_dataset_root, Case)
             if not os.path.isdir(direction_root): continue
+            
             for direction in os.listdir(direction_root):
                 slice_root = os.path.join(direction_root, direction)
                 if not os.path.isdir(slice_root): continue
                 if not os.path.exists(slice_root): raise FileNotFoundError(f'{slice_root} does not exist.')
-                
+
                 avail_idx =  self.case_slice_map[Case][direction]
                 yield (slice_root, Case, direction, avail_idx)
 
@@ -241,25 +256,35 @@ class SA_Med2D_Dataset_MultiSliceSample(SA_Med2D_Dataset):
             num_samples = len(avail_idx)
             
             if self.max_sample_per_case is not None:
-                avail_center_idx = range(max_gap_to_center, 
-                        num_samples - max_gap_to_center - 1)
-                if self.split != 'test':
+                avail_center_idx = range(
+                    max_gap_to_center, 
+                    num_samples - max_gap_to_center)
+                
+                if self.split != 'test' and self.max_sample_per_case != 1.0:
                     if isinstance(self.max_sample_per_case, int):
-                        avail_center_idx = random.sample(
-                            avail_center_idx, 
-                            min(self.max_sample_per_case, len(avail_center_idx)))
-                        
+                        num_samples = min(self.max_sample_per_case, len(avail_center_idx))
                     elif isinstance(self.max_sample_per_case, float):
-                        avail_center_idx = random.sample(
-                            avail_center_idx, 
-                            int(len(avail_center_idx) * self.max_sample_per_case))
+                        num_samples = int(len(avail_center_idx) * self.max_sample_per_case)
+                    else:
+                        raise TypeError(f'Unexpected type of max_sample_per_case: {self.max_sample_per_case}')
+                    try:
+                        avail_center_idx = self.sampling_from_set(
+                            avail_center_idx, max(num_samples, 1))
+                    except:
+                        raise RuntimeError(
+                            f"Unable to Sample. "
+                            f"series_root:{slice_root} | "
+                            f"series_case:{Case} | "
+                            f"series_dire:{direction} | "
+                            f"series_avail_idx:{avail_idx} | "
+                            f"need_num_samples:{num_samples}")
             
             else:
+                assert self.stride is not None, "Either shift window sampling or fixed per-case sampling is available."
                 avail_center_idx = range(max_gap_to_center,
                     num_samples - max_gap_to_center - 1, # range的stop位置不取
                     self.stride if self.split != 'test' else 1)
                     
-                
             for center_idx in avail_center_idx:
                 negative_image_idx  = center_idx - self.num_images_per_sample//2 * self.slice_gap
                 positive_image_idx = center_idx + self.num_images_per_sample//2 * self.slice_gap
@@ -272,6 +297,11 @@ class SA_Med2D_Dataset_MultiSliceSample(SA_Med2D_Dataset):
                     slice_root, avail_idx, center_idx, 
                     image_idx_of_this_sample, label_idx_of_this_sample)
                 mmseg_sample_list.append(sample)
+        
+        if len(mmseg_sample_list) == 0:
+            raise FileNotFoundError(
+                f"No samples are available for "
+                f"SA-Med2D | {self.modality} | {self.dataset_source} | {self.split}")
         
         print_log(msg=f"SA-Med2D | {self.modality} | {self.dataset_source} | {self.split} | Num Samples: {len(mmseg_sample_list)}",
                   logger='current', level=logging.INFO)
