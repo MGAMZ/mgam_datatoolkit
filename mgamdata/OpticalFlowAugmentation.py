@@ -9,6 +9,7 @@ from io import BytesIO
 from multiprocessing import Lock, Pool
 from multiprocessing.managers import BaseManager
 from typing import Any, Dict, List, Tuple
+from abc import abstractmethod
 
 import cv2
 import numpy as np
@@ -358,8 +359,11 @@ class LKDenseOpticalFlow_LabelAugment(OpticalFlow_BaseLabelAugment):
 # -----------------Brox------------------
 
 class BroxOpticalFlow_LabelAugment(OpticalFlow_BaseLabelAugment):
-    def __init__(self, gpu_id:int=0, use_mp:bool=False, *args, **kwargs):
+    def __init__(self, gpu_id:int|None=None, use_mp:bool=False, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        # determine how many gpus
+        if gpu_id is None:
+            gpu_id = cv2.cuda.getCudaEnabledDeviceCount() - 1
         cv2.cuda.setDevice(gpu_id)
         if use_mp:
             self.mpp = Pool(4)
@@ -475,7 +479,6 @@ class BroxOpticalFlow_LabelAugment(OpticalFlow_BaseLabelAugment):
             serial = serial/serial.max()*255
             serial = serial.astype(np.uint8)
         serial = self.RoI_HistNorm(serial, self.RoI_HistNorm_Mask)
-        
         # 更旧版本的denoise算法，同时支持多种denoise方法
         # serial = self.Denoise(serial, 'bilateral') # CUDA Accelerated
         # 针对bilateral设计的算法，为了支持mpp切换整的花活
@@ -512,7 +515,7 @@ class BroxOpticalFlow_LabelAugment(OpticalFlow_BaseLabelAugment):
         flows = self.FlowPostProcess(flows)
         return flows
 
-# Introduce Range Clip Before
+# clip after hist norm
 class BroxOF_20240712(BroxOpticalFlow_LabelAugment):
     @staticmethod
     def LowValueClip(image:np.ndarray, low_ratio:float):
@@ -539,7 +542,7 @@ class BroxOF_20240712(BroxOpticalFlow_LabelAugment):
                            for image in images], dtype=images[0].dtype)
         return super().bilateral_denoise(images)
 
-
+# clip before hist norm
 class BroxOF_20240713(BroxOpticalFlow_LabelAugment):
     @staticmethod
     def LowValueClip(image:np.ndarray, low_ratio:float) -> np.ndarray:
@@ -564,7 +567,7 @@ class BroxOF_20240713(BroxOpticalFlow_LabelAugment):
                            dtype=serial.dtype)
         return super().OFPreProcess(serial)
 
-
+# adjust pooling size
 class BroxOF_20240726(BroxOF_20240713):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -574,7 +577,7 @@ class BroxOF_20240726(BroxOF_20240713):
         flows = self.FlowPooling(flows, 'max', 5)
         return flows
 
-
+# limit range to uint8 before HistNorm
 class BroxOF_FixBasicNorm(BroxOF_20240726):
     @staticmethod
     def StandardNorm(images:np.ndarray) -> np.ndarray:
@@ -588,6 +591,87 @@ class BroxOF_FixBasicNorm(BroxOF_20240726):
         # 针对bilateral设计的算法，为了支持mpp切换整的花活
         images = self.bilateral_denoise(images)
         return images
+
+
+# 在大消融时，使用了BroxOF_20240713版本
+# 在进行BOSR小消融时，使用了从wo_BOSR继承的版本
+# 其实是因为之前的代码太屎山了，部分重构一下
+# BOSR中: Clip、HistNorm、Denoise、Pooling方法在光流过程中负责
+#         Morphology方法在光流外推方法中负责
+class BroxOF_wo_BOSR(BroxOpticalFlow_LabelAugment):
+    @staticmethod
+    def StandardNorm(images:np.ndarray) -> np.ndarray:
+        images = images.astype(np.float64)
+        images = np.array([image/image.max()*255 for image in images]).astype(np.uint8)
+        return images
+    
+    def OFPreProcess(self, images:np.ndarray) -> np.ndarray:
+        images = self.StandardNorm(images)
+        return images
+
+    @abstractmethod
+    def FlowPostProcess(self, flows:np.ndarray) -> np.ndarray:
+        raise NotImplementedError
+
+    def Unidirectional_OpticalFlow_Calc(self, serial:np.ndarray) -> np.ndarray:
+        return self.AnalyzeOF(serial)
+
+
+class BroxOF_Clip(BroxOF_wo_BOSR):
+    @staticmethod
+    def LowValueClip(image:np.ndarray, low_ratio:float) -> np.ndarray:
+        original_max = image.max()
+        # 获取所有像素的亮度值，并排序
+        pixels = np.sort(np.unique(image))
+        pixels_sorted = np.sort(pixels)
+        # 计算阈值，位于10%的位置
+        threshold_index = int(len(pixels_sorted) * low_ratio)
+        threshold_value = pixels_sorted[threshold_index]
+        # 执行clip，并缩放回原区间
+        image = np.clip(image, threshold_value, original_max) - threshold_value
+        cliped_image = image / image.max() * original_max
+        return cliped_image
+
+    def OFPreProcess(self, images:np.ndarray) -> np.ndarray:
+        images = super().OFPreProcess(images)
+        value_cliped = self.LowValueClip(images, low_ratio=0.3)
+        return value_cliped
+    
+    def Unidirectional_OpticalFlow_Calc(self, serial:np.ndarray) -> np.ndarray:
+        serial = self.OFPreProcess(serial)
+        serial = self.AnalyzeOF(serial)
+        return serial
+
+
+class BroxOF_HistNorm(BroxOF_Clip):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.RoI_HistNorm_Mask = self.create_circle_in_square(self.H, self.H//4)
+    
+    def OFPreProcess(self, images:np.ndarray) -> np.ndarray:
+        images = super().OFPreProcess(images)
+        images = self.StandardNorm(images)
+        images = self.RoI_HistNorm(images, self.RoI_HistNorm_Mask)
+        return images
+
+
+class BroxOF_Denoise(BroxOF_HistNorm):
+    def OFPreProcess(self, images:np.ndarray) -> np.ndarray:
+        images = super().OFPreProcess(images)
+        images = self.bilateral_denoise(images)
+        return images
+
+
+class BroxOF_Pooling(BroxOF_Denoise):
+    def FlowPostProcess(self, flows:np.ndarray) -> np.ndarray:
+        flows = self.FlowPooling(flows, 'max', 5)
+        return flows
+
+    def Unidirectional_OpticalFlow_Calc(self, serial:np.ndarray) -> np.ndarray:
+        serial = self.OFPreProcess(serial)
+        flows = self.AnalyzeOF(serial)
+        flows = self.FlowPostProcess(flows)
+        return flows
 
 
 # -----OpticalFlow增强预处理-MMSEG框架-----
@@ -899,6 +983,14 @@ class OpticalFlowAugmentor_RandomDistance(OpticalFlowAugmentor_Transform):
         return results
 
 
+class OpticalFlowAugmentor_RandomDistance_wo_Morphology(OpticalFlowAugmentor_RandomDistance):
+    @staticmethod
+    def warp_preprocess(image, kernal_size=(3,3), iterations=1) -> np.ndarray:
+        return image
+    
+    @staticmethod
+    def warp_postprocess(image, kernal_size=(3,3), iterations=1) -> np.ndarray:
+        return image
 
 
 

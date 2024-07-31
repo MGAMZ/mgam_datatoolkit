@@ -54,7 +54,7 @@ class SA_Med2D_Dataset(SA_Med2D, BaseSegDataset):
             self.selected_dataset_root, dataset_source)
         # 全局共享数据集参数
         union_atom_map, label_map, proxy, self.union_atom_map_path= self.set_proxy(
-            modality, dataset_source, union_atom_rectify, root_path_mode)
+            modality, dataset_source, union_atom_rectify)
         # mmseg标准数据集接口配置
         super(SA_Med2D_Dataset, self).__init__(
             metainfo={'classes':list(label_map.keys())}, 
@@ -85,8 +85,14 @@ class SA_Med2D_Dataset(SA_Med2D, BaseSegDataset):
         return case_slice_map, dataset_distributions
 
     @classmethod
-    def set_proxy(cls, modality, dataset_source, union_atom_rectify, root_path_mode:str='from_mnt'):
-        selected_dataset_root = os.path.join(cls._structured_npz_root(root_path_mode), modality, dataset_source)
+    def set_proxy(cls, modality, dataset_source, union_atom_rectify):
+        if os.path.exists(os.path.join(cls._structured_npz_root('from_mnt'), modality, dataset_source)):
+            selected_dataset_root = os.path.join(cls._structured_npz_root('from_mnt'), modality, dataset_source)
+        elif os.path.exists(os.path.join(cls._structured_npz_root('from_linux'), modality, dataset_source)):
+            selected_dataset_root = os.path.join(cls._structured_npz_root('from_linux'), modality, dataset_source)
+        else:
+            raise FileNotFoundError(f"DataSource Not Available. Modality:{modality} | dataset name: {dataset_source} | union_atom_rectify:{union_atom_rectify}")
+        
         if union_atom_rectify: # 可选纠正SA-Med2D数据集中的大量异常Union Label
             label_map = orjson.loads(
                 open(os.path.join(selected_dataset_root, 
@@ -255,12 +261,15 @@ class SA_Med2D_Dataset_MultiSliceSample(SA_Med2D_Dataset):
         for (slice_root, Case, direction, avail_idx) in self.slice_series_fetcher():
             num_samples = len(avail_idx)
             
+            # 确定可用的中心slice序号
             if self.max_sample_per_case is not None:
                 avail_center_idx = range(
                     max_gap_to_center, 
                     num_samples - max_gap_to_center)
+                if len(avail_center_idx) == 0:
+                    continue
                 
-                if self.split != 'test' and self.max_sample_per_case != 1.0:
+                if self.split != 'test':
                     if isinstance(self.max_sample_per_case, int):
                         num_samples = min(self.max_sample_per_case, len(avail_center_idx))
                     elif isinstance(self.max_sample_per_case, float):
@@ -284,7 +293,10 @@ class SA_Med2D_Dataset_MultiSliceSample(SA_Med2D_Dataset):
                 avail_center_idx = range(max_gap_to_center,
                     num_samples - max_gap_to_center - 1, # range的stop位置不取
                     self.stride if self.split != 'test' else 1)
-                    
+                if len(avail_center_idx) == 0:
+                    continue
+            
+            # 对每个可用的中心点，在其两侧对称采样
             for center_idx in avail_center_idx:
                 negative_image_idx  = center_idx - self.num_images_per_sample//2 * self.slice_gap
                 positive_image_idx = center_idx + self.num_images_per_sample//2 * self.slice_gap

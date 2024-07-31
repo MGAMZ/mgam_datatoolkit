@@ -60,7 +60,7 @@ class mgam_Runner(Runner):
             issubclass(cfg.train_dataset.type, SA_Med2D_Dataset):
             
             union_atom_map, label_map, proxy, union_atom_map_path = \
-            SA_Med2D_Dataset.set_proxy(cfg['modality'], cfg['dataset_source'], True, 'from_mnt')
+            SA_Med2D_Dataset.set_proxy(cfg['modality'], cfg['dataset_source'], True)
             num_classes = len(label_map.keys())
             cfg = cls.auto_configure_num_classes_from_Databackend(cfg, num_classes)
         
