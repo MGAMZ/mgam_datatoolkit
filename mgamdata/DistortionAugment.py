@@ -122,8 +122,10 @@ class Distortion(BaseTransform):
                  grid_dense:int, 
                  in_array_shape:tuple, 
                  refresh_interval:int, 
+                 pad_val:int=-1024,
                  use_cv2:bool=True, 
-                 const:bool=False) -> None:
+                 const:bool=False,
+                 ) -> None:
         self.global_rotate = global_rotate  # 随机全局旋转
         # 使用正弦函数建立极径与扭曲角之间的关系
         self.amplitude = amplitude  # 振幅
@@ -136,6 +138,7 @@ class Distortion(BaseTransform):
         self.tform, self.cv2_map1, self.cv2_map2 = self.refresh_affine_map(
             in_array_shape, grid_dense, amplitude, frequency, global_rotate, const)
         self.use_cv2 = use_cv2
+        self.pad_val = pad_val
         super().__init__()
 
     @staticmethod
@@ -215,12 +218,16 @@ class Distortion(BaseTransform):
                     preserve_range=True)
 
     @staticmethod
-    def distort_cv2(Imgarray:np.ndarray, map1:np.ndarray, map2:np.ndarray, pad_val:int):
+    def distort_cv2(Imgarray:np.ndarray, 
+                    map1:np.ndarray,
+                    map2:np.ndarray, 
+                    pad_val:int,
+                    interpolation):
         distorted = cv2.remap(
                 src=Imgarray,
                 map1=map1.astype(np.float32),
                 map2=map2.astype(np.float32),
-                interpolation=cv2.INTER_CUBIC,
+                interpolation=interpolation,
                 borderMode=cv2.BORDER_CONSTANT,
                 borderValue=pad_val
             )
@@ -230,31 +237,39 @@ class Distortion(BaseTransform):
     def transform(self, results: dict) -> dict:
         # 在开始时或每隔一段时间，刷新映射矩阵
         if (not self.const) and (self.refresh_counter % self.refresh_interval == 0):
-                self.tform, self.cv2_map1, self.cv2_map2 = self.refresh_affine_map(
-                    self.img_shape, self.grid_dense, self.amplitude, 
-                    self.frequency, self.global_rotate, self.const)
+            self.tform, self.cv2_map1, self.cv2_map2 = self.refresh_affine_map(
+                self.img_shape, self.grid_dense, self.amplitude, 
+                self.frequency, self.global_rotate, self.const)
         
         if self.use_cv2:
             results['img'] = self.distort_cv2(
-                results['img'], self.cv2_map1, self.cv2_map2, -1024)
+                results['img'], 
+                self.cv2_map1, 
+                self.cv2_map2, 
+                self.pad_val,
+                interpolation=cv2.INTER_CUBIC)
             if 'gt_seg_map' in results:
                 results['gt_seg_map'] = self.distort_cv2(
-                    results['gt_seg_map'], self.cv2_map1, self.cv2_map2, 0)
+                    results['gt_seg_map'], 
+                    self.cv2_map1, 
+                    self.cv2_map2, 
+                    0,
+                    interpolation=cv2.INTER_NEAREST)
         else:
-            results['img'] = warp(image=results['img'], 
-                                inverse_map=self.tform, 
-                                order=1,
-                                preserve_range=True)
+            results['img'] = warp(
+                image=results['img'], 
+                inverse_map=self.tform, 
+                order=1,
+                preserve_range=True)
             if 'gt_seg_map' in results:
-                results['gt_seg_map'] = warp(image=results['gt_seg_map'], 
-                                    inverse_map=self.tform, 
-                                    order=0,
-                                    preserve_range=True)
+                results['gt_seg_map'] = warp(
+                    image=results['gt_seg_map'], 
+                    inverse_map=self.tform, 
+                    order=0,
+                    preserve_range=True)
         
         self.refresh_counter += 1
         return results
-
-
 
 # Original Images min: -2,000, max: 4,095, mean: 10.87, std: 1,138.37
 # after clip: min: 0, max: 4,095, mean: 561.54, std: 486.59
@@ -311,7 +326,7 @@ class RangeClipNorm(BaseTransform):
         ImgNdarray = self._exec(ImgNdarray)
         # print('enhenced:', ImgNdarray.shape, ImgNdarray.min(), ImgNdarray.max(), ImgNdarray.mean(), ImgNdarray.std(), ImgNdarray.dtype)
         results['img'] = ImgNdarray
-        results['img_shape'] = ImgNdarray.shape
+        results['img_shape'] = ImgNdarray.shape[:2]
         return results
 
 
@@ -345,3 +360,27 @@ class OriShapeOverride(BaseTransform):
 
 
 
+class ConfirmShape_HWC(BaseTransform):
+    def __init__(self, check_img:bool=True, check_anno:bool=True):
+        self.check_img = check_img
+        self.check_anno = check_anno
+    
+    def transform(self, results: dict):
+        if results['img'].ndim == 2 and self.check_img:
+            results['img'] = results['img'][..., np.newaxis]
+        if results['gt_seg_map'].ndim == 2 and self.check_anno:
+            results['gt_seg_map'] = results['gt_seg_map'][..., np.newaxis]
+        
+        return results
+
+
+
+class LabelResize(BaseTransform):
+    def __init__(self, size):
+        self.size = size
+    def transform(self, results):
+        results['gt_seg_map'] = cv2.resize(
+            results['gt_seg_map'], 
+            self.size, 
+            interpolation=cv2.INTER_NEAREST)
+        return results

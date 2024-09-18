@@ -81,10 +81,16 @@ root
 
 '''
 
+
+
+
+
+
 # 从NRRD标注文件中读取标注图的人体纵向坐标
 def Label_Y_from_NRRD(nrrd_path:str):
 	data, header = nrrd.read(nrrd_path)
 	return header['space origin'][2]
+
 
 
 def FindImg_according_to_Label_Y(ImgFolderPath:str, Label_Y:float):
@@ -99,6 +105,7 @@ def FindImg_according_to_Label_Y(ImgFolderPath:str, Label_Y:float):
 			return filename, LabeledImgIndex
 	else:
 		print(f'TargetSlice_Y: {Label_Y} not found in {ImgFolderPath}')
+
 
 
 class CQKGastricCancerCT:
@@ -118,6 +125,8 @@ class CQKGastricCancerCT:
 				self.dataset = pickle.load(f)
 		elif isinstance(metadata_ckpt, dict):
 			self.dataset = metadata_ckpt
+		elif isinstance(metadata_ckpt, bytes):
+			self.dataset = pickle.loads(metadata_ckpt)
 		else:
 			raise TypeError(f'metadata_ckpt must be str or dict, but got {type(metadata_ckpt)}')
 
@@ -652,6 +661,50 @@ class CQKGastricCancerCT:
 		pbar.close()
 		return datalist
 
+	# 2024.7.31: 支持光流法增强的数据后端升级
+	def MMSEG_SerialSampling(self, split:str, slices_per_sample:int, gap:int):
+		self._SelectPatientAccodingToSplit(split)	# 切分数据集
+
+		datalist = []   # 索引缓冲区
+		pbar = tqdm.tqdm(
+			self.activated_patient_name, 
+			desc=f"[Dataset] {split}初始化", 
+			total=len(self.activated_patient_name))
+		for patient_name in pbar:
+			patient_data = self.dataset[patient_name]
+			if patient_data['ImgLabelPairStatus'] != 'normal': 
+				continue	# 跳过受限样本（只有标注或只有扫描图）
+			for phase in ['N', 'A', 'PV', 'V', 'D']:
+				if phase not in patient_data: continue
+				if self.dataset[patient_name]['ImgLabelPairStatus'] == 'normal' \
+					or self.dataset[patient_name]['ImgLabelPairStatus'] == 'CTEnhanceScanPhaseLost':
+					# 判断该扫描期是否有对应的标注
+					if self.dataset[patient_name][phase]['LabeledImgFileName'] is None: continue
+					# 生成正负样本的index索引范围
+					SlicesAside = slices_per_sample//2 * gap
+					AxialIdx = self.dataset[patient_name][phase]['label_index']
+					StratIndex  = AxialIdx - SlicesAside
+					EndIndex    = AxialIdx + SlicesAside
+					if StratIndex < 0 or EndIndex >= self.dataset[patient_name][phase]['NumImgFile']: continue
+
+					SlicesImage = []
+					for ImgIndex in range(StratIndex, EndIndex+1, gap):
+						img_path = self._GetPath(patient_name, 'img', phase, ImgIndex)
+						SlicesImage.append(img_path)
+					
+					sample = {
+						'img_path':           self._GetPath(patient_name, 'img',   phase, AxialIdx),
+						'seg_map_path':       self._GetPath(patient_name, 'label', phase, None),
+						'multi_img_path':     SlicesImage,
+						'label_map':          None, 
+						'seg_fields':         [],
+						'reduce_zero_label':  False,
+						}
+					datalist.append(sample)
+			pbar.update()
+		pbar.close()
+		return datalist
+
 	# 自监督相对位置学习预训练任务
 	# data_list: [{'img_path': str, 
 	# 				'gt_label': None(mmpretrain无监督训练)
@@ -829,13 +882,13 @@ class GastricCancer_2023(BaseSegDataset):
 			assert isinstance(database_args["lmdb_backend_proxy"], ConfigDict), "[DATASET] lmdb_backend_proxy must be a dict"
 			lmdb_backend_proxy:LMDB_MP_Proxy = LMDB_MP_Proxy.get_instance('LMDB_MP_Proxy', lmdb_args=database_args["lmdb_backend_proxy"])
 			lmdb_service:LMDB_DataBackend = lmdb_backend_proxy()
-			meta_key_name = "REGISTRY_"+os.path.basename(database_args["metadata_ckpt"])
+			meta_key_name = "REGISTRY_" + os.path.basename(database_args["metadata_ckpt"])
 			meta_dict = lmdb_service.get(meta_key_name)
 			if meta_dict:
 				database_args["metadata_ckpt"] = meta_dict
 			else:
 				FileNotFoundError(f"metadata_ckpt {meta_key_name} not found from lmdb_backend_proxy")
-
+		
 		self.debug = debug
 		self._database_args = database_args
 		self._DATABASE = CQKGastricCancerCT(**database_args)
@@ -851,6 +904,21 @@ class GastricCancer_2023(BaseSegDataset):
 						self._database_args['num_negative_img'],
 						self._database_args['minimum_negative_distance']
 					)	# list[dict]
+		print_log(f"[Dataset] 数据集索引完成 | split:{self._database_args['split']} | num_sam:{len(data_list)}", 
+				  "current", logging.INFO)
+		return data_list[:32] if self.debug else data_list
+
+
+
+class GastricCancer_SerialSampling(GastricCancer_2023):
+	def load_data_list(self):
+		print_log(f"[Dataset] 索引数据集 | split:{self._database_args['split']}", 
+				  "current", logging.INFO)
+		data_list = self._DATABASE.MMSEG_SerialSampling(
+						self._database_args['split'],
+						self._database_args['slices_per_sample'],
+						self._database_args['gap']
+					)
 		print_log(f"[Dataset] 数据集索引完成 | split:{self._database_args['split']} | num_sam:{len(data_list)}", 
 				  "current", logging.INFO)
 		return data_list[:32] if self.debug else data_list

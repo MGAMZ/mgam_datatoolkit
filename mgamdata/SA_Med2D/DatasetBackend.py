@@ -5,6 +5,7 @@ import random
 import colorama
 colorama.init()
 from warnings import warn
+from abc import abstractmethod
 from typing import Dict, List, Tuple, Iterable, Sequence
 
 import orjson
@@ -131,9 +132,9 @@ class SA_Med2D_Dataset(SA_Med2D, BaseSegDataset):
                  int(num_cases * cls.DATASET_SPLIT_RATIO[1]), 
                  int(num_cases * cls.DATASET_SPLIT_RATIO[2])]
         if split == 'train':
-            return cases_keys[range[0]:range[1]]
+            return cases_keys[range[0]:range[1]-1]
         elif split == 'val':
-            return cases_keys[range[1]:range[2]]
+            return cases_keys[range[1]-1:range[2]]
         elif split == 'test':
             return cases_keys[range[2]:range[3]]
         else:
@@ -185,9 +186,37 @@ class SA_Med2D_Dataset(SA_Med2D, BaseSegDataset):
                 avail_idx =  self.case_slice_map[Case][direction]
                 yield (slice_root, Case, direction, avail_idx)
 
-
+    @abstractmethod
     def load_data_list(self) -> List[Dict]:
         raise NotImplementedError
+
+
+
+class SA_Med2D_Dataset_NormalSample(SA_Med2D_Dataset):
+    def __init__(self, num_slices_per_sample, *args, **kwargs):
+        self.num_slices_per_sample = num_slices_per_sample
+        super().__init__(*args, **kwargs)
+    
+    def _construct_sample_dict(self, slice_root, idx):
+        data_info = {
+            'img_path':           (slice_root, idx),  # 中心image
+            'seg_map_path':       (slice_root, idx),  # 中心label
+            'seg_fields':         [],
+            'reduce_zero_label':  self.reduce_zero_label,
+            }
+        data_info.update(self.dataset_distributions)
+        if hasattr(self, 'union_atom_map_path'):
+            data_info['union_atom_map_path'] = self.union_atom_map_path
+        return data_info
+    
+    def load_data_list(self) -> List[Dict]:
+        samples = []
+        for (slice_root, Case, direction, avail_idx) in self.slice_series_fetcher():
+            used_idx = self.sampling_from_set(avail_idx, self.num_slices_per_sample)
+            for idx in used_idx:
+                samples.append(self._construct_sample_dict(slice_root, idx))
+
+        return samples
 
 
 

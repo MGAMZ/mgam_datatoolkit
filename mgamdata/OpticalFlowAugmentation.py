@@ -4,6 +4,7 @@ import pdb
 import pickle
 import socket
 import time
+import traceback
 from copy import deepcopy
 from io import BytesIO
 from multiprocessing import Lock, Pool
@@ -465,12 +466,17 @@ class BroxOpticalFlow_LabelAugment(OpticalFlow_BaseLabelAugment):
                     d=8, sigmaColor=150, sigmaSpace=2),
                 images)
             images = np.array(images)
+            if images.ndim == 3:
+                images = images[..., np.newaxis]
         else:
             for i, image in enumerate(images):
-                images[i] = cv2.cuda.bilateralFilter(
+                denoised = cv2.cuda.bilateralFilter(
                     cv2.cuda.GpuMat(image.astype(np.uint8)), 
                     kernel_size=16,  sigma_color=0.5, sigma_spatial=16
                     ).download()
+                if denoised.ndim == 2:
+                    denoised = denoised[..., np.newaxis]
+                images[i] = denoised
         return images
 
 
@@ -668,9 +674,18 @@ class BroxOF_Pooling(BroxOF_Denoise):
         return flows
 
     def Unidirectional_OpticalFlow_Calc(self, serial:np.ndarray) -> np.ndarray:
-        serial = self.OFPreProcess(serial)
-        flows = self.AnalyzeOF(serial)
-        flows = self.FlowPostProcess(flows)
+        try:
+            serial = self.OFPreProcess(serial)
+            flows = self.AnalyzeOF(serial)
+            flows = self.FlowPostProcess(flows)
+        except Exception as e:
+            print("\nERROR FROM OPTICAL MP MANAGER BACKEND\n")
+            print("\nEXCEPTION:\n")
+            traceback.print_exception(e)
+            print("\nSTACK:\n")
+            traceback.print_stack()
+            print("\nMP MANAGER BACKEND RETURN\n")
+            return e
         return flows
 
 

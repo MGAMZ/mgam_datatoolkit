@@ -3,6 +3,7 @@ import pdb
 import os.path as osp
 from typing import Dict
 from typing import Sequence
+from typing import List
 
 
 import torch
@@ -47,7 +48,6 @@ class LoadCTImage(BaseTransform):
         results['img_shape'] = img.shape # type:ignore
         results['ori_shape'] = img.shape # type:ignore
         return results	# img: [H,W,C]
-
 
 
 class LoadCTLabel(BaseTransform):

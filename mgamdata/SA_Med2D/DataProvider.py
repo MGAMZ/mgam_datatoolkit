@@ -171,6 +171,29 @@ class Load_SA_Med2D(LoadBiomedicalImageFromFile):
 
 
 
+class Load_SA_Med2D_SingleSlice(Load_SA_Med2D):
+    def transform(self, results:Dict) -> Dict:
+        if 'image' in self.load_type:
+            # H W C
+            image = self.load_png(os.path.join(
+                results['img_path'][0], 
+                f"image_{results['img_path'][1]}.png"))
+            results['img'] = image.astype(np.uint16)
+            results['img_shape'] = image.shape[:2]
+            results['ori_shape'] = image.shape[:2]
+            
+        if 'label' in self.load_type:
+            # H W
+            label = self.load_png(os.path.join(
+                results['seg_map_path'][0], 
+                f"mask_{results['seg_map_path'][1]}.png"))
+            results['gt_seg_map'] = label
+            results['reduce_zero_label'] = False
+        
+        return results
+
+
+
 class Load_SA_Med2D_MultiSlices(Load_SA_Med2D):
     def __init__(self, multi_img_load:bool, lazy_load:bool=False, *args, **kwargs):
         self.multi_img_load = multi_img_load    # 此参数仅被设计用于区分Train or Val
@@ -207,6 +230,7 @@ class Load_SA_Med2D_MultiSlices(Load_SA_Med2D):
             S, H, W, C = img_cache.shape
             img_ndarray = np.array(img_cache).transpose(1,2,0,3).reshape(H,W,S*C) # (H,W,S*C)
             results['img'] = img_ndarray.astype(np.uint16)
+            results['img']
         
         # Load labels if required
         if 'label' in self.load_type:
@@ -261,7 +285,7 @@ class Normalize(BaseTransform):
         elif self.mode == 'roi':
             # image: [H,W,C]
             mean, std = cv2.meanStdDev(src=image, mask=self.statistic_mask)
-            std = std.squeeze()[np.newaxis, np.newaxis, :]  # (1, 1, C)
+            std = std.squeeze(-1)[np.newaxis, np.newaxis, ...]  # (1, 1, C)
             image = image / std
         
         elif self.mode is None:
@@ -317,14 +341,22 @@ class ForceResize(BaseTransform):
     def transform(self, results:Dict):
         if self.image_size:
             # (H, W, C)
-            results['img'] = cv2.resize(results['img'], 
-                                        dsize=self.image_size,
-                                        interpolation=cv2.INTER_NEAREST)
+            results['img'] = cv2.resize(
+                results['img'], 
+                dsize=self.image_size,
+                interpolation=cv2.INTER_NEAREST)
+            # 当通道数仅为1时，cv2.resize会把通道维度删除
+            if results['img'].ndim == 2:
+                results['img'] = results['img'][..., np.newaxis]    # (H, W) -> (H, W, C)
+            results['img_shape'] = self.image_size[:2]
+        
         if self.label_size:
             # (H, W)
-            results['gt_seg_map'] = cv2.resize(results['gt_seg_map'].squeeze(), 
-                                            dsize=self.label_size,
-                                            interpolation=cv2.INTER_NEAREST)[np.newaxis,...]
+            results['gt_seg_map'] = cv2.resize(
+                results['gt_seg_map'].squeeze(), 
+                dsize=self.label_size,
+                interpolation=cv2.INTER_NEAREST)[np.newaxis,...]
+        
         results['img_shape'] = self.image_size
         results['ori_shape'] = self.label_size
         return results
@@ -377,4 +409,6 @@ class ClassRectify(BaseTransform):
             exit(-2)
             
         return results
+
+
 

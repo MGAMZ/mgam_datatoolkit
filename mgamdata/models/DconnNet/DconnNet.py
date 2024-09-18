@@ -22,7 +22,6 @@ up_kwargs = {'mode': 'bilinear', 'align_corners': True}
 class DconnNet(nn.Module):
     def __init__(self, in_chans=3, num_classes=1):
         super(DconnNet,self).__init__()
-        
         out_planes = num_classes*8
         self.backbone =resnet34(pretrained=False, in_chans=in_chans)
         self.sde_module = SDE_module(512,512,out_planes)

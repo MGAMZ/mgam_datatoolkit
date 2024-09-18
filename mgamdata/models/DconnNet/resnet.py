@@ -117,7 +117,7 @@ class ResNet(nn.Module):
                 nn.Conv2d(stem_width, stem_width*2, kernel_size=3, stride=1, padding=1, bias=False),
             )
         else:
-            self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3,
+            self.conv1 = nn.Conv2d(in_chans, 64, kernel_size=7, stride=2, padding=3,
                                    bias=False)
         
         self.bn1 = nn.BatchNorm2d(self.inplanes)
