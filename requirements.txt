@@ -1,0 +1,23 @@
+conda:
+    ftfy
+    scikit-learn
+    scikit-image
+    regex
+    einops
+    timm
+    fvcore
+    iopath
+    orjson
+    nptyping
+    numpy=1.26.4
+pip:
+    openmim
+    zmq
+    causal-conv1d
+    future
+    tensorboard
+    ml_collections
+    nnunetv2
+    pyqt5
+    torchsummary
+    natten
