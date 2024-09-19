@@ -1,11 +1,11 @@
 from setuptools import setup, find_packages
 
 setup(
-    name='mgam_datatoolkit',
-    version='0.8.0',
+    name='mgamdata',
+    version='1.0.0',
     packages=find_packages(),
-    license='MIT',
-    description='data process toolkit for CT scans',
+    license='GNU General Public License v3.0',
+    description="mgam's data toolkit for a better world!",
     author='Yiqin Zhang',
     author_email='312065559@qq.com',
     include_package_data=True,
