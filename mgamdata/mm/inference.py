@@ -2,25 +2,18 @@ import os
 import os.path as osp
 import pdb
 import warnings
-from pathlib import Path
 from tqdm import tqdm
 from typing import List, Dict, Tuple
 from pprint import pprint
 from colorama import Fore, Style
 
 import torch
-import numpy as np
-from numpy.lib.npyio import NpzFile
-from numpy.typing import NDArray
 import matplotlib.pyplot as plt
 import SimpleITK as sitk
 
-from mmengine.logging import print_log
-from mmengine.config import Config
 from mmseg.models.segmentors import BaseSegmentor
 from mmseg.apis.inference import init_model, _preprare_data
 
-from .mmeng_PlugIn import DynamicRunnerSelection
 from ..io.sitk_toolkit import LoadDcmAsSitkImage
 
 
@@ -30,10 +23,12 @@ from ..io.sitk_toolkit import LoadDcmAsSitkImage
 INFERENCER_WORK_DIR = "/fileser51/zhangyiqin.sx/mmseg/work_dirs_inferencer/"
 
 
+
 def dice_coeff(pred, target):
     eps = 1e-7
     intersection = (pred * target).sum()
     return (2. * intersection + eps) / (pred.sum() + target.sum() + eps)
+
 
 
 def visualize(image_array, gt_class_idx, pred_class_idx):
@@ -46,16 +41,6 @@ def visualize(image_array, gt_class_idx, pred_class_idx):
     ax[2].set_title("Prediction")
     return fig
 
-# 整体的思路是，不管是什么文件，都要转换为Mhz格式，然后统一进行推理。
-class Inferencer:
-    def __init__(self, cfg_path:str, checkpoint_path:str, mp:bool=False):
-        self.cfg = Config.fromfile(cfg_path)
-        if mp is False:
-            self.cfg.pop('launcher')
-        self.cfg.work_dir = INFERENCER_WORK_DIR
-        self.checkpoint_path = checkpoint_path
-        self.runner = DynamicRunnerSelection(self.cfg)
-        self.runner.load_checkpoint(self.checkpoint_path)
 
 
 class Inferencer_2D:
