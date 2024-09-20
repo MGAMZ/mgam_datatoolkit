@@ -1,7 +1,7 @@
 '''
 Jit Export nn.Module
 '''
-
+import argparse
 import torch
 
 from mmseg.apis.inference import init_model
@@ -9,7 +9,6 @@ from mmseg.models.segmentors import EncoderDecoder
 
 
 def parse_args():
-    import argparse
     parser = argparse.ArgumentParser(description='Jit trace and export')
     parser.add_argument('cfg_path', type=str, help='Config file path',
                         default="/fileser51/zhangyiqin.sx/mmseg/work_dirs/0.8.3.FixRange/round_1/MedNext_3D/MedNext_3D.py")
@@ -26,10 +25,9 @@ if __name__ == '__main__':
     model.eval()
     exported = torch.jit.trace(
         func = model.whole_inference, 
-        example_inputs = (torch.ones(1,1,512,512, 
-                                        dtype=torch.float32, 
-                                        device='cuda'))
-    )
+        example_inputs = torch.ones(1,1,512,512, 
+                                    dtype=torch.float32, 
+                                    device='cuda'))
     output=exported(torch.ones(1,3,300,300).cuda())
     print(output.shape)
     # exported.save(args.save_path)
