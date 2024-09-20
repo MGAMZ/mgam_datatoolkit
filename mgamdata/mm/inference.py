@@ -20,7 +20,7 @@ from mmengine.config import Config
 from mmseg.models.segmentors import BaseSegmentor
 from mmseg.apis.inference import init_model, _preprare_data
 
-from .mmeng import DynamicRunnerSelection
+from .mmeng_PlugIn import DynamicRunnerSelection
 from ..io.sitk_toolkit import LoadDcmAsSitkImage
 
 

@@ -147,6 +147,8 @@ class mmseg_experiment:
         
         elif test_mode is True:
             self._direct_to_test()
+            # model_param_stat(cfg, runner)
+            print_log(f"测试完成: {work_dir}", 'current', logging.INFO)
         
         elif self.IsTrained(self.cfg):
             print_log(f"训练已经完成, 请在终端手动切换至单卡模式进行test: {self.work_dir}", 'current', logging.INFO)
@@ -156,10 +158,8 @@ class mmseg_experiment:
             print_log(f"训练开始: {work_dir}", 'current', logging.INFO)
             runner.train()
             print_log(f"训练已经完成, 请在终端手动切换至单卡模式进行test: {self.work_dir}", 'current', logging.INFO)
-            # model_param_stat(cfg, runner)
-            print_log(f"测试完成: {work_dir}", 'current', logging.INFO)
-    
-    
+            
+            
     def _prepare_basic_config(self):
         cfg = Config.fromfile(self.config)  # load config
         cfg.work_dir = self.work_dir        # set work dir
@@ -219,7 +219,7 @@ def auto_runner(args):
         for model in args.models:
             # 确定配置文件路径和保存路径
             config_path = os.path.join(args.config_root, f"{exp}/{model}.py")
-            work_dir_path = osp.join(args.work_dir_root, model)
+            work_dir_path = osp.join(args.work_dir_root, exp)
             # 设置终端标题
             if os.name == 'nt':
                 os.system(f"round {round} {model} - {exp} ")
@@ -231,10 +231,10 @@ def auto_runner(args):
                 remain_chance -= 1
                 try:
                     mmseg_experiment(config_path, 
-                                        work_dir_path, 
-                                        args.test_draw_interval, 
-                                        args.cfg_options,
-                                        args.test)
+                                     work_dir_path, 
+                                     args.test_draw_interval, 
+                                     args.cfg_options,
+                                     args.test)
                 
                 except KeyboardInterrupt:
                     raise KeyboardInterrupt

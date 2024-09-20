@@ -106,6 +106,7 @@ class CT_2D_Sar_CrossFold(CT_2D_Sarcopenia):
                  *args, **kwargs):
         if isinstance(use_folds, int):
             use_folds = [use_folds]
+        assert min(use_folds) >= 1 and max(use_folds) <= total_folds
         self.use_folds = use_folds
         self.total_folds = total_folds
         super().__init__(split=None, *args, **kwargs)

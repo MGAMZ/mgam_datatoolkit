@@ -5,6 +5,8 @@ Jit Export nn.Module
 import torch
 
 from mmseg.apis.inference import init_model
+from mmseg.models.segmentors import EncoderDecoder
+
 
 def parse_args():
     import argparse
@@ -19,7 +21,7 @@ def parse_args():
 
 if __name__ == '__main__':
     args = parse_args()
-    model:torch.nn.Module = init_model(args.cfg_path, args.ckpt_path)
+    model:EncoderDecoder = init_model(args.cfg_path, args.ckpt_path)
     model.requires_grad_(False)
     model.eval()
     exported = torch.jit.trace(

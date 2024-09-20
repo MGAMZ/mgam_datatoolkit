@@ -31,9 +31,9 @@ from mmpretrain.structures import DataSample
 
 from mmseg.models import SegformerHead
 
-from .mmseg import LoadCTImage
-from .mmseg import LMDB_MP_Proxy
-from .mmseg import LMDB_DataBackend
+from .mmseg_PlugIn import LoadCTImage
+from .mmseg_PlugIn import LMDB_MP_Proxy
+from .mmseg_PlugIn import LMDB_DataBackend
 from ..dataset.CTGastricCancer2023 import MMPreSampleProvider
 
 
