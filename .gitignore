@@ -1,0 +1,7 @@
+*.pyc
+*.txt
+*.log
+*.cfg
+*.pth
+*.pt
+*/__pycache__/*
