@@ -1,0 +1,9 @@
+[submodule "mmengine"]
+	path = mmengine
+	url = https://github.com/MGAMZ/mmengine/
+[submodule "mmpretrain"]
+	path = mmpretrain
+	url = https://github.com/MGAMZ/mmpretrain
+[submodule "mmsegmentation"]
+	path = mmsegmentation
+	url = https://github.com/MGAMZ/mmsegmentation
