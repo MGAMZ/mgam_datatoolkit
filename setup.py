@@ -1,5 +1,7 @@
 from setuptools import setup, find_packages
 
+install_requires = open('requirements.txt').read().splitlines()
+
 setup(
     name='mgamdata',
     version='1.0.0',
@@ -9,4 +11,5 @@ setup(
     author='Yiqin Zhang',
     author_email='312065559@qq.com',
     include_package_data=True,
+    install_requires=install_requires,
 )
