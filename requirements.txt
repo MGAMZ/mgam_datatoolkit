@@ -20,5 +20,4 @@ packaging
 prettytable
 scipy
 openmim
-mmcv
 setuptools>=75.0.0

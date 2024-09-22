@@ -1,4 +1,5 @@
 from setuptools import setup, find_packages
+import pdb
 
 install_requires = open('requirements.txt').read().splitlines()
 
@@ -10,6 +11,5 @@ setup(
     description="mgam's data toolkit for a better world!",
     author='Yiqin Zhang',
     author_email='312065559@qq.com',
-    include_package_data=True,
     install_requires=install_requires,
 )

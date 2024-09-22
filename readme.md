@@ -35,3 +35,7 @@
 ### 2024.09.19 V1.0.0
 
 将原始的mgamdata和mmaitrox合并兼容，便于后续进一步开发。
+
+### 2024.09.22 V1.0.0
+
+加入git submodule，一键安装常见mm package。
