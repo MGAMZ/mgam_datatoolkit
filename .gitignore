@@ -2,4 +2,4 @@
 *.pt
 *.pyc
 
-/mgam_datatoolkit.egg-info
+mgamdata.egg-info
