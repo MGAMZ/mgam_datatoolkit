@@ -1,5 +1,4 @@
 from setuptools import setup, find_packages
-import pdb
 
 install_requires = open('requirements.txt').read().splitlines()
 
@@ -12,4 +11,9 @@ setup(
     author='Yiqin Zhang',
     author_email='312065559@qq.com',
     install_requires=install_requires,
+    entry_points={
+        'console_scripts': [
+            'mmrun=mm.run:main',
+        ],
+    },
 )

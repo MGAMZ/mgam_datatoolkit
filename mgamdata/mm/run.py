@@ -8,12 +8,14 @@ from pprint import pprint
 from os import path as osp
 from colorama import Fore, Style
 
+import torch.distributed as dist
+
 from mmengine.logging import print_log
 from mmengine.config import Config, DictAction
 from mmengine.analysis import get_model_complexity_info
 from mmengine.runner.checkpoint import find_latest_checkpoint
 
-from aitrox.utils.mmengine_plugins import DynamicRunnerSelection
+from mgamdata.mm.mmeng_PlugIn import DynamicRunnerSelection
 
 
 
@@ -39,6 +41,7 @@ def parase_args():
     return args
 
 
+
 def model_param_stat(cfg, runner):
     model = runner.model
     image_size = cfg.crop_size  # (256,256)
@@ -49,6 +52,7 @@ def model_param_stat(cfg, runner):
           file=open(osp.join(runner._log_dir, 'ModelParamStat_arch.log'), 'w', encoding='utf-8'))
     pprint(analysis_results,
            open(osp.join(runner._log_dir, 'ModelParamStat_all.log'), 'w', encoding='utf-8'))
+
 
 
 def global_env_init(args):
@@ -63,6 +67,7 @@ def global_env_init(args):
         os.environ['PYTORCH_CUDA_ALLOC_CONF'] = f"backend:cudaMallocAsync"
     else:
         raise NotImplementedError
+
 
 
 def VersionToFullExpName(name, config_root):
@@ -88,6 +93,7 @@ def VersionToFullExpName(name, config_root):
     raise RuntimeError(f"未找到与“ {name} ”匹配的实验名")
 
 
+
 def modify_cfg_to_set_visualization(cfg, work_dir, draw):
     default_hooks = cfg.default_hooks
     if draw:
@@ -99,6 +105,7 @@ def modify_cfg_to_set_visualization(cfg, work_dir, draw):
         if visualizer:
             visualizer['save_dir'] = work_dir
     return cfg
+
 
 
 def modify_cfg_to_skip_train(config, draw_interval):
@@ -119,6 +126,7 @@ def modify_cfg_to_skip_train(config, draw_interval):
     return config
 
 
+
 def modify_cfg_to_ensure_single_node(cfg):
     cfg.launcher = 'none'
     cfg.model_wrapper_cfg = None
@@ -126,6 +134,7 @@ def modify_cfg_to_ensure_single_node(cfg):
     cfg.Compile = None
     cfg.compile = None
     return cfg
+
 
 
 class mmseg_experiment:
@@ -211,6 +220,7 @@ class mmseg_experiment:
             return False
 
 
+
 def auto_runner(args):
     for exp in args.exp_name:
         exp = VersionToFullExpName(exp, args.config_root)
@@ -222,9 +232,9 @@ def auto_runner(args):
             work_dir_path = osp.join(args.work_dir_root, exp)
             # 设置终端标题
             if os.name == 'nt':
-                os.system(f"round {round} {model} - {exp} ")
+                os.system(f"{model} - {exp} ")
             else:
-                print(f"\n--------- round {round} {model} - {exp} ---------\n")
+                print(f"\n--------- {model} - {exp} ---------\n")
             # 带有自动重试的执行
             remain_chance = args.auto_retry + 1
             while remain_chance:
@@ -251,10 +261,13 @@ def auto_runner(args):
                     break
 
 
+
 def main():
     args = parase_args()
     global_env_init(args)
     auto_runner(args)
+
+
 
 
 
