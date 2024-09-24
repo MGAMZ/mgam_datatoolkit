@@ -8,8 +8,6 @@ from pprint import pprint
 from os import path as osp
 from colorama import Fore, Style
 
-import torch.distributed as dist
-
 from mmengine.logging import print_log
 from mmengine.config import Config, DictAction
 from mmengine.analysis import get_model_complexity_info
