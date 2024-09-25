@@ -12,7 +12,7 @@ import json
 from tqdm import tqdm
 
 
-from aitrox.utils.sitk_toolkit import sitk_resample_to_image
+from mgamdata.io.sitk_toolkit import sitk_resample_to_image
 
 
 def min_max_scale(img):
@@ -205,9 +205,9 @@ if __name__ == '__main__':
         必要时建议可视化观察。
     '''
     
-    src_folder = '/fileser51/zhangyiqin.sx/Sarcopenia_Data/Batch5_7986/raw/label'
-    dst_folder = '/fileser51/zhangyiqin.sx/Sarcopenia_Data/Batch5_7986/mha_original_EngineerSort/label'
-    image_folder = '/fileser51/zhangyiqin.sx/Sarcopenia_Data/Batch5_7986/mha_original_EngineerSort/image'
+    src_folder = '/fileser51/zhangyiqin.sx/Sarcopenia_Data/Test_7986/mask_channel'
+    dst_folder = '/fileser51/zhangyiqin.sx/Sarcopenia_Data/Test_7986/mha_original_EngineerSort/label'
+    image_folder = '/fileser51/zhangyiqin.sx/Sarcopenia_Data/Test_7986/mha_original_EngineerSort/image'
 
     cat = 4 # all
 

@@ -8,7 +8,7 @@ from tqdm import tqdm
 
 import SimpleITK as sitk
 
-from aitrox.utils.sitk_toolkit import (
+from mgamdata.io.sitk_toolkit import (
     LoadDcmAsSitkImage, LoadDcmAsSitkImage, 
     sitk_resample_to_spacing_v2,
     sitk_resample_to_size)
@@ -53,7 +53,7 @@ if __name__ == '__main__':
     
     DCM_AXIAL_SORT_MODE = 'engineering'
     src_dcm_root  = '/fileser51/zhangyiqin.sx/Sarcopenia_Data/Test_7986/dcm'
-    dest_mha_root = '/fileser51/zhangyiqin.sx/Sarcopenia_Data/Test_7986/mha_original_EngineerSort'
+    dest_mha_root = '/fileser51/zhangyiqin.sx/Sarcopenia_Data/Test_7986/mha_original_EngineerSort/image'
     spacing = None
     size = None
     
