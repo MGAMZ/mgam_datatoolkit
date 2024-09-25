@@ -83,7 +83,7 @@ class IoUMetric_PerClass(IoUMetric):
             total_area_label, self.metrics, self.nan_to_num, self.beta)
         class_names = self.dataset_meta['classes']
 
-        # summary table
+        # class averaged table
         ret_metrics_summary = OrderedDict({
             ret_metric: np.round(np.nanmean(ret_metric_value) * 100, 2)
             for ret_metric, ret_metric_value in ret_metrics.items()
@@ -97,18 +97,18 @@ class IoUMetric_PerClass(IoUMetric):
 
         # each class table
         ret_metrics.pop('aAcc', None)
-        ret_metrics_class = OrderedDict({
-            ret_metric: np.round(ret_metric_value * 100, 2)
+        class_metrics = OrderedDict({
+            ret_metric: format(ret_metric_value, '.3f')
             for ret_metric, ret_metric_value in ret_metrics.items()
         })
-        ret_metrics_class.update({'Class': class_names})
-        ret_metrics_class.move_to_end('Class', last=False)
+        class_metrics.update({'Class': class_names})
+        class_metrics.move_to_end('Class', last=False)
         class_table_data = PrettyTable()
-        for key, val in ret_metrics_class.items():
+        for key, val in class_metrics.items():
             class_table_data.add_column(key, val)
         
         # provide per class results for logger hook
-        metrics['PerClass'] = ret_metrics_class
+        metrics['PerClass'] = class_metrics
 
         print_log('per class results:', logger)
         print_log('\n' + class_table_data.get_string(), logger=logger)

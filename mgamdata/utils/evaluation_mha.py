@@ -2,23 +2,24 @@
     给定gt和pred的两组mha文件
     计算其指标
 '''
+import argparse
 import os
 import os.path as osp
 import pdb
 from multiprocessing import Pool
 from tqdm import tqdm
+from pprint import pprint
 
 import torch
 import numpy as np
 import SimpleITK as sitk
 
-from mmdet.models.losses.dice_loss import dice_loss
-from aitrox.criterions.segment import dice_loss_tensor
+from mmseg.models.losses.dice_loss import dice_loss
 
 
 
 
-def calculate_one_pair(gt_path:str, pred_path:str, only_L3:bool=False):
+def calculate_one_pair(gt_path:str, pred_path:str, only_L3:bool=False, invert:bool=False):
     """计算一个mha样本对的dice
 
     Args:
@@ -35,7 +36,9 @@ def calculate_one_pair(gt_path:str, pred_path:str, only_L3:bool=False):
         pred = sitk.ReadImage(pred_path)
         
         gt_data = sitk.GetArrayFromImage(gt)
-        pred_data = sitk.GetArrayFromImage(pred)[::-1]
+        pred_data = sitk.GetArrayFromImage(pred)
+        if invert:
+            pred_data = pred_data[::-1].copy()
         if gt_data.shape != pred_data.shape:
             return gt_data.shape, pred_data.shape, gt_path, pred_path
         
@@ -56,20 +59,23 @@ def calculate_one_pair(gt_path:str, pred_path:str, only_L3:bool=False):
         for i in range(4):
             gt_class = torch.from_numpy(gt_data[i]).cuda()
             pred_class = torch.from_numpy(pred_data[i]).cuda()
-            dice = 1 - dice_loss(gt_class[None], pred_class[None]).cpu().numpy()
+            dice = 1 - dice_loss(gt_class[None], pred_class[None], weight=None, ignore_index=None
+                                 ).cpu().numpy()
             dices.append(dice)
         
         return np.stack(dices)
     
     except Exception as e:
-        return f"Failed {gt_path}, {pred_path}, {e}"
+        return f"Failed gt: {gt_path} | pred: {pred_path} | reason: {e}"
 
 
-def evaluate_one_folder(gt_folder:str, pred_folder:str, only_L3:bool=False, use_mp:bool=False):
+
+def evaluate_one_folder(gt_folder:str, pred_folder:str, only_L3:bool=False, use_mp:bool=False, invert:bool=False):
     pred_files = sorted([file for file in os.listdir(pred_folder) if file.endswith('.mha')])
     gt_files = [file.replace(pred_folder, gt_folder) for file in pred_files]
     
     dice_list = []
+    failed_list = []
     if use_mp:
         with Pool(32) as p:
             results = []
@@ -79,13 +85,15 @@ def evaluate_one_folder(gt_folder:str, pred_folder:str, only_L3:bool=False, use_
                                   leave=False):
                 gt_path = osp.join(gt_folder, pred_file)
                 pred_path = osp.join(pred_folder, pred_file)
-                one_task = p.apply_async(calculate_one_pair, (gt_path, pred_path, only_L3))
+                one_task = p.apply_async(calculate_one_pair, (gt_path, pred_path, only_L3, invert))
                 results.append(one_task)
             
             for result in results:
-                dice = result.get()
-                if dice:
-                    dice_list.append(dice)
+                out = result.get()
+                if isinstance(out, np.ndarray):
+                    dice_list.append(out)
+                else:
+                    failed_list.append(out)
     else:
         for gt_file, pred_file in tqdm(zip(gt_files, pred_files),
                                         desc='Evaulating',
@@ -94,20 +102,32 @@ def evaluate_one_folder(gt_folder:str, pred_folder:str, only_L3:bool=False, use_
                                         leave=False):
             gt_path = osp.join(gt_folder, gt_file)
             pred_path = osp.join(pred_folder, pred_file)
-            dice = calculate_one_pair(gt_path, pred_path, only_L3)
-            if isinstance(dice, np.ndarray):
-                dice_list.append(dice)
+            out = calculate_one_pair(gt_path, pred_path, only_L3, invert)
+            if isinstance(out, np.ndarray):
+                dice_list.append(out)
             else:
-                print(f"Failed {gt_file}, get {dice}")
+                failed_list.append(out)
     
-    return dice_list
+    return dice_list, failed_list
+
+
+
+def parser_args():
+    parser = argparse.ArgumentParser('evaluate from mha files.')
+    parser.add_argument('gt_root', type=str, help='GT文件夹')
+    parser.add_argument('pred_root', type=str, help='预测文件夹')
+    parser.add_argument('--whole-series', action='store_false', default=True, 
+                        help='仅计算L3节段指标')
+    parser.add_argument('--invert', action='store_true', default=False, 
+                        help='在评估时将其中一者颠倒评估。这是为了避免Z轴排序不一致导致的指标错误。')
+    return parser.parse_args()
+
+
 
 
 if __name__ == '__main__':
-    gt_root = '/fileser51/zhangyiqin.sx/Sarcopenia_Data/Test_7986/mask_index'
-    pred_root = '/fileser51/zhangyiqin.sx/Sarcopenia_Data/Test_7986/mm_pred_0.11.0'
-    
-    dices = evaluate_one_folder(gt_root, pred_root, only_L3=True)
-    mean_dice = np.mean(dices, axis=0)
-    
-    print(mean_dice)
+    args = parser_args()
+    dice_list, failed_list = evaluate_one_folder(args.gt_root, args.pred_root, only_L3=args.whole_series, invert=args.invert)
+    mean_dice = np.mean(dice_list, axis=0)
+    pprint(mean_dice)
+    pprint(failed_list)
