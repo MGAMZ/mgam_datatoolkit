@@ -98,7 +98,7 @@ class IoUMetric_PerClass(IoUMetric):
         # each class table
         ret_metrics.pop('aAcc', None)
         class_metrics = OrderedDict({
-            ret_metric: format(ret_metric_value, '.3f')
+            ret_metric: [format(v, '.2f') for v in ret_metric_value * 100]
             for ret_metric, ret_metric_value in ret_metrics.items()
         })
         class_metrics.update({'Class': class_names})
