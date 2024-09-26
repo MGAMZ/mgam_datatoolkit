@@ -40,23 +40,35 @@ class experiment:
         self.cfg_options = cfg_options
         self.test_mode = test_mode
         self._prepare_basic_config()
-        
+        self._main_process()
+    
+    
+    def _main_process(self):
         if self.IsTested(self.cfg):
-            print_log(f"测试已经完成, 跳过: {self.work_dir}", 'current', logging.INFO)
+            print_log(f"{Fore.BLUE}测试已经完成, 跳过: {self.work_dir}{Style.RESET_ALL}", 
+                      'current', 
+                      logging.INFO)
         
-        elif test_mode is True:
+        elif self.test_mode is True:
+            print_log(f"{Fore.BLUE}测试开始: {self.work_dir}{Style.RESET_ALL}", 'current', logging.INFO)
             self._direct_to_test()
             # model_param_stat(cfg, runner)
-            print_log(f"测试完成: {work_dir}", 'current', logging.INFO)
+            print_log(f"{Fore.GREEN}测试完成: {self.work_dir}{Style.RESET_ALL}", 
+                      'current', 
+                      logging.INFO)
         
         elif self.IsTrained(self.cfg):
-            print_log(f"训练已经完成, 请在终端手动切换至单卡模式进行test: {self.work_dir}", 'current', logging.INFO)
+            print_log(f"{Fore.BLUE}训练已经完成, 请在终端手动切换至单卡模式进行test: {self.work_dir}{Style.RESET_ALL}", 
+                      'current', 
+                      logging.INFO)
             
         else:
             runner = DynamicRunnerSelection(self.cfg) # 建立Runner
-            print_log(f"训练开始: {work_dir}", 'current', logging.INFO)
+            print_log(f"{Fore.BLUE}训练开始: {self.work_dir}{Style.RESET_ALL}", 'current', logging.INFO)
             runner.train()
-            print_log(f"训练已经完成, 请在终端手动切换至单卡模式进行test: {self.work_dir}", 'current', logging.INFO)
+            print_log(f"{Fore.GREEN}训练已经完成, 请在终端手动切换至单卡模式进行test: {self.work_dir}{Style.RESET_ALL}", 
+                      'current', 
+                      logging.INFO)
 
 
     def _prepare_basic_config(self):
@@ -287,6 +299,8 @@ class auto_runner:
 def main():
     runner = auto_runner.start_from_args()
     runner.experiment_queue()
+
+
 
 
 if __name__ == '__main__':
