@@ -125,27 +125,31 @@ class RandomRoll(BaseTransform):
     - gt_seg_map
     '''
     def __init__(self, 
-                 direction:Union[str, Sequence[str]], 
-                 prob: Union[float, Sequence[float]],
-                 gap: Union[float, Sequence[float]]):
+                 direction:Union[str, Sequence[str]],
+                 gap: Union[float, Sequence[float]],
+                 erase: bool=False,
+                 pad_val: int=0,
+                 seg_pad_val: int=0):
         """
         direction和prob是对应的，可指定随机向多个方向roll
         
         :param direction: roll的方向, horizontal 或者 vertical
-        :param prob: 对应方向的roll概率 
         :param gap: 对应方向的最大roll距离
+        :param erase: 是否擦除roll后的部分
+        :param pad_val: 擦除的填充值
+        :param seg_pad_val: seg擦除的填充值
         """
         if isinstance(direction, str):
             direction = [direction]
-        if isinstance(prob, float):
-            prob = [prob]
         if isinstance(gap, float):
             gap = [gap]
-        assert len(direction) == len(prob) == len(gap), "所有参数的长度必须相同"
+        assert len(direction) == len(gap), "所有参数的长度必须相同"
         
         self.direction = direction
-        self.prob = prob
-        self.gap = gap
+        self.gap = {k:v for k,v in zip(direction, gap)}
+        self.erase = erase
+        self.pad_val = pad_val
+        self.seg_pad_val = seg_pad_val
     
     @staticmethod
     def _roll(results, gap, axis):
@@ -154,14 +158,33 @@ class RandomRoll(BaseTransform):
         return results
     
     
+    def _erase(self, results, gap, axis):
+        if axis == -1:
+            if gap > 0:
+                results['img'][..., :gap] = self.pad_val
+                results['gt_seg_map'][..., :gap] = self.seg_pad_val
+            else:
+                results['img'][..., gap:] = self.pad_val
+                results['gt_seg_map'][..., gap:] = self.seg_pad_val
+        
+        if axis == -2:
+            if gap > 0:
+                results['img'][..., :gap, :] = self.pad_val
+                results['gt_seg_map'][..., :gap, :] = self.seg_pad_val
+            else:
+                results['img'][..., gap:, :] = self.pad_val
+                results['gt_seg_map'][..., gap:, :] = self.seg_pad_val
+        return results
+    
+    
     def transform(self, results):
         if 'horizontal' in self.direction:
             axis = -2
-            gap = random.randint(-self.gap, self.gap)
+            gap = random.randint(-self.gap['horizontal'], self.gap['horizontal'])
             results = self._roll(results, gap, axis)
         if 'vertical' in self.direction:
             axis = -1
-            gap = random.randint(-self.gap, self.gap)
+            gap = random.randint(-self.gap['vertical'], self.gap['vertical'])
             results = self._roll(results, gap, axis)
         
         return results

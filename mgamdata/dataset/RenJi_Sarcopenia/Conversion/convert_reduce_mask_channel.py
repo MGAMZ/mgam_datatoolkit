@@ -1,18 +1,18 @@
-from multiprocessing import Pool
-import pydicom
-import SimpleITK
-import numpy as np
-from PIL import Image
-import matplotlib.pyplot as plt
 import os
-import pandas as pd
+import argparse
 import glob
-import cv2
 import json
+from multiprocessing import Pool
+from typing_extensions import deprecated
 from tqdm import tqdm
 
+import cv2
+import SimpleITK
+import numpy as np
+import pandas as pd
 
 from mgamdata.io.sitk_toolkit import sitk_resample_to_image
+
 
 
 def min_max_scale(img):
@@ -37,7 +37,7 @@ def get_dcm_file(dcm):
     res = res.astype('uint8')
     return res
 
-
+@deprecated('这个函数过期了，且尚未经过验证，使用需谨慎。')
 def get_mask_2d(src_folder, dst_folder, cat, l3_csv):
     save_dir = f'{dst_folder}/mask_2d_new'    #img、mask     
     mask_dir = f'{src_folder}/mask_'
@@ -188,7 +188,25 @@ def get_mask_3d(src_folder, dst_folder, image_folder, cat):
                     '失败原因': str(success),
                 })
         
-        json.dump(failed, open(os.path.join(dst_folder, 'failed.json'), 'w'), indent=4, ensure_ascii=False)
+        if len(failed) > 0:
+            json.dump(failed, 
+                      open(os.path.join(dst_folder, 'failed.json'), 'w'), 
+                      indent=4, 
+                      ensure_ascii=False)
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description='Convert DCM to MHA')
+    parser.add_argument('src_folder', type=str, 
+                        help='鉴影标注的mha文件夹路径')
+    parser.add_argument('dst_folder', type=str, 
+                        help='转换后的mha文件夹路径')
+    parser.add_argument('image_folder', type=str, 
+                        help='对应的扫描序列文件夹路径，用以对齐image和label的元信息。')
+    parser.add_argument('--cat', type=int, default=4, 
+                        help='需要的mask类别')
+    return parser.parse_args()
+
 
 
 if __name__ == '__main__':
@@ -205,12 +223,7 @@ if __name__ == '__main__':
         必要时建议可视化观察。
     '''
     
-    src_folder = '/fileser51/zhangyiqin.sx/Sarcopenia_Data/Test_7986/mask_channel'
-    dst_folder = '/fileser51/zhangyiqin.sx/Sarcopenia_Data/Test_7986/mha_original_EngineerSort/label'
-    image_folder = '/fileser51/zhangyiqin.sx/Sarcopenia_Data/Test_7986/mha_original_EngineerSort/image'
-
-    cat = 4 # all
-
+    args = parse_args()
     # get_mask_2d(src_folder, dst_folder, cat, l3_csv)
-    get_mask_3d(src_folder, dst_folder, image_folder, cat)
+    get_mask_3d(args.src_folder, args.dst_folder, args.image_folder, args.cat)
 

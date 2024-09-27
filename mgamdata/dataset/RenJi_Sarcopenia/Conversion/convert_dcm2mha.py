@@ -1,5 +1,6 @@
 import os
 import os.path as osp
+import argparse
 import pdb
 import json
 from colorama import Fore, Style
@@ -40,39 +41,44 @@ def convert_one_case(sort_mode, src_folder, dst_path, spacing, size):
         }
 
 
+
+def parse_args():
+    parser = argparse.ArgumentParser(description='Convert DCM to MHA')
+    parser.add_argument('sort_mode', type=str,
+                        choices=['engineering', 'JianYing'], 
+                        help='Z轴排序法则，鉴影系统和工程实现的排序规则是不同的。')
+    parser.add_argument('src_dcm_root', type=str,
+                        help='包含所有DCM序列文件夹的父文件夹')
+    parser.add_argument('dest_mha_root', type=str,
+                        help='保存转换后的MHA文件的文件夹')
+    parser.add_argument('--spacing', type=str, default=None, 
+                        help='可以在转换时就对mha进行一次重采样，依据spacing')
+    parser.add_argument('--size', type=str, default=None, 
+                        help='可以在转换时就对mha进行一次重采样，依据size')
+    return parser.parse_args()
+
+
+
 if __name__ == '__main__':
-    """
-        本脚本用于执行dcm至mha的转换。
-        
-        DCM_AXIAL_SORT_MODE: 排序规则
-            - engineering 工程提测所使用的排序法
-            - JianYing 鉴影标注系统所使用的排序法
-        src_dcm_root: dcm文件夹的根目录，每个病例的dcm文件夹应该在此目录下
-        dest_mha_root: 转换后的mha文件保存的根目录
-    """
+    args = parse_args()
     
-    DCM_AXIAL_SORT_MODE = 'engineering'
-    src_dcm_root  = '/fileser51/zhangyiqin.sx/Sarcopenia_Data/Test_7986/dcm'
-    dest_mha_root = '/fileser51/zhangyiqin.sx/Sarcopenia_Data/Test_7986/mha_original_EngineerSort/image'
-    spacing = None
-    size = None
-    
-    confirm = input(f"{Fore.RED}WARNING, CONFIRM SORTING MODE: {Fore.YELLOW}{DCM_AXIAL_SORT_MODE}{Fore.RED}, then press enter.{Style.RESET_ALL}")
+    confirm = input(f"{Fore.YELLOW}WARNING, CONFIRM SORTING MODE: {Fore.YELLOW}{args.sort_mode}{Fore.RED}, then press enter.{Style.RESET_ALL}")
     if confirm != '':
         exit(0)
     
     with Pool(32) as p:
         failed = []
         results = []
-        os.makedirs(dest_mha_root, exist_ok=True)
-        patient_names = [folder for folder in os.listdir(src_dcm_root) 
-                         if osp.isdir(osp.join(src_dcm_root, folder))]
+        os.makedirs(args.dest_mha_root, exist_ok=True)
+        patient_names = [folder 
+                         for folder in os.listdir(args.src_dcm_root) 
+                         if osp.isdir(osp.join(args.src_dcm_root, folder))]
         
         for patient_name in patient_names:
-            src_folder = osp.join(src_dcm_root, patient_name)
-            dst_path = osp.join(dest_mha_root, osp.basename(src_folder)+'.mha')
+            src_folder = osp.join(args.src_dcm_root, patient_name)
+            dst_path = osp.join(args.dest_mha_root, osp.basename(src_folder)+'.mha')
             new_task = p.apply_async(convert_one_case, 
-                                     args=(DCM_AXIAL_SORT_MODE, src_folder, dst_path, spacing, size))
+                                     args=(args.sort_mode, src_folder, dst_path, args.spacing, args.size))
             results.append(new_task)
         
         for result in tqdm(results, desc='Converting', dynamic_ncols=True):
@@ -82,7 +88,7 @@ if __name__ == '__main__':
     
     if len(failed) > 0:
         json.dump(failed, 
-                  open(osp.join(dest_mha_root, 'failed.json'), 'w'), 
+                  open(osp.join(args.dest_mha_root, 'failed.json'), 'w'), 
                   indent=4, 
                   ensure_ascii=False)
     
