@@ -6,13 +6,13 @@ import argparse
 import os
 import os.path as osp
 import pdb
+import multiprocessing as mp
 from pathlib import Path
-from multiprocessing import Pool
 from tqdm import tqdm
 from pprint import pprint
 
 import torch
-import pandas
+import pandas as pd
 import numpy as np
 import SimpleITK as sitk
 
@@ -112,18 +112,35 @@ def evaluate_one_folder(gt_folder:str,
     
     metric_list = []
     
-    for gt_file, pred_file in tqdm(zip(gt_files, pred_files),
-                                    desc='Evaulating',
-                                    total=len(gt_files),
-                                    dynamic_ncols=True,
-                                    leave=False):
-        gt_path = osp.join(gt_folder, gt_file)
-        pred_path = osp.join(pred_folder, pred_file)
-        out = calculate_one_pair(gt_path, pred_path, only_L3, invert)
-        metric_list.append(out)
+    if use_mp:
+        with mp.Pool(24) as p:
+            results = []
+            for gt_file, pred_file in zip(gt_files, pred_files):
+                gt_path = osp.join(gt_folder, gt_file)
+                pred_path = osp.join(pred_folder, pred_file)
+                result = p.apply_async(calculate_one_pair, 
+                                       args=(gt_path, pred_path, only_L3, invert))
+                results.append(result)
+            
+            for result in tqdm(results, 
+                               desc='Evaulating',
+                               total=len(gt_files),
+                               dynamic_ncols=True,
+                               leave=False):
+                metric_list.append(result.get())
+    
+    else:
+        for gt_file, pred_file in tqdm(zip(gt_files, pred_files),
+                                        desc='Evaulating',
+                                        total=len(gt_files),
+                                        dynamic_ncols=True,
+                                        leave=False):
+            gt_path = osp.join(gt_folder, gt_file)
+            pred_path = osp.join(pred_folder, pred_file)
+            out = calculate_one_pair(gt_path, pred_path, only_L3, invert)
+            metric_list.append(out)
     
     return metric_list
-
 
 
 def parser_args():
@@ -140,8 +157,30 @@ def parser_args():
 
 
 if __name__ == '__main__':
+    mp.set_start_method('spawn', force=True)
     args = parser_args()
-    metric_list = evaluate_one_folder(args.gt_root, args.pred_root, only_L3=args.whole_series, invert=args.invert)
+    
+    # 执行评估
     # metric_list中元素的数量是样本数量
     # 每个元素是一个字典，包含四个指标的四个类的值和自身的SeriesUID
-    result = pandas.DataFrame(metric_list)
+    metric_list = evaluate_one_folder(args.gt_root, 
+                                      args.pred_root, 
+                                      only_L3=args.whole_series, 
+                                      invert=args.invert,
+                                      use_mp=True)
+    
+    # 汇总整理
+    result = pd.DataFrame(metric_list)
+    # 将一个metric的四个类分解成四个单独的列
+    for metric_column in result.drop(columns='seriesUID').columns:
+        colume_names = [f'{metric_column}_腰大肌', 
+                        f'{metric_column}_其他骨骼肌', 
+                        f'{metric_column}_皮下脂肪', 
+                        f'{metric_column}_内脏脂肪']
+        result[colume_names] = pd.DataFrame(result[metric_column].tolist(), index=result.index)
+        result = result.drop(columns=metric_column)
+        # 计算这一metric的四类平均值
+        result[f'{metric_column}_Avg'] = result[colume_names].mean(axis=1)
+    # 保存csv
+    result.to_csv(os.path.join(args.pred_root, 'evaluation.csv'), index=False)
+    print(result)
