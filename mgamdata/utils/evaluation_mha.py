@@ -78,7 +78,7 @@ def calculate_one_pair(gt_path:str, pred_path:str, only_L3:bool=False, invert:bo
     
     # 逐类计算metric
     dices, ious, recalls, precisions = [], [], [], []
-    hausdorff = evaluation_hausdorff_distance_3D(gt_data, pred_data)
+    hausdorff = evaluation_hausdorff_distance_3D(gt_data_channel, pred_data_channel)
     for i in range(4):
         dice = evaluation_dice(gt_data_channel[i], pred_data_channel[i])
         iou, recall, precision = evaluation_area_metrics(
