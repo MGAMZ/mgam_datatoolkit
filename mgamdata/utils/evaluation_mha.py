@@ -10,6 +10,7 @@ import multiprocessing as mp
 from pathlib import Path
 from tqdm import tqdm
 from pprint import pprint
+from typing import List
 
 import torch
 import pandas as pd
@@ -18,6 +19,14 @@ import SimpleITK as sitk
 
 from mmseg.models.losses.dice_loss import dice_loss
 
+
+
+GT_FOLDERS = [
+    '/fileser51/zhangyiqin.sx/Sarcopenia_Data/Check_8081/mha_original_EngineerSort/label',
+    '/fileser51/zhangyiqin.sx/Sarcopenia_Data/Batch6_8016/mha_original_EngineerSort/label',
+    '/fileser51/zhangyiqin.sx/Sarcopenia_Data/Batch5_7986/mha_original_EngineerSort/label',
+    '/fileser51/zhangyiqin.sx/Sarcopenia_Data/Batch1234/mha_IdentityDevelopSort_AllinOne/label',
+]
 
 
 
@@ -56,9 +65,22 @@ def calculate_one_pair(gt_path:str, pred_path:str, only_L3:bool=False, invert:bo
     Returns:
         _type_: _description_
     """
-
-    gt = sitk.ReadImage(gt_path)
-    pred = sitk.ReadImage(pred_path)
+    if gt_path is None:
+        return {
+        'seriesUID': Path(pred_path).stem,
+        'dice': np.nan,
+        'iou': np.nan,
+        'recall': np.nan,
+        'precision': np.nan
+    }
+    try:
+        gt = sitk.ReadImage(gt_path)
+    except Exception as e:
+        raise RuntimeError(f"Read mha File({gt_path}) Failed: {e}")
+    try:
+        pred = sitk.ReadImage(pred_path)
+    except Exception as e:
+        raise RuntimeError(f"Read mha File({pred_path}) Failed: {e}")
     
     gt_data = sitk.GetArrayFromImage(gt)
     pred_data = sitk.GetArrayFromImage(pred)
@@ -101,56 +123,66 @@ def calculate_one_pair(gt_path:str, pred_path:str, only_L3:bool=False, invert:bo
     }
 
 
+# NOTE 输入的所有gt文件夹是有优先级顺序的，只会返回最先找到的gt路径
+def search_gt_file(gt_folders:List[str], seriesUID:str):
+    for gt_folder in gt_folders:
+        for roots, dirs, files in os.walk(gt_folder):
+            for file in files:
+                if file.rstrip('.mha')==seriesUID and 'label' in roots:
+                    return os.path.join(roots, file)
+    else:
+        print(f"Can't find gt file for {seriesUID}.")
 
-def evaluate_one_folder(gt_folder:str, 
-                        pred_folder:str, 
-                        only_L3:bool=False, 
-                        use_mp:bool=False, 
+
+
+def evaluate_one_folder(pred_folder:str,
+                        only_L3:bool=False,
+                        use_mp:bool=False,
                         invert:bool=False):
-    pred_files = sorted([file for file in os.listdir(pred_folder) if file.endswith('.mha')])
-    gt_files = [file.replace(pred_folder, gt_folder) for file in pred_files]
-    
+    pred_files = sorted([osp.join(pred_folder, file)
+                         for file in os.listdir(pred_folder)
+                         if file.endswith('.mha')])
+    gt_files = [search_gt_file(GT_FOLDERS, seriesUID) for seriesUID in 
+                        [Path(file).stem for file in pred_files]]
     metric_list = []
-    
+
     if use_mp:
         with mp.Pool(24) as p:
             results = []
-            for gt_file, pred_file in zip(gt_files, pred_files):
-                gt_path = osp.join(gt_folder, gt_file)
-                pred_path = osp.join(pred_folder, pred_file)
-                result = p.apply_async(calculate_one_pair, 
-                                       args=(gt_path, pred_path, only_L3, invert))
+            for gt_path, pred_path in zip(gt_files, pred_files):
+                result = p.apply_async(
+                    calculate_one_pair,
+                    args=(gt_path, pred_path, only_L3, invert))
                 results.append(result)
-            
+
             for result in tqdm(results, 
                                desc='Evaulating',
                                total=len(gt_files),
                                dynamic_ncols=True,
                                leave=False):
                 metric_list.append(result.get())
-    
+
     else:
-        for gt_file, pred_file in tqdm(zip(gt_files, pred_files),
-                                        desc='Evaulating',
-                                        total=len(gt_files),
-                                        dynamic_ncols=True,
-                                        leave=False):
-            gt_path = osp.join(gt_folder, gt_file)
-            pred_path = osp.join(pred_folder, pred_file)
+        for gt_path, pred_path in tqdm(zip(gt_files, pred_files),
+                                       desc='Evaulating',
+                                       total=len(gt_files),
+                                       dynamic_ncols=True,
+                                       leave=False):
             out = calculate_one_pair(gt_path, pred_path, only_L3, invert)
             metric_list.append(out)
-    
+
     return metric_list
+
 
 
 def parser_args():
     parser = argparse.ArgumentParser('evaluate from mha files.')
-    parser.add_argument('gt_root', type=str, help='GT文件夹')
     parser.add_argument('pred_root', type=str, help='预测文件夹')
-    parser.add_argument('--whole-series', action='store_false', default=True, 
+    parser.add_argument('--whole-series', action='store_true', default=False, 
                         help='仅计算L3节段指标')
     parser.add_argument('--invert', action='store_true', default=False, 
                         help='在评估时将其中一者颠倒评估。这是为了避免Z轴排序不一致导致的指标错误。')
+    parser.add_argument('--mp', action='store_true', default=False)
     return parser.parse_args()
 
 
@@ -163,14 +195,13 @@ if __name__ == '__main__':
     # 执行评估
     # metric_list中元素的数量是样本数量
     # 每个元素是一个字典，包含四个指标的四个类的值和自身的SeriesUID
-    metric_list = evaluate_one_folder(args.gt_root, 
-                                      args.pred_root, 
-                                      only_L3=args.whole_series, 
+    metric_list = evaluate_one_folder(args.pred_root,
+                                      only_L3=not args.whole_series,
                                       invert=args.invert,
-                                      use_mp=True)
+                                      use_mp=args.mp)
     
     # 汇总整理
-    result = pd.DataFrame(metric_list)
+    result = pd.DataFrame(metric_list).dropna().drop_duplicates('seriesUID')
     # 将一个metric的四个类分解成四个单独的列
     for metric_column in result.drop(columns='seriesUID').columns:
         colume_names = [f'{metric_column}_腰大肌', 
