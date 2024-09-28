@@ -94,7 +94,7 @@ def evaluation_area_metrics(gt_data:np.ndarray, pred_data:np.ndarray):
 
 
 
-def evaluation_hausdorff_distance_3D(gt, pred, percentile:int=95, interpolation_ratio:Union[float|None]=0.25):
+def evaluation_hausdorff_distance_3D(gt, pred, percentile:int=95, interpolation_ratio:Union[float, None]=0.25):
     gt = torch.from_numpy(gt).to(dtype=torch.uint8, device='cuda')
     pred = torch.from_numpy(pred).to(dtype=torch.uint8, device='cuda')
     if interpolation_ratio is not None:
