@@ -157,28 +157,38 @@ def check(dest_root: str):
     return failed
 
 
+def parse_args():
+    import argparse
+    parser = argparse.ArgumentParser('Convert mha to tiff.')
+    parser.add_argument('mha_file_root', type=str, help='Root of mha files.')
+    parser.add_argument('dest_root', type=str, help='Root of tiff files.')
+    parser.add_argument('--spacing', type=str, default=None, help='Spacing of the mha files.')
+    return parser.parse_args()
+
+
 if __name__ == '__main__':
-    '''
+    ''' 转换原有dcm序列为sitk.image MHA文件。将一同处理label。
+        
         执行本脚本前应当先执行dcm2mha
         mha_file_root: 该目录下应当包括image和label两个子目录，均存放mha文件
         dest_root: 保存转换后的tiff文件, 将会在该目录下自动建立相同的目录结构
         
         NOTE 请注意本脚本顶端的阈值全局变量。该阈值代表被认为有效标注的最小面积占比。
     '''
+    args = parse_args()
     
-    mha_file_root = '/fileser51/zhangyiqin.sx/Sarcopenia_Data/Batch5_7986/mha_original_EngineerSort'
-    dest_root = '/fileser51/zhangyiqin.sx/Sarcopenia_Data/Batch5_7986/ForegroundTIFF_original_EngineerSort'
-    spacing = None
-    
-    task_list = auto_recursive_search_for_mha_sample_pair(mha_file_root, dest_root, spacing)
+    task_list = auto_recursive_search_for_mha_sample_pair(args.mha_file_root, args.dest_root, args.spacing)
     print(f'Found {len(task_list)} pairs of mha files.')
     
     failed = []
-    failed += convert(task_list)
-    failed += check(dest_root)
+    failed += convert(task_list)    # 执行转换
+    failed += check(args.dest_root) # 检查图片
     
     if len(failed) > 0:
-        json.dump(failed, open(osp.join(dest_root, 'failed.json'), 'w'), indent=4, ensure_ascii=False)
+        json.dump(failed, 
+                  open(osp.join(args.dest_root, 'failed.json'), 'w'), 
+                  indent=4, 
+                  ensure_ascii=False)
 
     pprint(failed)
 
