@@ -43,6 +43,7 @@ class CT_2D_Sarcopenia(BaseSegDataset):
     
     def _indexing(self):
         # Index
+        seriesUIDs = []
         available_series = []
         for root in self.roots:
             label_folder = osp.join(root, 'label')
@@ -50,12 +51,15 @@ class CT_2D_Sarcopenia(BaseSegDataset):
             if not osp.exists(label_folder) or not osp.exists(image_folder):
                 raise FileNotFoundError(f"Invalid Data Root: {root}")
             
-            for serial_id in os.listdir(label_folder):
-                image_serial = osp.join(image_folder, serial_id)
-                label_serial = osp.join(label_folder, serial_id)
-                if not osp.exists(image_serial):
+            for mha_file_name in os.listdir(label_folder):
+                seriesUID = Path(mha_file_name).stem
+                image_serial = osp.join(image_folder, mha_file_name)
+                label_serial = osp.join(label_folder, mha_file_name)
+                # 不存在有效扫描或者已经索引过的时候，跳过。
+                if (not osp.exists(image_serial)) or (seriesUID in seriesUIDs):
                     continue
                 available_series.append((image_serial, label_serial))
+                seriesUIDs.append(seriesUID)
         
         return sorted(available_series)
     
@@ -135,6 +139,12 @@ class CT_2D_Sar_CrossFold_OnlyRenJiData(CT_2D_Sar_CrossFold):
                 continue
             if Path(serial[0]).name in RENJI_HOSPITAL_DUPLICATED_SERIES_UIDS:
                 print_log(f"Skip Renji Hospital Duplicated Series: {serial[0]}", MMLogger.get_current_instance())
+                continue
+            if Path(serial[0]).name in ZHEJIANG_HOSPITAL_SERIES_UIDS:
+                print_log(f"Skip Zhejiang Hospital Series: {serial[0]}", MMLogger.get_current_instance())
+                continue
+            if Path(serial[0]).name in WENZHOU_HOSPITAL_SERIES_UIDS:
+                print_log(f"Skip Wenzhou Hospital Series: {serial[0]}", MMLogger.get_current_instance())
                 continue
             renji_series.append(serial)
         return renji_series
