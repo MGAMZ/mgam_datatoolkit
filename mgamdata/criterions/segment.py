@@ -109,11 +109,11 @@ def evaluation_hausdorff_distance_3D(gt, pred, interpolation_ratio=0.25):
         percentile = 95,
     )
     
-    return value.cpu().numpy()
+    return value.cpu().numpy().squeeze()
 
 
 if __name__ == '__main__':
     gt = np.random.randint(0, 2, size=(5, 240, 512, 512))
     pred = np.random.randint(0, 2, size=(5, 240, 512, 512))
     distance = evaluation_hausdorff_distance_3D(gt, gt)
-    print(distance)
+    print(distance.shape)

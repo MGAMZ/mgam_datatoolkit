@@ -72,9 +72,9 @@ def calculate_one_pair(gt_path:str, pred_path:str, only_L3:bool=False, invert:bo
         gt_data = gt_data[valid_slices][3:]
         pred_data = pred_data[valid_slices][3:]
     
-    # 生成one-hot编码对
-    gt_data_channel = np.stack([gt_data == i for i in range(1, 5)], axis=0)
-    pred_data_channel = np.stack([pred_data == i for i in range(1, 5)], axis=0)
+    # 生成one-hot编码对 [4, D, H, W]
+    gt_data_channel = np.stack([gt_data == i for i in range(1, 5)])
+    pred_data_channel = np.stack([pred_data == i for i in range(1, 5)])
     
     # 逐类计算metric
     dices, ious, recalls, precisions = [], [], [], []
