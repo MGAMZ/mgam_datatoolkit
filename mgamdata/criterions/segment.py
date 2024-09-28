@@ -1,8 +1,8 @@
 import pdb
+from typing import Union
+
 import torch
 import numpy as np
-
-import cv2
 from torch.nn.functional import interpolate
 from scipy.spatial.distance import directed_hausdorff
 from monai.metrics import compute_hausdorff_distance
@@ -94,11 +94,12 @@ def evaluation_area_metrics(gt_data:np.ndarray, pred_data:np.ndarray):
 
 
 
-def evaluation_hausdorff_distance_3D(gt, pred, interpolation_ratio=0.25):
+def evaluation_hausdorff_distance_3D(gt, pred, percentile:int=95, interpolation_ratio:Union[float|None]=0.25):
     gt = torch.from_numpy(gt).to(dtype=torch.uint8, device='cuda')
     pred = torch.from_numpy(pred).to(dtype=torch.uint8, device='cuda')
-    gt = interpolate(gt, scale_factor=interpolation_ratio, mode='nearest')
-    pred = interpolate(pred, scale_factor=interpolation_ratio, mode='nearest')
+    if interpolation_ratio is not None:
+        gt = interpolate(gt, scale_factor=interpolation_ratio, mode='nearest')
+        pred = interpolate(pred, scale_factor=interpolation_ratio, mode='nearest')
     
     # gt, pred: [Class, D, H, W]
     # input of the calculation should be: [N, Class, D, H, W]
@@ -106,14 +107,20 @@ def evaluation_hausdorff_distance_3D(gt, pred, interpolation_ratio=0.25):
         y_pred = pred[None],
         y = gt[None],
         include_background = True,
-        percentile = 95,
+        percentile = percentile,
+        directed = True,
     )
     
     return value.cpu().numpy().squeeze()
 
 
+
+
 if __name__ == '__main__':
-    gt = np.random.randint(0, 2, size=(5, 240, 512, 512))
-    pred = np.random.randint(0, 2, size=(5, 240, 512, 512))
-    distance = evaluation_hausdorff_distance_3D(gt, gt)
-    print(distance.shape)
+    image = np.zeros((5, 128, 128))
+    image[..., 32:48, 32:48] = 1
+    image2 = np.roll(image, 4, axis=1)
+    image2 = np.roll(image2, 4, axis=2)
+    
+    distance = evaluation_hausdorff_distance_3D(image, image2, None)
+    print(distance)

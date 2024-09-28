@@ -15,6 +15,21 @@ maintainers = [
 description = "mgam's data toolkit for a better world!"
 readme = "README.md"
 license = {file = "LICENSE"}
+dependencies = [
+  "monai",
+  "mmcv",
+  "openpyxl",
+  "pandas",
+  "scikit-image",
+  "scikit-learn",
+  "scipy",
+  "SimpleITK",
+  "pydicom",
+  "pynrrd",
+  "nnunetv2",
+  "ftfy",
+  "regex",
+]
 
 [project.scripts]
 mmrun = "mgamdata.mm.run:main"
