@@ -11,37 +11,12 @@ from pathlib import Path
 from tqdm import tqdm
 from pprint import pprint
 
-import torch
 import pandas as pd
 import numpy as np
 import SimpleITK as sitk
 
-from mmseg.models.losses.dice_loss import dice_loss
+from ..criterions.segment import evaluation_dice, evaluation_area_metrics, evaluation_hausdorff_distance_3D
 
-
-
-
-def calc_dice(gt_data:np.ndarray, pred_data:np.ndarray):
-    gt_class = torch.from_numpy(gt_data).cuda()
-    pred_class = torch.from_numpy(pred_data).cuda()
-    dice = 1 - dice_loss(gt_class[None], pred_class[None], weight=None, ignore_index=None
-                            ).cpu().numpy()
-    return dice
-
-
-
-def calc_area_metric(gt_data:np.ndarray, pred_data:np.ndarray):
-    # 计算iou, recall, precision
-    gt_class = torch.from_numpy(gt_data).cuda()
-    pred_class = torch.from_numpy(pred_data).cuda()
-    tp = (gt_class * pred_class).sum()
-    fn = gt_class.sum() - tp
-    fp = pred_class.sum() - tp
-    
-    iou = (tp / (tp + fn + fp)).cpu().numpy()
-    recall = (tp / (tp + fn)).cpu().numpy()
-    precision = (tp / (tp + fp)).cpu().numpy()
-    return iou, recall, precision
 
 
 
@@ -76,15 +51,16 @@ def calculate_one_pair(gt_path:str, pred_path:str, only_L3:bool=False, invert:bo
         pred_data = pred_data[valid_slices][3:]
     
     # 生成one-hot编码对
-    gt_data = np.stack([gt_data == i for i in range(1, 5)], axis=0)
-    pred_data = np.stack([pred_data == i for i in range(1, 5)], axis=0)
+    gt_data_channel = np.stack([gt_data == i for i in range(1, 5)], axis=0)
+    pred_data_channel = np.stack([pred_data == i for i in range(1, 5)], axis=0)
     
     # 逐类计算metric
     dices, ious, recalls, precisions = [], [], [], []
+    hausdorff = evaluation_hausdorff_distance_3D(gt_data, pred_data)
     for i in range(4):
-        dice = calc_dice(gt_data[i], pred_data[i])
-        iou, recall, precision = calc_area_metric(
-            gt_data[i].astype(np.uint8), pred_data[i].astype(np.uint8))
+        dice = evaluation_dice(gt_data_channel[i], pred_data_channel[i])
+        iou, recall, precision = evaluation_area_metrics(
+            gt_data_channel[i].astype(np.uint8), pred_data_channel[i].astype(np.uint8))
         
         dices.append(dice)
         ious.append(iou)
@@ -97,7 +73,8 @@ def calculate_one_pair(gt_path:str, pred_path:str, only_L3:bool=False, invert:bo
         'dice': np.stack(dices),
         'iou': np.stack(ious),
         'recall': np.stack(recalls),
-        'precision': np.stack(precisions)
+        'precision': np.stack(precisions),
+        'hausdorff': hausdorff,
     }
 
 
@@ -141,6 +118,7 @@ def evaluate_one_folder(gt_folder:str,
             metric_list.append(out)
     
     return metric_list
+
 
 
 def parser_args():

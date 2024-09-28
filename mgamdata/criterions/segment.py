@@ -1,12 +1,15 @@
 import pdb
-
 import torch
 import numpy as np
-from nptyping import NDArray
 
-from sklearn.metrics import precision_score, recall_score, f1_score, jaccard_score
-from mmdet.models.losses.dice_loss import dice_loss
+import cv2
+from torch.nn.functional import interpolate
+from scipy.spatial.distance import directed_hausdorff
+from monai.metrics import compute_hausdorff_distance
+
+from mmseg.models.losses.dice_loss import dice_loss
 from mmseg.models.losses import accuracy
+
 
 
 
@@ -18,8 +21,9 @@ def AlignDimension(y_pred, y_true):
     return y_pred, y_true
 
 
-def dice_loss_array(pred: NDArray,
-                    target: NDArray,
+
+def dice_loss_array(pred: np.ndarray,
+                    target: np.ndarray,
                     eps=1e-3,
                     naive_dice=False,):
     assert pred.shape == target.shape
@@ -45,16 +49,8 @@ def dice_loss_array(pred: NDArray,
     return np.mean(per_class_dice)
 
 
-def dice_loss_tensor(y_pred:torch.Tensor, y_true:torch.Tensor):
-    '''
-        y_pred: [N, C, ...]
-        y_true: [N, C, ...]
-    '''
-    y_pred, y_true = AlignDimension(y_pred, y_true)
-    dice = dice_loss(y_true.flatten(1), y_pred.flatten(1))
-    return dice
 
-def accuracy_array(y_pred:NDArray, y_true:NDArray):
+def accuracy_array(y_pred:np.ndarray, y_true:np.ndarray):
     '''
         y_pred: [N, ...]
         y_true: [N, ...]
@@ -65,6 +61,7 @@ def accuracy_array(y_pred:NDArray, y_true:NDArray):
     return correct / (total + 1)
 
 
+
 def accuracy_tensor(y_pred:torch.Tensor, y_true:torch.Tensor):
     y_pred, y_true = AlignDimension(y_pred, y_true)
     correct = (y_pred == y_true).sum().item()
@@ -72,3 +69,51 @@ def accuracy_tensor(y_pred:torch.Tensor, y_true:torch.Tensor):
     return correct / total
 
 
+
+def evaluation_dice(gt_data:np.ndarray, pred_data:np.ndarray):
+    gt_class = torch.from_numpy(gt_data).cuda()
+    pred_class = torch.from_numpy(pred_data).cuda()
+    dice = 1 - dice_loss(gt_class[None], pred_class[None], weight=None, ignore_index=None
+                            ).cpu().numpy()
+    return dice
+
+
+
+def evaluation_area_metrics(gt_data:np.ndarray, pred_data:np.ndarray):
+    # 计算iou, recall, precision
+    gt_class = torch.from_numpy(gt_data).cuda()
+    pred_class = torch.from_numpy(pred_data).cuda()
+    tp = (gt_class * pred_class).sum()
+    fn = gt_class.sum() - tp
+    fp = pred_class.sum() - tp
+    
+    iou = (tp / (tp + fn + fp)).cpu().numpy()
+    recall = (tp / (tp + fn)).cpu().numpy()
+    precision = (tp / (tp + fp)).cpu().numpy()
+    return iou, recall, precision
+
+
+
+def evaluation_hausdorff_distance_3D(gt, pred, interpolation_ratio=0.25):
+    gt = torch.from_numpy(gt).to(dtype=torch.uint8, device='cuda')
+    pred = torch.from_numpy(pred).to(dtype=torch.uint8, device='cuda')
+    gt = interpolate(gt, scale_factor=interpolation_ratio, mode='nearest')
+    pred = interpolate(pred, scale_factor=interpolation_ratio, mode='nearest')
+    
+    # gt, pred: [Class, D, H, W]
+    # input of the calculation should be: [N, Class, D, H, W]
+    value = compute_hausdorff_distance(
+        y_pred = pred[None],
+        y = gt[None],
+        include_background = True,
+        percentile = 95,
+    )
+    
+    return value.cpu().numpy()
+
+
+if __name__ == '__main__':
+    gt = np.random.randint(0, 2, size=(5, 240, 512, 512))
+    pred = np.random.randint(0, 2, size=(5, 240, 512, 512))
+    distance = evaluation_hausdorff_distance_3D(gt, gt)
+    print(distance)
