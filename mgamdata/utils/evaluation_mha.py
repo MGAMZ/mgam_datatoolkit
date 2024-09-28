@@ -16,7 +16,7 @@ import pandas as pd
 import numpy as np
 import SimpleITK as sitk
 
-from ..criterions.segment import evaluation_dice, evaluation_area_metrics, evaluation_hausdorff_distance_3D
+from mgamdata.criterions.segment import evaluation_dice, evaluation_area_metrics, evaluation_hausdorff_distance_3D
 
 
 
