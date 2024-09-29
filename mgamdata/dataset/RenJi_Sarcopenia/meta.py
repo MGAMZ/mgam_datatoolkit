@@ -6,6 +6,8 @@
     # {"text":"内脏脂肪组织(VAT)",  "code":"3"}
 '''
 
+SARCOPENIA_FOREGROUND_CLASSES = [1, 2, 3, 4]
+
 # 原始类定义
 CLASS_MAP = {
     0: 'Background',
@@ -431,4 +433,13 @@ TASK_8016_RENJI_HOSPITAL_SERIES_UIDS = [
     '1.2.840.113704.7.32.07.5.1.4.64135.30000024041323531650700064836',
     '1.2.840.113704.7.32.07.5.1.4.64135.30000024042100000402800396536',
     '1.2.840.113704.7.32.07.5.1.4.64135.30000024042500034301100101037',
+]
+
+
+# 不同TASK中可能出现重复的UID，有些是经过了审核的，应当按照以下顺序考虑。
+GT_FOLDERS_PRIORITY_ORIGINAL_ENGINEERSORT = [
+    '/fileser51/zhangyiqin.sx/Sarcopenia_Data/Check_8081/mha_original_EngineerSort',
+    '/fileser51/zhangyiqin.sx/Sarcopenia_Data/Batch6_8016/mha_original_EngineerSort',
+    '/fileser51/zhangyiqin.sx/Sarcopenia_Data/Batch5_7986/mha_original_EngineerSort',
+    '/fileser51/zhangyiqin.sx/Sarcopenia_Data/Batch1234/mha_IdentityDevelopSort_AllinOne',
 ]

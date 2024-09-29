@@ -10,7 +10,7 @@ import multiprocessing as mp
 from pathlib import Path
 from tqdm import tqdm
 from pprint import pprint
-from typing import List
+from typing import Union
 
 import pandas as pd
 import numpy as np
@@ -19,19 +19,75 @@ import SimpleITK as sitk
 from mgamdata.criterions.segment import (evaluation_dice,
                                          evaluation_area_metrics,
                                          evaluation_hausdorff_distance_3D)
+from mgamdata.dataset.RenJi_Sarcopenia.meta import (
+    GT_FOLDERS_PRIORITY_ORIGINAL_ENGINEERSORT, CLASS_MAP, CLASS_MAP_AFTER_KMEANS)
+from mgamdata.utils.search_tool import search_mha_file
 
 
 
-GT_FOLDERS = [
-    '/fileser51/zhangyiqin.sx/Sarcopenia_Data/Check_8081/mha_original_EngineerSort/label',
-    '/fileser51/zhangyiqin.sx/Sarcopenia_Data/Batch6_8016/mha_original_EngineerSort/label',
-    '/fileser51/zhangyiqin.sx/Sarcopenia_Data/Batch5_7986/mha_original_EngineerSort/label',
-    '/fileser51/zhangyiqin.sx/Sarcopenia_Data/Batch1234/mha_IdentityDevelopSort_AllinOne/label',
-]
+
+def calculate_one_pair_base_segment(voxel_volume, gt_data, pred_data):
+    num_classes = len(CLASS_MAP)
+    # 生成one-hot编码对 [Class, D, H, W]
+    gt_data_channel = np.stack([gt_data == i for i in range(1, num_classes)])
+    pred_data_channel = np.stack([pred_data == i for i in range(1, num_classes)])
+    
+    # 计算hausdorff距离
+    hausdorff = evaluation_hausdorff_distance_3D(gt_data_channel, pred_data_channel)
+    
+    # 逐类计算metric
+    dices, ious, recalls, precisions, gt_volumes, pred_volumes = [], [], [], [], [], []
+    for i in range(num_classes-1):
+        dice = evaluation_dice(gt_data_channel[i], pred_data_channel[i])
+        iou, recall, precision = evaluation_area_metrics(
+            gt_data_channel[i].astype(np.uint8), pred_data_channel[i].astype(np.uint8))
+        gt_volume = gt_data_channel[i].sum() * voxel_volume
+        pred_volume = pred_data_channel[i].sum() * voxel_volume
+        
+        dices.append(dice)
+        ious.append(iou)
+        recalls.append(recall)
+        precisions.append(precision)
+        gt_volumes.append(gt_volume)
+        pred_volumes.append(pred_volume)
+    
+    # 每个指标包含四个值，代表四个类
+    return {
+        'dice': np.stack(dices),
+        'iou': np.stack(ious),
+        'recall': np.stack(recalls),
+        'precision': np.stack(precisions),
+        'hausdorff': hausdorff,
+        'gt_volume': np.stack(gt_volumes),
+        'pred_volume': np.stack(pred_volumes),
+    }
 
 
 
-def calculate_one_pair(gt_path:str, pred_path:str, only_L3:bool=False, invert:bool=False):
+def calculate_one_pair_kmeans_post_segment(voxel_volume, pred_data):
+    num_classes = len(CLASS_MAP_AFTER_KMEANS)
+    # 生成one-hot编码对 [Class, D, H, W]
+    pred_data_channel = np.stack([pred_data == i for i in range(1, num_classes)])
+    
+    # 逐类计算metric
+    pred_volumes = []
+    for i in range(num_classes-1):
+        pred_volume = pred_data_channel[i].sum() * voxel_volume
+        pred_volumes.append(pred_volume)
+    
+    # 每个指标包含四个值，代表四个类
+    return {
+        'pred_volume': np.stack(pred_volumes),
+    }
+
+
+
+def calculate_one_pair(gt_path:Union[str, None],
+                       pred_path:str,
+                       only_L3:bool=False,
+                       invert:bool=False,
+                       kmeans:bool=False,
+                    ):
     """计算一个mha样本对的dice
 
     Args:
@@ -43,13 +99,7 @@ def calculate_one_pair(gt_path:str, pred_path:str, only_L3:bool=False, invert:bo
         _type_: _description_
     """
     if gt_path is None:
-        return {
-        'seriesUID': Path(pred_path).stem,
-        'dice': np.nan,
-        'iou': np.nan,
-        'recall': np.nan,
-        'precision': np.nan
-    }
+        return None
     try:
         gt = sitk.ReadImage(gt_path)
     except Exception as e:
@@ -75,63 +125,27 @@ def calculate_one_pair(gt_path:str, pred_path:str, only_L3:bool=False, invert:bo
         gt_data = gt_data[valid_slices][3:]
         pred_data = pred_data[valid_slices][3:]
     
-    # 生成one-hot编码对 [4, D, H, W]
-    gt_data_channel = np.stack([gt_data == i for i in range(1, 5)])
-    pred_data_channel = np.stack([pred_data == i for i in range(1, 5)])
-    
-    # 计算hausdorff距离
-    hausdorff = evaluation_hausdorff_distance_3D(gt_data_channel, pred_data_channel)
-    
-    # 逐类计算metric
-    dices, ious, recalls, precisions, gt_volumes, pred_volumes = [], [], [], [], [], []
-    for i in range(4):
-        dice = evaluation_dice(gt_data_channel[i], pred_data_channel[i])
-        iou, recall, precision = evaluation_area_metrics(
-            gt_data_channel[i].astype(np.uint8), pred_data_channel[i].astype(np.uint8))
-        gt_volume = gt_data_channel[i].sum() * voxel_volume
-        pred_volume = pred_data_channel[i].sum() * voxel_volume
-        
-        dices.append(dice)
-        ious.append(iou)
-        recalls.append(recall)
-        precisions.append(precision)
-        gt_volumes.append(gt_volume)
-        pred_volumes.append(pred_volume)
-    
-    # 每个指标包含四个值，代表四个类
-    return {
-        'seriesUID': Path(pred_path).stem,
-        'dice': np.stack(dices),
-        'iou': np.stack(ious),
-        'recall': np.stack(recalls),
-        'precision': np.stack(precisions),
-        'hausdorff': hausdorff,
-        'gt_volume': np.stack(gt_volumes),
-        'pred_volume': np.stack(pred_volumes),
-    }
-
-
-# NOTE 输入的所有gt文件夹是有优先级顺序的，只会返回最先找到的gt路径
-def search_gt_file(gt_folders:List[str], seriesUID:str):
-    for gt_folder in gt_folders:
-        for roots, dirs, files in os.walk(gt_folder):
-            for file in files:
-                if file.rstrip('.mha')==seriesUID and 'label' in roots:
-                    return os.path.join(roots, file)
+    if kmeans is True:
+        metric = calculate_one_pair_kmeans_post_segment(voxel_volume, pred_data)
     else:
-        print(f"Can't find gt file for {seriesUID}.")
-
+        metric = calculate_one_pair_base_segment(voxel_volume, gt_data, pred_data)
+        
+    metric['seriesUID'] = Path(pred_path).stem
+    return metric
 
 
 def evaluate_one_folder(pred_folder:str,
                         only_L3:bool=False,
                         use_mp:bool=False,
-                        invert:bool=False):
+                        invert:bool=False,
+                        kmeans:bool=False,
+                    ):
     pred_files = sorted([osp.join(pred_folder, file)
                          for file in os.listdir(pred_folder)
                          if file.endswith('.mha')])
-    gt_files = [search_gt_file(GT_FOLDERS, seriesUID) for seriesUID in 
-                        [Path(file).stem for file in pred_files]]
+    gt_files = [search_mha_file(GT_FOLDERS_PRIORITY_ORIGINAL_ENGINEERSORT, seriesUID, 'label') 
+                for seriesUID in [Path(file).stem 
+                for file in pred_files if file.endswith('.mha')]]
     metric_list = []
 
     if use_mp:
@@ -140,7 +154,7 @@ def evaluate_one_folder(pred_folder:str,
             for gt_path, pred_path in zip(gt_files, pred_files):
                 result = p.apply_async(
                     calculate_one_pair,
-                    args=(gt_path, pred_path, only_L3, invert))
+                    args=(gt_path, pred_path, only_L3, invert, kmeans))
                 results.append(result)
 
             for result in tqdm(results, 
@@ -148,7 +162,9 @@ def evaluate_one_folder(pred_folder:str,
                                total=len(gt_files),
                                dynamic_ncols=True,
                                leave=False):
-                metric_list.append(result.get())
+                out = result.get()
+                if out is not None:
+                    metric_list.append(out)
 
     else:
         for gt_path, pred_path in tqdm(zip(gt_files, pred_files),
@@ -156,8 +172,9 @@ def evaluate_one_folder(pred_folder:str,
                                        total=len(gt_files),
                                        dynamic_ncols=True,
                                        leave=False):
-            out = calculate_one_pair(gt_path, pred_path, only_L3, invert)
-            metric_list.append(out)
+            out = calculate_one_pair(gt_path, pred_path, only_L3, invert, kmeans)
+            if out is not None:
+                metric_list.append(out)
 
     return metric_list
 
@@ -171,6 +188,7 @@ def parser_args():
     parser.add_argument('--invert', action='store_true', default=False, 
                         help='在评估时将其中一者颠倒评估。这是为了避免Z轴排序不一致导致的指标错误。')
     parser.add_argument('--mp', action='store_true', default=False)
+    parser.add_argument('--kmeans', action='store_true', default=False)
     return parser.parse_args()
 
 
@@ -178,28 +196,33 @@ def parser_args():
 
 if __name__ == '__main__':
     mp.set_start_method('spawn', force=True)
+    
     args = parser_args()
+
+    if args.kmeans is True:
+        class_map = CLASS_MAP_AFTER_KMEANS
+    else:
+        class_map = CLASS_MAP
     
     # 执行评估
     # metric_list中元素的数量是样本数量
     # 每个元素是一个字典，包含四个指标的四个类的值和自身的SeriesUID
-    metric_list = evaluate_one_folder(args.pred_root,
+    metric_list = evaluate_one_folder(pred_folder=args.pred_root,
                                       only_L3=not args.whole_series,
                                       invert=args.invert,
-                                      use_mp=args.mp)
+                                      use_mp=args.mp,
+                                      kmeans=args.kmeans)
     
     # 汇总整理
     result = pd.DataFrame(metric_list).dropna().drop_duplicates('seriesUID')
-    # 将一个metric的四个类分解成四个单独的列
+    # 将一个metric分解写入为Class-Wise-Column
     for metric_column in result.drop(columns='seriesUID').columns:
-        colume_names = [f'{metric_column}_腰大肌', 
-                        f'{metric_column}_其他骨骼肌', 
-                        f'{metric_column}_皮下脂肪', 
-                        f'{metric_column}_内脏脂肪']
+        colume_names = [f"{metric_column}_{class_map[i]}" for i in range(1, len(class_map))]
         result[colume_names] = pd.DataFrame(result[metric_column].tolist(), index=result.index)
         result = result.drop(columns=metric_column)
-        # 计算这一metric的四类平均值
+        # 计算这一metric的类平均值
         result[f'{metric_column}_Avg'] = result[colume_names].mean(axis=1)
+    
     # 保存csv
     result.to_csv(os.path.join(args.pred_root, 'evaluation.csv'), index=False)
     print(result)
