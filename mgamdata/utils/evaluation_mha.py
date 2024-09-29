@@ -16,7 +16,9 @@ import pandas as pd
 import numpy as np
 import SimpleITK as sitk
 
-from mgamdata.criterions.segment import evaluation_dice, evaluation_area_metrics, evaluation_hausdorff_distance_3D
+from mgamdata.criterions.segment import (evaluation_dice,
+                                         evaluation_area_metrics,
+                                         evaluation_hausdorff_distance_3D)
 
 
 
@@ -57,6 +59,7 @@ def calculate_one_pair(gt_path:str, pred_path:str, only_L3:bool=False, invert:bo
     except Exception as e:
         raise RuntimeError(f"Read mha File({pred_path}) Failed: {e}")
     
+    voxel_volume = np.prod(gt.GetSpacing())
     gt_data = sitk.GetArrayFromImage(gt)
     pred_data = sitk.GetArrayFromImage(pred)
     if invert:
@@ -76,18 +79,24 @@ def calculate_one_pair(gt_path:str, pred_path:str, only_L3:bool=False, invert:bo
     gt_data_channel = np.stack([gt_data == i for i in range(1, 5)])
     pred_data_channel = np.stack([pred_data == i for i in range(1, 5)])
     
-    # 逐类计算metric
-    dices, ious, recalls, precisions = [], [], [], []
+    # 计算hausdorff距离
     hausdorff = evaluation_hausdorff_distance_3D(gt_data_channel, pred_data_channel)
+    
+    # 逐类计算metric
+    dices, ious, recalls, precisions, gt_volumes, pred_volumes = [], [], [], [], [], []
     for i in range(4):
         dice = evaluation_dice(gt_data_channel[i], pred_data_channel[i])
         iou, recall, precision = evaluation_area_metrics(
             gt_data_channel[i].astype(np.uint8), pred_data_channel[i].astype(np.uint8))
+        gt_volume = gt_data_channel[i].sum() * voxel_volume
+        pred_volume = pred_data_channel[i].sum() * voxel_volume
         
         dices.append(dice)
         ious.append(iou)
         recalls.append(recall)
         precisions.append(precision)
+        gt_volumes.append(gt_volume)
+        pred_volumes.append(pred_volume)
     
     # 每个指标包含四个值，代表四个类
     return {
@@ -97,6 +106,8 @@ def calculate_one_pair(gt_path:str, pred_path:str, only_L3:bool=False, invert:bo
         'recall': np.stack(recalls),
         'precision': np.stack(precisions),
         'hausdorff': hausdorff,
+        'gt_volume': np.stack(gt_volumes),
+        'pred_volume': np.stack(pred_volumes),
     }
 
 
@@ -124,7 +135,7 @@ def evaluate_one_folder(pred_folder:str,
     metric_list = []
 
     if use_mp:
-        with mp.Pool(24) as p:
+        with mp.Pool(12) as p:
             results = []
             for gt_path, pred_path in zip(gt_files, pred_files):
                 result = p.apply_async(

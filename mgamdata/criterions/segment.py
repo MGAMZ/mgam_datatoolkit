@@ -10,6 +10,8 @@ from monai.metrics import compute_hausdorff_distance
 from mmseg.models.losses.dice_loss import dice_loss
 from mmseg.models.losses import accuracy
 
+from ..utils.DeviceSide import get_max_vram_gpu_id
+
 
 
 
@@ -90,13 +92,18 @@ def evaluation_area_metrics(gt_data:np.ndarray, pred_data:np.ndarray):
     iou = (tp / (tp + fn + fp)).cpu().numpy()
     recall = (tp / (tp + fn)).cpu().numpy()
     precision = (tp / (tp + fp)).cpu().numpy()
+    
     return iou, recall, precision
 
 
 
-def evaluation_hausdorff_distance_3D(gt, pred, percentile:int=95, interpolation_ratio:Union[float, None]=0.25):
-    gt = torch.from_numpy(gt).to(dtype=torch.uint8, device='cuda')
-    pred = torch.from_numpy(pred).to(dtype=torch.uint8, device='cuda')
+def evaluation_hausdorff_distance_3D(gt, 
+                                     pred, 
+                                     percentile:int=95, 
+                                     interpolation_ratio:Union[float, None]=None):
+    selected_device_id = get_max_vram_gpu_id()
+    gt = torch.from_numpy(gt).to(dtype=torch.uint8, device=f'cuda:{selected_device_id}')
+    pred = torch.from_numpy(pred).to(dtype=torch.uint8, device=f'cuda:{selected_device_id}')
     if interpolation_ratio is not None:
         gt = interpolate(gt, scale_factor=interpolation_ratio, mode='nearest')
         pred = interpolate(pred, scale_factor=interpolation_ratio, mode='nearest')
@@ -109,9 +116,10 @@ def evaluation_hausdorff_distance_3D(gt, pred, percentile:int=95, interpolation_
         include_background = True,
         percentile = percentile,
         directed = True,
-    )
+    ).cpu().numpy().squeeze()
     
-    return value.cpu().numpy().squeeze()
+    torch.cuda.empty_cache()
+    return value
 
 
 

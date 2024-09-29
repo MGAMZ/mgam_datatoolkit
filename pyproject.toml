@@ -29,6 +29,7 @@ dependencies = [
   "nnunetv2",
   "ftfy",
   "regex",
+  "pynvml",
 ]
 
 [project.scripts]
