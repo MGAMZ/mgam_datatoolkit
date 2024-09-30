@@ -22,6 +22,7 @@ from mgamdata.criterions.segment import (evaluation_dice,
 from mgamdata.dataset.RenJi_Sarcopenia.meta import (
     GT_FOLDERS_PRIORITY_ORIGINAL_ENGINEERSORT, CLASS_MAP, CLASS_MAP_AFTER_KMEANS,
     L3_XLSX_PATH)
+from mgamdata.dataset.RenJi_Sarcopenia.L3 import find_L3_slices
 from mgamdata.utils.search_tool import search_mha_file
 
 
@@ -88,7 +89,7 @@ def calculate_one_pair(gt_path:Union[str, None],
                        only_L3:bool=False,
                        invert:bool=False,
                        kmeans:bool=False,
-                       L3_slices:Optional[str]=None,
+                       L3_slices:Optional[Union[str, np.ndarray[int, int]]]=None,
                     ):
     """计算一个mha样本对的dice
 
@@ -125,9 +126,11 @@ def calculate_one_pair(gt_path:Union[str, None],
     if only_L3:
         if L3_slices is None:
             L3_slices = gt_data.any(axis=(1, 2))
-        gt_data = gt_data[L3_slices][3:]
-        pred_data = pred_data[L3_slices][3:]
-    
+        else:
+            L3_slices = (len(gt_data) - L3_slices)[::-1]
+        gt_data = gt_data[L3_slices[0]:L3_slices[1]][:-3]
+        pred_data = pred_data[L3_slices[0]:L3_slices[1]][:-3]
+        
     if kmeans is True:
         metric = calculate_one_pair_kmeans_post_segment(voxel_volume, pred_data)
     else:
@@ -148,18 +151,17 @@ def evaluate_one_folder(pred_folder:str,
                          for file in os.listdir(pred_folder)
                          if file.endswith('.mha')])
     gt_files = [search_mha_file(GT_FOLDERS_PRIORITY_ORIGINAL_ENGINEERSORT, seriesUID, 'label') 
-                for seriesUID in [Path(file).stem 
-                for file in pred_files if file.endswith('.mha')]]
-    L3_df = pd.read_excel(L3_XLSX_PATH)
-    L3_slicess = [L3_df.loc[L3_df['序列编号'] == seriesUID, 'L3_slices'].values[0]
-                  for seriesUID in [Path(pred_files).stem]]
+                for seriesUID in [
+                    Path(file).stem for file in pred_files if file.endswith('.mha')
+                ]]
+    L3_slicess = find_L3_slices([Path(files).stem for files in pred_files])
     
     metric_list = []
 
     if use_mp:
         with mp.Pool(12) as p:
             results = []
-            for gt_path, pred_path in zip(gt_files, pred_files, L3_slicess):
+            for gt_path, pred_path, L3_slices in zip(gt_files, pred_files, L3_slicess):
                 result = p.apply_async(
                     calculate_one_pair,
                     args=(gt_path, pred_path, only_L3, invert, kmeans, L3_slices))
@@ -175,7 +177,7 @@ def evaluate_one_folder(pred_folder:str,
                     metric_list.append(out)
 
     else:
-        for gt_path, pred_path in tqdm(zip(gt_files, pred_files, L3_slicess),
+        for gt_path, pred_path, L3_slices in tqdm(zip(gt_files, pred_files, L3_slicess),
                                        desc='Evaulating',
                                        total=len(gt_files),
                                        dynamic_ncols=True,

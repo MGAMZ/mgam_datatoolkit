@@ -81,7 +81,7 @@ class CT_2D_Sarcopenia(BaseSegDataset):
     
     def load_data_list(self) -> List[dict]:
         # Attention: case is indexed by mask_root
-        data_list = [] 
+        data_list = []
         for image_folder, label_folder in self._split():
             for file in os.listdir(label_folder):
                 if file.endswith(self.suffix):

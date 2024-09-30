@@ -3,11 +3,9 @@ import os.path as osp
 import pdb
 import json
 from typing import Tuple, List
-from aitrox.utils.sitk_toolkit import sitk_resample_to_spacing_v2
 from colorama import Fore, Style
 from pathlib import Path
 from multiprocessing import Pool
-from matplotlib.pylab import f
 from tqdm import tqdm
 from pprint import pprint
 
@@ -15,6 +13,8 @@ import cv2
 import numpy as np
 import SimpleITK as sitk
 
+from mgamdata.io.sitk_toolkit import sitk_resample_to_spacing_v2
+from mgamdata.dataset.RenJi_Sarcopenia.L3 import find_L3_slices
 
 
 FOREGROUND_THRESHOLD = 0.1
@@ -23,6 +23,7 @@ FOREGROUND_THRESHOLD = 0.1
 
 def auto_recursive_search_for_mha_sample_pair(mha_file_root:str, target_save_root:str, spacing:Tuple=None):
     task_list = []
+    task_seriesUID = []
     for root, dirs, files in os.walk(mha_file_root):
         for file in files:
             label_path = Path(osp.join(root, file))
@@ -40,9 +41,14 @@ def auto_recursive_search_for_mha_sample_pair(mha_file_root:str, target_save_roo
                                              label_relative_to_root.stem, 
                                              label_relative_to_root.stem)
                 
-                task_list.append(((image_path, image_target_path), 
+                task_list.append([(image_path, image_target_path), 
                                   (label_path, label_target_path), 
-                                  spacing))
+                                  spacing])
+                task_seriesUID.append(Path(image_path).stem)
+    
+    foreground_slicess = find_L3_slices(task_seriesUID)
+    for i in range(len(task_list)):
+        task_list[i].append(foreground_slicess[i])
     
     return task_list
 
@@ -61,6 +67,7 @@ def process_one(param: Tuple[Tuple[str, str], Tuple[str, str], Tuple]):
     image_paths:Tuple[str, str] = param[0]
     label_paths:Tuple[str, str] = param[1]
     spacing:Tuple = param[2]
+    L3_slices = param[3]
     
     try:
         # 载入mha
@@ -75,9 +82,9 @@ def process_one(param: Tuple[Tuple[str, str], Tuple[str, str], Tuple]):
         label = sitk.GetArrayFromImage(label) # [D, H, W]
         
         # 选择非空部分
-        foreground_slice = np.any(label, axis=(1, 2)) # [D]
-        image = image[foreground_slice]
-        label = label[foreground_slice]
+        foreground_slice = (len(image) - L3_slices)[::-1]
+        image = image[foreground_slice[0]:foreground_slice[1]]
+        label = label[foreground_slice[0]:foreground_slice[1]]
         
         # 检查有效标注区域面积是否足够
         # 在这一步就去除异常mask
@@ -107,7 +114,7 @@ def process_one(param: Tuple[Tuple[str, str], Tuple[str, str], Tuple]):
         
     except Exception as e:
         return {
-            'failed_path': [image_paths, label_paths],
+            'failed_path': [str(image_paths), str(label_paths)],
             'error': str(e)
         }
 
@@ -117,14 +124,14 @@ def check_one(path:str):
         read = cv2.imread(path, cv2.IMREAD_UNCHANGED)
         if read.shape[-2:] != (512, 512):
             return {
-                'failed_path': path,
+                'failed_path': str(path),
                 'error': 'shape not match'
             }
         return True
         
     except Exception as e:
         return {
-            'failed_path': path,
+            'failed_path': str(path),
             'error': str(e)
         }
 
@@ -184,11 +191,11 @@ if __name__ == '__main__':
     failed += convert(task_list)    # 执行转换
     failed += check(args.dest_root) # 检查图片
     
-    if len(failed) > 0:
-        json.dump(failed, 
-                  open(osp.join(args.dest_root, 'failed.json'), 'w'), 
-                  indent=4, 
-                  ensure_ascii=False)
+    os.makedirs(args.dest_root, exist_ok=True)
+    json.dump(failed, 
+                open(osp.join(args.dest_root, 'failed.json'), 'w'), 
+                indent=4, 
+                ensure_ascii=False)
 
     pprint(failed)
 
