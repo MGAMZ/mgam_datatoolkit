@@ -29,8 +29,7 @@ if __name__ == '__main__':
                     "seriesPath": series_path 
             }
         }
-
-        url = 'http://10.100.39.149:31835/predict/'
+        url = 'http://10.100.39.130:31835/predict/'
         headers = {'Content-Type': 'application/json'}
         response = requests.post(url=url, headers=headers, json=data)
         print(response.text)

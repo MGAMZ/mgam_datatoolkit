@@ -10,7 +10,7 @@ import multiprocessing as mp
 from pathlib import Path
 from tqdm import tqdm
 from pprint import pprint
-from typing import Union
+from typing import Union, Dict, Optional
 
 import pandas as pd
 import numpy as np
@@ -20,7 +20,8 @@ from mgamdata.criterions.segment import (evaluation_dice,
                                          evaluation_area_metrics,
                                          evaluation_hausdorff_distance_3D)
 from mgamdata.dataset.RenJi_Sarcopenia.meta import (
-    GT_FOLDERS_PRIORITY_ORIGINAL_ENGINEERSORT, CLASS_MAP, CLASS_MAP_AFTER_KMEANS)
+    GT_FOLDERS_PRIORITY_ORIGINAL_ENGINEERSORT, CLASS_MAP, CLASS_MAP_AFTER_KMEANS,
+    L3_XLSX_PATH)
 from mgamdata.utils.search_tool import search_mha_file
 
 
@@ -64,7 +65,7 @@ def calculate_one_pair_base_segment(voxel_volume, gt_data, pred_data):
 
 
 
-def calculate_one_pair_kmeans_post_segment(voxel_volume, pred_data):
+def calculate_one_pair_kmeans_post_segment(voxel_volume, pred_data) -> Dict:
     num_classes = len(CLASS_MAP_AFTER_KMEANS)
     # 生成one-hot编码对 [Class, D, H, W]
     pred_data_channel = np.stack([pred_data == i for i in range(1, num_classes)])
@@ -87,6 +88,7 @@ def calculate_one_pair(gt_path:Union[str, None],
                        only_L3:bool=False,
                        invert:bool=False,
                        kmeans:bool=False,
+                       L3_slices:Optional[str]=None,
                     ):
     """计算一个mha样本对的dice
 
@@ -121,9 +123,10 @@ def calculate_one_pair(gt_path:Union[str, None],
     # 寻找gt的any有效slice
     # 并相应抛弃其他所有slices
     if only_L3:
-        valid_slices = gt_data.any(axis=(1, 2))
-        gt_data = gt_data[valid_slices][3:]
-        pred_data = pred_data[valid_slices][3:]
+        if L3_slices is None:
+            L3_slices = gt_data.any(axis=(1, 2))
+        gt_data = gt_data[L3_slices][3:]
+        pred_data = pred_data[L3_slices][3:]
     
     if kmeans is True:
         metric = calculate_one_pair_kmeans_post_segment(voxel_volume, pred_data)
@@ -132,6 +135,7 @@ def calculate_one_pair(gt_path:Union[str, None],
         
     metric['seriesUID'] = Path(pred_path).stem
     return metric
+
 
 
 def evaluate_one_folder(pred_folder:str,
@@ -146,15 +150,19 @@ def evaluate_one_folder(pred_folder:str,
     gt_files = [search_mha_file(GT_FOLDERS_PRIORITY_ORIGINAL_ENGINEERSORT, seriesUID, 'label') 
                 for seriesUID in [Path(file).stem 
                 for file in pred_files if file.endswith('.mha')]]
+    L3_df = pd.read_excel(L3_XLSX_PATH)
+    L3_slicess = [L3_df.loc[L3_df['序列编号'] == seriesUID, 'L3_slices'].values[0]
+                  for seriesUID in [Path(pred_files).stem]]
+    
     metric_list = []
 
     if use_mp:
         with mp.Pool(12) as p:
             results = []
-            for gt_path, pred_path in zip(gt_files, pred_files):
+            for gt_path, pred_path in zip(gt_files, pred_files, L3_slicess):
                 result = p.apply_async(
                     calculate_one_pair,
-                    args=(gt_path, pred_path, only_L3, invert, kmeans))
+                    args=(gt_path, pred_path, only_L3, invert, kmeans, L3_slices))
                 results.append(result)
 
             for result in tqdm(results, 
@@ -167,12 +175,12 @@ def evaluate_one_folder(pred_folder:str,
                     metric_list.append(out)
 
     else:
-        for gt_path, pred_path in tqdm(zip(gt_files, pred_files),
+        for gt_path, pred_path in tqdm(zip(gt_files, pred_files, L3_slicess),
                                        desc='Evaulating',
                                        total=len(gt_files),
                                        dynamic_ncols=True,
                                        leave=False):
-            out = calculate_one_pair(gt_path, pred_path, only_L3, invert, kmeans)
+            out = calculate_one_pair(gt_path, pred_path, only_L3, invert, kmeans, L3_slices)
             if out is not None:
                 metric_list.append(out)
 

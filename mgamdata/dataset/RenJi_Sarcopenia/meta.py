@@ -443,3 +443,5 @@ GT_FOLDERS_PRIORITY_ORIGINAL_ENGINEERSORT = [
     '/fileser51/zhangyiqin.sx/Sarcopenia_Data/Batch5_7986/mha_original_EngineerSort',
     '/fileser51/zhangyiqin.sx/Sarcopenia_Data/Batch1234/mha_IdentityDevelopSort_AllinOne',
 ]
+
+L3_XLSX_PATH = '/fileser51/zhangyiqin.sx/Sarcopenia_Data/ALL_check_series_anno.xlsx'

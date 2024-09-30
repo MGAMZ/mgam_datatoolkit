@@ -15,11 +15,13 @@ from mgamdata.io.sitk_toolkit import sitk_resample_to_image
 
 
 
+
 def min_max_scale(img):
     max_val = np.max(img)
     min_val = np.min(img)
     res_img = (img - min_val) / (max_val - min_val)
     return res_img * 255
+
 
 
 def get_dcm_file(dcm):
@@ -36,6 +38,7 @@ def get_dcm_file(dcm):
     res = min_max_scale(res)
     res = res.astype('uint8')
     return res
+
 
 @deprecated('这个函数过期了，且尚未经过验证，使用需谨慎。')
 def get_mask_2d(src_folder, dst_folder, cat, l3_csv):
@@ -99,6 +102,7 @@ def get_mask_2d(src_folder, dst_folder, cat, l3_csv):
                 merge_mask[img_nzzf_mask==1]=4
         
             cv2.imwrite(os.path.join(save_dir, slide_item , f'{idx:06d}' + '.png'), merge_mask)
+
 
 
 def process_mask_one_case(src_folder, dst_folder, image_folder, cat, patient_name):
@@ -168,6 +172,7 @@ def process_mask_one_case(src_folder, dst_folder, image_folder, cat, patient_nam
         return e
 
 
+
 def get_mask_3d(src_folder, dst_folder, image_folder, cat):
     os.makedirs(dst_folder,  exist_ok=True)
     with Pool(32) as p:
@@ -195,17 +200,19 @@ def get_mask_3d(src_folder, dst_folder, image_folder, cat):
                       ensure_ascii=False)
 
 
+
 def parse_args():
-    parser = argparse.ArgumentParser(description='Convert DCM to MHA')
+    parser = argparse.ArgumentParser(description='将鉴影的one-hot标注文件转换为同类')
     parser.add_argument('src_folder', type=str, 
                         help='鉴影标注的mha文件夹路径')
     parser.add_argument('dst_folder', type=str, 
                         help='转换后的mha文件夹路径')
     parser.add_argument('image_folder', type=str, 
-                        help='对应的扫描序列文件夹路径，用以对齐image和label的元信息。')
+                        help='对应的扫描序列mha文件夹路径，用以对齐image和label的元信息。')
     parser.add_argument('--cat', type=int, default=4, 
                         help='需要的mask类别')
     return parser.parse_args()
+
 
 
 
@@ -217,7 +224,7 @@ if __name__ == '__main__':
     Args
         - src_folder: 鉴影标注的mha文件夹路径
         - dst_folder: 转换后的mha文件夹路径
-        - image_folder: 对应的扫描序列文件夹路径，用以对齐image和label的元信息。
+        - image_folder: 对应的扫描序列mha文件夹路径，用以对齐image和label的元信息。
         
     NOTE 鉴影标注的顺序遵循Z轴方向降序排列，需要注意与工程的Dicom转换方向是否一致
         必要时建议可视化观察。
