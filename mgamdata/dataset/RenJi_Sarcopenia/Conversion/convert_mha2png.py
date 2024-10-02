@@ -198,5 +198,5 @@ if __name__ == '__main__':
                 indent=4, 
                 ensure_ascii=False)
 
+    print('Failed Cases:')
     pprint(failed)
-

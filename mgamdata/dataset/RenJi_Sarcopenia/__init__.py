@@ -440,7 +440,7 @@ TASK_8016_RENJI_HOSPITAL_SERIES_UIDS = [
 
 
 # 数据根路径
-data_root = os.environ['SarcopeniaRoot']
+data_root = os.environ['sarcopenia_data_root']
 
 
 # 不同TASK中可能出现重复的UID，有些是经过了审核的，应当按照以下顺序考虑。
