@@ -30,6 +30,7 @@ dependencies = [
   "ftfy",
   "regex",
   "pynvml",
+  "tensorboard",
 ]
 
 [project.scripts]

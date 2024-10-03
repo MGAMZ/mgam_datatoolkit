@@ -3,7 +3,7 @@ from typing import List
 import numpy as np
 import pandas as pd
 
-from .meta import L3_XLSX_PATH
+from ..RenJi_Sarcopenia import L3_XLSX_PATH
 
 
 def find_L3_slices(seriesUIDs: List[str]):
