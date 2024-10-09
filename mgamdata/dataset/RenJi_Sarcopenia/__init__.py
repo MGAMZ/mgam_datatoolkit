@@ -445,11 +445,11 @@ data_root = os.environ['sarcopenia_data_root']
 
 # 不同TASK中可能出现重复的UID，有些是经过了审核的，应当按照以下顺序考虑。
 GT_FOLDERS_PRIORITY_ORIGINAL_ENGINEERSORT = [
-    join(data_root, 'Check_8081',  'mha_original_EngineerSort'),
-    join(data_root, 'Check_7393',  'mha_original_EngineerSort'),
-    join(data_root, 'Batch6_8016', 'mha_original_EngineerSort'),
-    join(data_root, 'Batch5_7986', 'mha_original_EngineerSort'),
-    join(data_root, 'Batch1234',   'mha_original_EngineerSort'),
+    join(data_root, 'Check_8081', 'mha_original_EngineerSort'),
+    join(data_root, 'Check_8016', 'mha_original_EngineerSort'),
+    join(data_root, 'Check_7622', 'mha_original_EngineerSort'),
+    join(data_root, 'Check_7393', 'mha_original_EngineerSort'),
+    join(data_root, 'Check_6947', 'mha_original_EngineerSort'),
 ]
 
 

@@ -3,6 +3,7 @@
     计算其指标
 '''
 import argparse
+from datetime import datetime
 import os
 import os.path as osp
 import pdb
@@ -19,16 +20,15 @@ import SimpleITK as sitk
 from mgamdata.criterions.segment import (evaluation_dice,
                                          evaluation_area_metrics,
                                          evaluation_hausdorff_distance_3D)
-from mgamdata.dataset.RenJi_Sarcopenia.meta import (
-    GT_FOLDERS_PRIORITY_ORIGINAL_ENGINEERSORT, CLASS_MAP, CLASS_MAP_AFTER_KMEANS,
-    L3_XLSX_PATH)
+from mgamdata.dataset.RenJi_Sarcopenia import (
+    GT_FOLDERS_PRIORITY_ORIGINAL_ENGINEERSORT, CLASS_MAP, CLASS_MAP_AFTER_KMEANS)
 from mgamdata.dataset.RenJi_Sarcopenia.L3 import find_L3_slices
 from mgamdata.utils.search_tool import search_mha_file
 
 
 
 
-def calculate_one_pair_base_segment(voxel_volume, gt_data, pred_data):
+def calculate_one_pair_base_segment(pixel_volume, voxel_volume, gt_data, pred_data):
     num_classes = len(CLASS_MAP)
     # 生成one-hot编码对 [Class, D, H, W]
     gt_data_channel = np.stack([gt_data == i for i in range(1, num_classes)])
@@ -38,13 +38,17 @@ def calculate_one_pair_base_segment(voxel_volume, gt_data, pred_data):
     hausdorff = evaluation_hausdorff_distance_3D(gt_data_channel, pred_data_channel)
     
     # 逐类计算metric
-    dices, ious, recalls, precisions, gt_volumes, pred_volumes = [], [], [], [], [], []
+    dices, ious, recalls, precisions = [], [], [], []
+    gt_volumes, pred_volumes = [], []
+    gt_total_2D_area, pred_total_2D_area = [], []
     for i in range(num_classes-1):
         dice = evaluation_dice(gt_data_channel[i], pred_data_channel[i])
         iou, recall, precision = evaluation_area_metrics(
             gt_data_channel[i].astype(np.uint8), pred_data_channel[i].astype(np.uint8))
         gt_volume = gt_data_channel[i].sum() * voxel_volume
         pred_volume = pred_data_channel[i].sum() * voxel_volume
+        gt_2D_area = gt_data_channel[i].sum() * pixel_volume
+        pred_2D_area = pred_data_channel[i].sum() * pixel_volume
         
         dices.append(dice)
         ious.append(iou)
@@ -52,6 +56,8 @@ def calculate_one_pair_base_segment(voxel_volume, gt_data, pred_data):
         precisions.append(precision)
         gt_volumes.append(gt_volume)
         pred_volumes.append(pred_volume)
+        gt_total_2D_area.append(gt_2D_area)
+        pred_total_2D_area.append(pred_2D_area)
     
     # 每个指标包含四个值，代表四个类
     return {
@@ -62,6 +68,8 @@ def calculate_one_pair_base_segment(voxel_volume, gt_data, pred_data):
         'hausdorff': hausdorff,
         'gt_volume': np.stack(gt_volumes),
         'pred_volume': np.stack(pred_volumes),
+        'gt_total_2D_area': np.stack(gt_total_2D_area),
+        'pred_total_2D_area': np.stack(pred_total_2D_area),
     }
 
 
@@ -112,6 +120,7 @@ def calculate_one_pair(gt_path:Union[str, None],
     except Exception as e:
         raise RuntimeError(f"Read mha File({pred_path}) Failed: {e}")
     
+    pixel_volume = np.prod(gt.GetSpacing()[-2:])
     voxel_volume = np.prod(gt.GetSpacing())
     gt_data = sitk.GetArrayFromImage(gt)
     pred_data = sitk.GetArrayFromImage(pred)
@@ -134,7 +143,7 @@ def calculate_one_pair(gt_path:Union[str, None],
     if kmeans is True:
         metric = calculate_one_pair_kmeans_post_segment(voxel_volume, pred_data)
     else:
-        metric = calculate_one_pair_base_segment(voxel_volume, gt_data, pred_data)
+        metric = calculate_one_pair_base_segment(pixel_volume, voxel_volume, gt_data, pred_data)
         
     metric['seriesUID'] = Path(pred_path).stem
     return metric
@@ -234,5 +243,8 @@ if __name__ == '__main__':
         result[f'{metric_column}_Avg'] = result[colume_names].mean(axis=1)
     
     # 保存csv
-    result.to_csv(os.path.join(args.pred_root, 'evaluation.csv'), index=False)
+    result.to_csv(
+        os.path.join(args.pred_root,
+                     f"evaluation_{datetime.now().strftime(r'%Y%m%d-%H%M%S')}.csv"), 
+        index=False)
     print(result)
