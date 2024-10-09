@@ -2,7 +2,7 @@ import os
 import os.path as osp
 import pdb
 import warnings
-from typing import Tuple
+from typing import Tuple, Optional
 from glob import glob
 from colorama import Style, Fore
 from typing_extensions import deprecated
@@ -11,8 +11,6 @@ import pydicom
 from pydicom import dicomio
 import numpy as np
 import SimpleITK as sitk
-import pydicom.dicomdir
-import pydicom.fileset
 
 
 @deprecated("已在V2版本中实现性能改进")
@@ -136,7 +134,11 @@ def calculate_origin_offset(new_spacing, old_spacing):
 
 
 def LoadDcmAsSitkImage_EngineeringOrder(dcm_case_path, spacing, sort_by_distance=True
-                       ) -> Tuple[sitk.Image, Tuple[float, float, float], Tuple[int, int, int]]:
+    ) -> Tuple[sitk.Image, 
+         Optional[Tuple[float, float, float]], 
+         Optional[Tuple[int, int, int]],
+         Optional[Tuple[int, int, int]]
+    ]:
     # Spacing: [D, H, W]
     
     class DcmInfo(object):
@@ -184,8 +186,7 @@ def LoadDcmAsSitkImage_EngineeringOrder(dcm_case_path, spacing, sort_by_distance
         files = os.listdir(dcm_case_path)
         for file in files:
             file_path = osp.join(dcm_case_path, file)
-
-            dcm = dicomio.read_file(file_path, force=True)
+            dcm = pydicom.dcmread(file_path, force=True)
             _series_instance_uid = dcm.SeriesInstanceUID
             _sop_instance_uid = dcm.SOPInstanceUID
             _instance_number = dcm.InstanceNumber
@@ -234,7 +235,11 @@ def LoadDcmAsSitkImage_EngineeringOrder(dcm_case_path, spacing, sort_by_distance
 
 
 def LoadDcmAsSitkImage_JianYingOrder(dcm_case_path, spacing
-    ) -> Tuple[sitk.Image, Tuple[float, float, float], Tuple[int, int, int]]:
+    ) -> Tuple[sitk.Image, 
+               Optional[Tuple[float, float, float]], 
+               Optional[Tuple[int, int, int]],
+               Optional[Tuple[int, int, int]]
+    ]:
     
     dcms = []
     dcm_paths = glob(osp.join(dcm_case_path, '*.dcm'))

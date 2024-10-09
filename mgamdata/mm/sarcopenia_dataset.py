@@ -18,7 +18,13 @@ from mmengine.runner import Runner
 from mmseg.datasets.basesegdataset import BaseSegDataset
 from mmseg.engine.hooks import SegVisualizationHook
 
-from ..dataset.RenJi_Sarcopenia.meta import *
+from ..dataset.RenJi_Sarcopenia import (
+    CLASS_MAP_ABBR, LABEL_COLOR_DICT,
+    HUANGSHAN_HOSPITAL_SERIES_UIDS,
+    RENJI_HOSPITAL_DUPLICATED_SERIES_UIDS,
+    ZHEJIANG_HOSPITAL_SERIES_UIDS,
+    WENZHOU_HOSPITAL_SERIES_UIDS,
+)
 
 
 
@@ -152,7 +158,7 @@ class CT_2D_Sar_CrossFold_OnlyRenJiData(CT_2D_Sar_CrossFold):
 
 
 class CT_VisualizationHook(SegVisualizationHook):
-    def __init__(self, window_width:int=None, window_location:int=None, *args, **kwargs):
+    def __init__(self, window_width:int|None=None, window_location:int|None=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.ww = window_width
         self.wl = window_location

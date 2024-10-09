@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mgamdata"
-version = "1.1.0.240928"
+version = "1.1.0.241003"
 requires-python = ">= 3.12"
 authors = [
   {name = "Yiqin Zhang", email = "312065559@qq.com"},
@@ -30,6 +30,7 @@ dependencies = [
   "ftfy",
   "regex",
   "pynvml",
+  "tensorboard",
 ]
 
 [project.scripts]

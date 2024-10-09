@@ -1,3 +1,6 @@
+import os
+from os.path import join
+
 '''原始标注的类定义：
     
     # {"text":"腰大肌",             "code":"0"},
@@ -436,12 +439,18 @@ TASK_8016_RENJI_HOSPITAL_SERIES_UIDS = [
 ]
 
 
+# 数据根路径
+data_root = os.environ['sarcopenia_data_root']
+
+
 # 不同TASK中可能出现重复的UID，有些是经过了审核的，应当按照以下顺序考虑。
 GT_FOLDERS_PRIORITY_ORIGINAL_ENGINEERSORT = [
-    '/fileser51/zhangyiqin.sx/Sarcopenia_Data/Check_8081/mha_original_EngineerSort',
-    '/fileser51/zhangyiqin.sx/Sarcopenia_Data/Batch6_8016/mha_original_EngineerSort',
-    '/fileser51/zhangyiqin.sx/Sarcopenia_Data/Batch5_7986/mha_original_EngineerSort',
-    '/fileser51/zhangyiqin.sx/Sarcopenia_Data/Batch1234/mha_IdentityDevelopSort_AllinOne',
+    join(data_root, 'Check_8081',  'mha_original_EngineerSort'),
+    join(data_root, 'Check_7393',  'mha_original_EngineerSort'),
+    join(data_root, 'Batch6_8016', 'mha_original_EngineerSort'),
+    join(data_root, 'Batch5_7986', 'mha_original_EngineerSort'),
+    join(data_root, 'Batch1234',   'mha_original_EngineerSort'),
 ]
 
-L3_XLSX_PATH = '/fileser51/zhangyiqin.sx/Sarcopenia_Data/ALL_check_series_anno.xlsx'
+
+L3_XLSX_PATH = join(data_root, 'ALL_check_series_anno.xlsx')

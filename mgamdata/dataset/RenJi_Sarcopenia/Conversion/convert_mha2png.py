@@ -2,7 +2,7 @@ import os
 import os.path as osp
 import pdb
 import json
-from typing import Tuple, List
+from typing import Tuple, List, Dict, Union, Sequence, Optional
 from colorama import Fore, Style
 from pathlib import Path
 from multiprocessing import Pool
@@ -21,7 +21,8 @@ FOREGROUND_THRESHOLD = 0.1
 
 
 
-def auto_recursive_search_for_mha_sample_pair(mha_file_root:str, target_save_root:str, spacing:Tuple=None):
+def auto_recursive_search_for_mha_sample_pair(
+        mha_file_root:str, target_save_root:str, spacing:Optional[Tuple]=None):
     task_list = []
     task_seriesUID = []
     for root, dirs, files in os.walk(mha_file_root):
@@ -63,9 +64,9 @@ def check_task(target_save_root:str):
     return file_paths
 
 
-def process_one(param: Tuple[Tuple[str, str], Tuple[str, str], Tuple]):
-    image_paths:Tuple[str, str] = param[0]
-    label_paths:Tuple[str, str] = param[1]
+def process_one(param: Tuple[Tuple[str, str], Tuple[str, str], np.ndarray, np.ndarray]):
+    image_paths = param[0]
+    label_paths = param[1]
     spacing:Tuple = param[2]
     L3_slices = param[3]
     
@@ -119,7 +120,7 @@ def process_one(param: Tuple[Tuple[str, str], Tuple[str, str], Tuple]):
         }
 
 
-def check_one(path:str):
+def check_one(path:str) -> Union[bool, Dict]:
     try:
         read = cv2.imread(path, cv2.IMREAD_UNCHANGED)
         if read.shape[-2:] != (512, 512):
@@ -157,7 +158,7 @@ def check(dest_root: str):
         fetcher = p.imap_unordered(check_one, tasks, chunksize=8)
         
         for result in tqdm(fetcher, desc='Checking', leave=True, dynamic_ncols=True, total=len(tasks)):
-            if result is not True:
+            if isinstance(result, Dict):
                 failed.append(result)
                 os.remove(result['failed_path'])
         
@@ -197,5 +198,5 @@ if __name__ == '__main__':
                 indent=4, 
                 ensure_ascii=False)
 
+    print('Failed Cases:')
     pprint(failed)
-
