@@ -2,7 +2,7 @@ import os
 import pdb
 from os import path as osp
 from pprint import pprint
-from typing import List, Mapping, Tuple, Dict, Union, Sequence
+from collections.abc import Sequence, Mapping
 from typing_extensions import deprecated
 from tqdm import tqdm
 from pathlib import Path
@@ -18,7 +18,11 @@ from mmengine.runner import Runner
 from mmseg.datasets.basesegdataset import BaseSegDataset
 from mmseg.engine.hooks import SegVisualizationHook
 
-from ..dataset.RenJi_Sarcopenia.meta import *
+from ..dataset.RenJi_Sarcopenia import (
+    CLASS_MAP_ABBR, LABEL_COLOR_DICT, HUANGSHAN_HOSPITAL_SERIES_UIDS,
+    ZHEJIANG_HOSPITAL_SERIES_UIDS, WENZHOU_HOSPITAL_SERIES_UIDS,
+    RENJI_HOSPITAL_DUPLICATED_SERIES_UIDS,
+    TASK_8016_RENJI_HOSPITAL_SERIES_UIDS)
 
 
 
@@ -30,7 +34,7 @@ class CT_2D_Sarcopenia(BaseSegDataset):
         palette=list(LABEL_COLOR_DICT.values())
     )
     
-    def __init__(self, roots:List[str], split, debug, suffix, *args, **kwargs):
+    def __init__(self, roots:list[str], split, debug, suffix, *args, **kwargs):
         self.roots = roots
         self.split = split
         self.debug = debug
@@ -75,11 +79,13 @@ class CT_2D_Sarcopenia(BaseSegDataset):
             used_series = available_series[split_border[0]:split_border[1]]
         elif self.split == 'test':
             used_series = available_series[split_border[1]:-1]
+        else:
+            raise TypeError(f"Not supported sub-dataset split: {self.split}")
         
         for series in used_series:
             yield series
     
-    def load_data_list(self) -> List[dict]:
+    def load_data_list(self) -> list[dict]:
         # Attention: case is indexed by mask_root
         data_list = []
         for image_folder, label_folder in self._split():
@@ -105,7 +111,7 @@ class CT_2D_Sarcopenia(BaseSegDataset):
 
 class CT_2D_Sar_CrossFold(CT_2D_Sarcopenia):
     def __init__(self, 
-                 use_folds:Union[int, List[int]], 
+                 use_folds:int|list[int], 
                  total_folds:int = 5, 
                  *args, **kwargs):
         if isinstance(use_folds, int):
@@ -152,7 +158,10 @@ class CT_2D_Sar_CrossFold_OnlyRenJiData(CT_2D_Sar_CrossFold):
 
 
 class CT_VisualizationHook(SegVisualizationHook):
-    def __init__(self, window_width:int=None, window_location:int=None, *args, **kwargs):
+    def __init__(self, 
+                 window_width:int|None=None, 
+                 window_location:int|None=None, 
+                 *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.ww = window_width
         self.wl = window_location

@@ -30,7 +30,12 @@ dependencies = [
   "ftfy",
   "regex",
   "pynvml",
+  "future",
+  "tensorboard",
 ]
 
 [project.scripts]
 mmrun = "mgamdata.mm.run:main"
+
+[tool.setuptools]
+packages = ["mgamdata"]
