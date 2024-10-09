@@ -1,5 +1,7 @@
 # 暮光霭明的万能工具包
 
+**Note:** This repo is now only for preview, I am still working on it. I hope it will help more researchers with easy APIs one day.
+
 ## 开源协议
 
 本项目采用 **GNU General Public License v3.0** 开源协议。
@@ -39,3 +41,7 @@
 ### 2024.09.22 V1.0.0
 
 加入git submodule，一键安装常见mm package。
+
+### V.1.1.0.241009
+
+同步readme，版本号格式更改。这十几天里加入了很多新的函数和方法，优化了整个项目的可读性和可维护性，但是依旧有很多不足。
