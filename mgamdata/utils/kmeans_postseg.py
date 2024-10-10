@@ -8,7 +8,7 @@ import SimpleITK as sitk
 
 from mgamdata.process.kmeans import sarcopenia_muscle_subsegmentation_fromITK
 from mgamdata.utils.search_tool import search_mha_file
-from mgamdata.dataset.RenJi_Sarcopenia.meta import GT_FOLDERS_PRIORITY_ORIGINAL_ENGINEERSORT
+from mgamdata.dataset.RenJi_Sarcopenia import GT_FOLDERS_PRIORITY_ORIGINAL_ENGINEERSORT
 
 
 def process_one_pair(image_path:str, mask_path:str, output_folder:str):
