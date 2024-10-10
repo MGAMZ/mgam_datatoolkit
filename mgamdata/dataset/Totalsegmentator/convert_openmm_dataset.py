@@ -4,30 +4,17 @@ import multiprocessing
 from tqdm import tqdm
 
 import cv2
+import pandas as pd
 import numpy as np
 import SimpleITK as sitk
 
-from mgamdata.dataset.Totalsegmentator import CLASS_INDEX_MAP
+from mgamdata.dataset.Totalsegmentator import CLASS_INDEX_MAP, META_CSV_PATH
 from mgamdata.io.sitk_toolkit import merge_masks, split_image_label_pairs_to_2d
 
 
 
-
-def create_directory_structure(base_dir):
-    """创建目标目录结构"""
-    dirs = [
-        os.path.join(base_dir, 'img_dir', 'train'),
-        os.path.join(base_dir, 'img_dir', 'val'),
-        os.path.join(base_dir, 'ann_dir', 'train'),
-        os.path.join(base_dir, 'ann_dir', 'val')
-    ]
-    for dir_path in dirs:
-        os.makedirs(dir_path, exist_ok=True)
-
-
-
 def process_case(args):
-    case, source_dir, img_train_dir, ann_train_dir = args
+    case, source_dir, img_dir, ann_dir = args
     """处理单个案例的文件复制"""
     try:
         case_path = os.path.join(source_dir, case)
@@ -50,8 +37,8 @@ def process_case(args):
         
         # 保存为tiff
         for i, (img, ann) in enumerate(fetcher):
-            img_path = os.path.join(img_train_dir, f"{case}_{i:03d}.tiff")
-            ann_path = os.path.join(ann_train_dir, f"{case}_{i:03d}.tiff")
+            img_path = os.path.join(img_dir, f"{case}_{i:03d}.tiff")
+            ann_path = os.path.join(ann_dir, f"{case}_{i:03d}.tiff")
             cv2.imwrite(img_path, img.astype(np.float32), [cv2.IMWRITE_TIFF_COMPRESSION, 5])
             cv2.imwrite(ann_path, ann.astype(np.uint8), [cv2.IMWRITE_TIFF_COMPRESSION, 5])
 
@@ -60,32 +47,42 @@ def process_case(args):
 
 
 
+def generate_task_args(source_dir:str, target_dir:str, metainfo:pd.DataFrame):
+    task_args = []
+    for case in os.listdir(source_dir):
+        if os.path.isdir(os.path.join(source_dir, case)):
+            split:str = metainfo[case]['split']
+            if split=='test':
+                split = 'val'
+            img_dir = os.path.join(target_dir, 'img_dir', split)
+            ann_dir = os.path.join(target_dir, 'ann_dir', split)
+            
+            one_task = (case, source_dir, img_dir, ann_dir)
+            task_args.append(one_task)
+            
+    return task_args
+
+
 def main(source_dir, target_dir, use_multiprocessing):
-    # 创建目标目录结构
-    create_directory_structure(target_dir)
-    
-    img_train_dir = os.path.join(target_dir, 'img_dir', 'train')
-    ann_train_dir = os.path.join(target_dir, 'ann_dir', 'train')
-    
-    cases = [case for case in os.listdir(source_dir) if os.path.isdir(os.path.join(source_dir, case))]
+    metainfo = pd.read_csv(META_CSV_PATH, index_col='image_id')
+    task_args = generate_task_args(source_dir, target_dir, metainfo)
     
     if use_multiprocessing:
         with multiprocessing.Pool(multiprocessing.cpu_count()) as pool:
             for _ in tqdm(
                     iterable=pool.imap_unordered(
-                        func=process_case, 
-                        iterable=[(case, source_dir, img_train_dir, ann_train_dir) 
-                                  for case in cases],
+                        func=process_case,
+                        iterable=task_args,
                         chunksize=16),
-                    total=len(cases),
+                    total=len(task_args),
                     desc="Processing cases",
                     dynamic_ncols=True,
                     leave=False):
                 pass
     
     else:
-        for case in tqdm(cases, desc="Processing cases"):
-            process_case(case, source_dir, img_train_dir, ann_train_dir)
+        for task in tqdm(task_args, desc="Processing cases"):
+            process_case(task)
 
 
 

@@ -1,3 +1,9 @@
+import os
+
+
+data_root = os.environ['Totalsegmentator_data_root']
+
+
 CLASS_INDEX_MAP = {
     'adrenal_gland_left': 0,
     'adrenal_gland_right': 1,
@@ -118,3 +124,8 @@ CLASS_INDEX_MAP = {
     'vertebrae_T8': 116,
     'vertebrae_T9': 117
 }
+
+
+
+META_CSV_PATH = os.path.join(data_root, 'meta_v2.csv')
+

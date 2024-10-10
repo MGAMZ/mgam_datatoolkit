@@ -1,1 +1,1 @@
-from .meta import CLASS_INDEX_MAP
+from .meta import *
