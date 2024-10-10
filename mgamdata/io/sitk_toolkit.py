@@ -332,3 +332,65 @@ def LoadMhaAnno(mha_root, patient, ori_spacing, out_spacing, resampled_size):
 
 
 
+def merge_masks(mha_paths: list[str], class_index_map: dict[str, int]) -> sitk.Image:
+    """
+    将所有类的掩码合并到一个掩码中并返回SimpleITK图像。
+    
+    :param mha_paths: 所有mha文件的路径列表
+    :param class_index_map: 类名到索引的映射字典
+    :return: 合并后的SimpleITK图像
+    """
+    # 初始化一个空的掩码图像
+    merged_mask = None
+    
+    # 遍历mha文件路径列表中的每个文件
+    for seg_file_path in mha_paths:
+        if os.path.isfile(seg_file_path):
+            class_name = os.path.basename(seg_file_path)[:-4]
+            class_index = class_index_map.get(class_name)
+            if class_index is None:
+                raise ValueError(f"Class name {class_name} not found in class_index_map: {seg_file_path}")
+            
+            # 读取掩码文件
+            mask = sitk.ReadImage(seg_file_path)
+            mask_array = sitk.GetArrayFromImage(mask)
+            # 初始化合并掩码
+            if merged_mask is None:
+                merged_mask = np.zeros_like(mask_array)
+            # 将当前类的掩码添加到合并掩码中
+            merged_mask[mask_array == 1] = class_index
+    
+    if merged_mask is None:
+        raise ValueError("No mask found in the provided paths")
+    
+    # 将合并后的掩码转换为SimpleITK图像
+    merged_mask_image = sitk.GetImageFromArray(merged_mask)
+    merged_mask_image.CopyInformation(mask)
+    
+    return merged_mask_image
+
+
+
+def split_image_label_pairs_to_2d(image: sitk.Image, label: sitk.Image):
+    """
+    将image和label在最高维度上进行切分，迭代式返回slice-pair。
+    
+    :param image: SimpleITK图像
+    :param label: SimpleITK图像
+    :yield: (image_slice, label_slice) 对
+    """
+    # 一致性检查
+    assert image.GetSize() == label.GetSize(), f"Image size {image.GetSize()} != Label size {label.GetSize()}"
+    assert image.GetSpacing() == label.GetSpacing(), f"Image spacing {image.GetSpacing()} != Label spacing {label.GetSpacing()}"
+    assert image.GetOrigin() == label.GetOrigin(), f"Image origin {image.GetOrigin()} != Label origin {label.GetOrigin()}"
+    # assert image.GetDirection() == label.GetDirection(), f"Image direction {image.GetDirection()} != Label direction {label.GetDirection()}"
+    
+    # 将SimpleITK图像转换为NumPy数组
+    image_array = sitk.GetArrayFromImage(image)
+    label_array = sitk.GetArrayFromImage(label)
+    
+    # Z轴切片
+    for i in range(len(image_array)):
+        image_slice:np.ndarray = image_array[i]
+        label_slice:np.ndarray = label_array[i]
+        yield image_slice, label_slice
