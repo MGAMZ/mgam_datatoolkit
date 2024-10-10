@@ -56,6 +56,8 @@ def generate_task_args(source_dir:str, target_dir:str, metainfo:pd.DataFrame):
                 split = 'val'
             img_dir = os.path.join(target_dir, 'img_dir', split)
             ann_dir = os.path.join(target_dir, 'ann_dir', split)
+            os.makedirs(img_dir, exist_ok=True)
+            os.makedirs(ann_dir, exist_ok=True)
             
             one_task = (case, source_dir, img_dir, ann_dir)
             task_args.append(one_task)
