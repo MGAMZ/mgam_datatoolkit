@@ -44,7 +44,7 @@ class auto_runner:
         parser.add_argument("--local-rank",         type=int,   default=0,          help="节点数量")
         parser.add_argument("--models",             type=str,   default=SUPPORTED_MODELS,   help="选择实验",    nargs="+",)
         parser.add_argument("--work-dir-root",      type=str,   default=MM_WORK_DIR_ROOT,   help="存储实验结果的根目录")
-        parser.add_argument("--test-work-dir-root",      type=str,   default=MM_TEST_DIR_ROOT,       help="测试时的工作目录")
+        parser.add_argument("--test-work-dir-root", type=str,   default=MM_TEST_DIR_ROOT,   help="测试时的工作目录")
         parser.add_argument("--config-root",        type=str,   default=MM_CONFIG_ROOT, help="存储配置文件的根目录")
         parser.add_argument('--cfg-options',        nargs='+',  action=DictAction)
         parser.add_argument("--test-draw-interval", type=int,   default=None,       help="测试时可视化样本的间距")

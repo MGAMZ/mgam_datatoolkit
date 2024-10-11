@@ -203,7 +203,7 @@ def parser_args():
     parser = argparse.ArgumentParser('evaluate from mha files.')
     parser.add_argument('pred_root', type=str, help='预测文件夹')
     parser.add_argument('--whole-series', action='store_true', default=False, 
-                        help='仅计算L3节段指标')
+                        help='计算全Z轴，不裁剪到L3区域')
     parser.add_argument('--invert', action='store_true', default=False, 
                         help='在评估时将其中一者颠倒评估。这是为了避免Z轴排序不一致导致的指标错误。')
     parser.add_argument('--mp', action='store_true', default=False)

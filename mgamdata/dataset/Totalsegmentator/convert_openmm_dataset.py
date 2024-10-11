@@ -39,8 +39,8 @@ def process_case(args):
         for i, (img, ann) in enumerate(fetcher):
             img_path = os.path.join(img_dir, f"{case}_{i:03d}.tiff")
             ann_path = os.path.join(ann_dir, f"{case}_{i:03d}.tiff")
-            cv2.imwrite(img_path, img.astype(np.float32), [cv2.IMWRITE_TIFF_COMPRESSION, 5])
-            cv2.imwrite(ann_path, ann.astype(np.uint8), [cv2.IMWRITE_TIFF_COMPRESSION, 5])
+            cv2.imwrite(img_path, img.astype(np.float32), [cv2.IMWRITE_TIFF_COMPRESSION, cv2.IMWRITE_TIFF_COMPRESSION_LZW])
+            cv2.imwrite(ann_path, ann.astype(np.uint8), [cv2.IMWRITE_TIFF_COMPRESSION, cv2.IMWRITE_TIFF_COMPRESSION_LZW])
 
     except Exception as e:
         raise RuntimeError(f"Failed to process case {case}: {e}")
@@ -51,9 +51,7 @@ def generate_task_args(source_dir:str, target_dir:str, metainfo:pd.DataFrame):
     task_args = []
     for case in os.listdir(source_dir):
         if os.path.isdir(os.path.join(source_dir, case)):
-            split:str = metainfo[case]['split']
-            if split=='test':
-                split = 'val'
+            split:str = metainfo.loc[case]['split']
             img_dir = os.path.join(target_dir, 'img_dir', split)
             ann_dir = os.path.join(target_dir, 'ann_dir', split)
             os.makedirs(img_dir, exist_ok=True)
@@ -70,12 +68,10 @@ def main(source_dir, target_dir, use_multiprocessing):
     task_args = generate_task_args(source_dir, target_dir, metainfo)
     
     if use_multiprocessing:
-        with multiprocessing.Pool(multiprocessing.cpu_count()) as pool:
+        with multiprocessing.Pool(24) as pool:
+            fetcher = pool.imap_unordered(process_case, task_args)
             for _ in tqdm(
-                    iterable=pool.imap_unordered(
-                        func=process_case,
-                        iterable=task_args,
-                        chunksize=16),
+                    iterable=fetcher,
                     total=len(task_args),
                     desc="Processing cases",
                     dynamic_ncols=True,

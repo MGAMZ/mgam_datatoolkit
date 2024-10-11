@@ -243,7 +243,7 @@ def LoadDcmAsSitkImage_JianYingOrder(dcm_case_path, spacing
     
     dcms = []
     dcm_paths = glob(osp.join(dcm_case_path, '*.dcm'))
-    
+
     for dcm_path in dcm_paths:
         ds = pydicom.dcmread(dcm_path)
         if (0x20, 0x32) not in ds: # (0020, 0032) Image Position (Patient)

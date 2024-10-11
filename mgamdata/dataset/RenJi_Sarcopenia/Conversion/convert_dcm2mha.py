@@ -10,9 +10,7 @@ from tqdm import tqdm
 import SimpleITK as sitk
 
 from mgamdata.io.sitk_toolkit import (
-    LoadDcmAsSitkImage, LoadDcmAsSitkImage, 
-    sitk_resample_to_spacing_v2,
-    sitk_resample_to_size)
+    LoadDcmAsSitkImage, sitk_resample_to_spacing_v2, sitk_resample_to_size)
 
 
 
@@ -55,6 +53,8 @@ def parse_args():
                         help='可以在转换时就对mha进行一次重采样，依据spacing')
     parser.add_argument('--size', type=str, default=None, 
                         help='可以在转换时就对mha进行一次重采样，依据size')
+    parser.add_argument('--mp', action='store_true', 
+                        help='使用多进程加速转换')
     return parser.parse_args()
 
 
@@ -66,23 +66,32 @@ if __name__ == '__main__':
     if confirm != '':
         exit(0)
     
-    with Pool(32) as p:
-        failed = []
-        results = []
-        os.makedirs(args.dest_mha_root, exist_ok=True)
-        patient_names = [folder 
-                         for folder in os.listdir(args.src_dcm_root) 
-                         if osp.isdir(osp.join(args.src_dcm_root, folder))]
-        
-        for patient_name in patient_names:
+    failed = []
+    results = []
+    os.makedirs(args.dest_mha_root, exist_ok=True)
+    patient_names = [folder 
+                    for folder in os.listdir(args.src_dcm_root) 
+                    if osp.isdir(osp.join(args.src_dcm_root, folder))]
+    
+    if args.mp is True:
+        with Pool(32) as p:
+            for patient_name in patient_names:
+                src_folder = osp.join(args.src_dcm_root, patient_name)
+                dst_path = osp.join(args.dest_mha_root, osp.basename(src_folder)+'.mha')
+                new_task = p.apply_async(convert_one_case, 
+                                        args=(args.sort_mode, src_folder, dst_path, args.spacing, args.size))
+                results.append(new_task)
+            
+            for result in tqdm(results, desc='Converting', dynamic_ncols=True):
+                result = result.get()
+                if result is not None:
+                    failed.append(result)
+
+    else:
+        for patient_name in tqdm(patient_names, desc='Converting', dynamic_ncols=True):
             src_folder = osp.join(args.src_dcm_root, patient_name)
             dst_path = osp.join(args.dest_mha_root, osp.basename(src_folder)+'.mha')
-            new_task = p.apply_async(convert_one_case, 
-                                     args=(args.sort_mode, src_folder, dst_path, args.spacing, args.size))
-            results.append(new_task)
-        
-        for result in tqdm(results, desc='Converting', dynamic_ncols=True):
-            result = result.get()
+            result = convert_one_case(args.sort_mode, src_folder, dst_path, args.spacing, args.size)
             if result is not None:
                 failed.append(result)
     
