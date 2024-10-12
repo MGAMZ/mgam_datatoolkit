@@ -17,7 +17,6 @@ readme = "README.md"
 license = {file = "LICENSE"}
 dependencies = [
   "monai",
-  "mmcv",
   "openpyxl",
   "pandas",
   "scikit-image",
