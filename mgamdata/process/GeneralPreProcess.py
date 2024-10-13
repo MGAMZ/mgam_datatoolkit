@@ -188,3 +188,24 @@ class RandomRoll(BaseTransform):
             results = self._roll(results, gap, axis)
         
         return results
+
+
+
+class InstanceNorm(BaseTransform):
+    '''
+    Required Keys:
+
+    - img
+
+    Modified Keys:
+
+    - img
+    '''
+    def __init__(self, eps:float=1e-3) -> None:
+        super().__init__()
+        self.eps = eps
+    
+    def transform(self, results):
+        results['img'] = (results['img'] - results['img'].mean())
+        results['img'] = results['img'] / (results['img'].std() + self.eps)
+        return results

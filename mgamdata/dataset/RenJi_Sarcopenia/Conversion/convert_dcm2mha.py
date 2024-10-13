@@ -100,4 +100,4 @@ if __name__ == '__main__':
                   open(osp.join(args.dest_mha_root, 'failed.json'), 'w'), 
                   indent=4, 
                   ensure_ascii=False)
-    
+

@@ -36,4 +36,23 @@ def InjectVisualize(img, mask):
     fig.savefig(f'./InjectVisualize/visualize_{time()}.png')
 
 
-
+# for debug
+def InjectVisualize_2D(img, mask):
+    import matplotlib.pyplot as plt
+    if isinstance(img, torch.Tensor):
+        img = img.cpu().detach().numpy() # [B, H, W]
+    if isinstance(mask, torch.Tensor):
+        mask = mask.cpu().detach().numpy() # [B, H, W]
+    if img.ndim == 2:
+        img = img[np.newaxis, ...].copy()
+        mask = mask[np.newaxis, ...].copy()
+    
+    assert isinstance(img, np.ndarray) and isinstance(mask, np.ndarray),\
+        "img and mask should be numpy.ndarray, but got {} and {}".format(type(img), type(mask))
+    mask[mask == 1] = 255
+    
+    fig, ax = plt.subplots(1, 2)
+    ax[0].imshow(img[0], cmap='gray')
+    ax[1].imshow(mask[0], cmap='gray')
+    os.makedirs('./InjectVisualize', exist_ok=True)
+    fig.savefig(f'./InjectVisualize/visualize_{time()}.png')
