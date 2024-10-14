@@ -1,5 +1,4 @@
 import pdb
-from typing import Iterable, List, Dict
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
@@ -7,6 +6,8 @@ from torch.utils.checkpoint import checkpoint
 
 from mmengine.model import BaseModule
 from mmseg.models.decode_heads.decode_head import BaseDecodeHead
+
+
 
 
 class MedNeXtBlock(nn.Module):
@@ -107,6 +108,7 @@ class MedNeXtBlock(nn.Module):
         return x1
 
 
+
 class MedNeXtDownBlock(MedNeXtBlock):
 
     def __init__(self, in_channels, out_channels, exp_r=4, kernel_size=7, 
@@ -147,6 +149,7 @@ class MedNeXtDownBlock(MedNeXtBlock):
             x1 = x1 + res
 
         return x1
+
 
 
 class MedNeXtUpBlock(MedNeXtBlock):
@@ -203,6 +206,7 @@ class MedNeXtUpBlock(MedNeXtBlock):
         return x1
 
 
+
 class OutBlock(nn.Module):
 
     def __init__(self, in_channels, n_classes, dim):
@@ -216,6 +220,7 @@ class OutBlock(nn.Module):
     
     def forward(self, x, dummy_tensor=None): 
         return self.conv_out(x)
+
 
 
 class LayerNorm(nn.Module):
@@ -245,20 +250,21 @@ class LayerNorm(nn.Module):
             return x
 
 
+
 class MedNeXt(nn.Module):
 
     def __init__(self, 
         in_channels: int, 
         n_channels: int,
         n_classes: int, 
-        exp_r: int = 4,                            # Expansion ratio as in Swin Transformers
+        exp_r: int|list[int] = 4,                            # Expansion ratio as in Swin Transformers
         kernel_size: int = 7,                      # Ofcourse can test kernel_size
-        enc_kernel_size: int = None,
-        dec_kernel_size: int = None,
+        enc_kernel_size: int|None = None,
+        dec_kernel_size: int|None = None,
         deep_supervision: bool = False,             # Can be used to test deep supervision
         do_res: bool = False,                       # Can be used to individually test residual connection
         do_res_up_down: bool = False,             # Additional 'res' connection on up and down convs
-        checkpoint_style: bool = None,            # Either inside block or outside block
+        checkpoint_style: bool|None = None,            # Either inside block or outside block
         block_counts: list = [2,2,2,2,2,2,2,2,2], # Can be used to test staging ratio: 
                                             # [3,3,9,3] in Swin as opposed to [2,2,2,2,2] in nnUNet
         norm_type = 'group',
@@ -286,7 +292,7 @@ class MedNeXt(nn.Module):
             conv = nn.Conv3d
             
         self.stem = conv(in_channels, n_channels, kernel_size=1)
-        if type(exp_r) == int:
+        if isinstance(exp_r, int):
             exp_r = [exp_r for i in range(len(block_counts))]
         
         self.enc_block_0 = nn.Sequential(*[
@@ -629,8 +635,8 @@ class MM_MedNext_Encoder(BaseModule):
         embed_dims: int,
         exp_r = 4,                            # Expansion ratio as in Swin Transformers
         kernel_size: int = 7,                      # Ofcourse can test kernel_size
-        enc_kernel_size: int = None,
-        dec_kernel_size: int = None,
+        enc_kernel_size: int|None = None,
+        dec_kernel_size: int|None = None,
         deep_supervision: bool = False,             # Can be used to test deep supervision
         do_res: bool = False,                       # Can be used to individually test residual connection
         do_res_up_down: bool = False,             # Additional 'res' connection on up and down convs
@@ -664,7 +670,7 @@ class MM_MedNext_Encoder(BaseModule):
         if type(exp_r) == int:
             exp_r = [exp_r] * len(block_counts)
         else:
-            assert isinstance(exp_r, List)
+            assert isinstance(exp_r, list)
         
         self.enc_block_0 = nn.Sequential(*[
                 MedNeXtBlock(
@@ -830,7 +836,7 @@ class MM_MedNext_Decoder_Vallina(BaseDecodeHead):
         if type(exp_r) == int:
             exp_r = [exp_r] * len(block_counts)
         else:
-            assert isinstance(exp_r, List)
+            assert isinstance(exp_r, list)
         
         self.up_3 = MedNeXtUpBlock(
             in_channels=16*embed_dims,
@@ -963,7 +969,6 @@ class MM_MedNext_Decoder_Vallina(BaseDecodeHead):
 
 
 
-
 class MM_MedNext_Decoder(BaseModule):
     def __init__(self,
         embed_dims: int,
@@ -985,7 +990,7 @@ class MM_MedNext_Decoder(BaseModule):
         if type(exp_r) == int:
             exp_r = [exp_r] * len(block_counts)
         else:
-            assert isinstance(exp_r, List)
+            assert isinstance(exp_r, list)
         
         self.checkpoint = lambda f,x: checkpoint(f,x,use_reentrant=False) if use_checkpoint else lambda f,x: x
         
@@ -1123,3 +1128,153 @@ class MM_MedNext_Decoder(BaseModule):
         x = self.cls_seg(x)
         return x
 
+
+
+class MM_MedNext_Decoder_Classification(BaseModule):
+    def __init__(self, 
+                 embed_dim, 
+                 num_classes, 
+                 threshold:int|list[int],
+                 *args, **kwargs):
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.num_classes = num_classes
+        if isinstance(threshold, int):
+            threshold = [threshold for _ in range(5)]
+        self.threshold = torch.tensor(threshold)[None]
+        self.init_cls_block(*args, **kwargs)
+
+
+    def init_cls_block(self, 
+                       block_counts=[2,2,2,2],
+                       dec_kernel_size=3,
+                       do_res=True,
+                       norm_type='group',
+                       exp_r=4,
+                       dim='2d',
+                       grn=False):
+        if type(exp_r) == int:
+            exp_r = [exp_r for i in range(len(block_counts))]
+        else: 
+            exp_r = self.exp_r
+        n_channels = self.embed_dim
+        n_classes = self.num_classes
+
+        self.dec_block_3 = nn.Sequential(*[
+            MedNeXtBlock(
+                in_channels=n_channels*8,
+                out_channels=n_channels*8,
+                exp_r=exp_r[0],
+                kernel_size=dec_kernel_size,
+                do_res=do_res,
+                norm_type=norm_type,
+                dim=dim,
+                grn=grn
+                )
+            for i in range(block_counts[0])]
+        )
+
+        self.dec_block_2 = nn.Sequential(*[
+            MedNeXtBlock(
+                in_channels=n_channels*4,
+                out_channels=n_channels*4,
+                exp_r=exp_r[1],
+                kernel_size=dec_kernel_size,
+                do_res=do_res,
+                norm_type=norm_type,
+                dim=dim,
+                grn=grn
+                )
+            for i in range(block_counts[1])]
+        )
+
+        self.dec_block_1 = nn.Sequential(*[
+            MedNeXtBlock(
+                in_channels=n_channels*2,
+                out_channels=n_channels*2,
+                exp_r=exp_r[2],
+                kernel_size=dec_kernel_size,
+                do_res=do_res,
+                norm_type=norm_type,
+                dim=dim,
+                grn=grn
+                )
+            for i in range(block_counts[2])]
+        )
+
+        self.dec_block_0 = nn.Sequential(*[
+            MedNeXtBlock(
+                in_channels=n_channels,
+                out_channels=n_channels,
+                exp_r=exp_r[3],
+                kernel_size=dec_kernel_size,
+                do_res=do_res,
+                norm_type=norm_type,
+                dim=dim,
+                grn=grn
+                )
+            for i in range(block_counts[3])]
+        )
+
+        self.out_0 = OutBlock(in_channels=n_channels, n_classes=n_classes, dim=dim)
+        self.out_1 = OutBlock(in_channels=n_channels*2, n_classes=n_classes, dim=dim)
+        self.out_2 = OutBlock(in_channels=n_channels*4, n_classes=n_classes, dim=dim)
+        self.out_3 = OutBlock(in_channels=n_channels*8, n_classes=n_classes, dim=dim)
+        self.out_4 = OutBlock(in_channels=n_channels*16, n_classes=n_classes, dim=dim)
+
+        # Used to fix PyTorch checkpointing bug
+        self.layer_weight = nn.Parameter(torch.ones(5), requires_grad=True)  
+        self.block_counts = block_counts
+
+
+    def accuracy(self, preds:torch.Tensor, gts:torch.Tensor):
+        # shape: [B, Classes]
+        binary_cls = (preds > self.threshold.to(preds.device)).to(torch.uint8)
+        correct_count = torch.sum((binary_cls == gts) & (gts != torch.nan))
+        all_count = torch.sum(gts != -1)
+        return correct_count / all_count
+
+
+    def forward(self, inputs:list[torch.Tensor]):
+        (x_res_0, x_res_1, x_res_2, x_res_3, x) = inputs
+        x_cls_0  = F.adaptive_avg_pool2d(self.out_0((self.dec_block_0(x_res_0))), (1,1)).squeeze() # [B, class]
+        x_cls_1  = F.adaptive_avg_pool2d(self.out_1((self.dec_block_1(x_res_1))), (1,1)).squeeze()
+        x_cls_2  = F.adaptive_avg_pool2d(self.out_2((self.dec_block_2(x_res_2))), (1,1)).squeeze()
+        x_cls_3  = F.adaptive_avg_pool2d(self.out_3((self.dec_block_3(x_res_3))), (1,1)).squeeze()
+        x_bottom = F.adaptive_avg_pool2d(self.out_4((x)), (1,1)).squeeze()
+
+        cls_all = torch.stack([x_cls_0, x_cls_1, x_cls_2, x_cls_3, x_bottom], dim=1) # [B, 5, class]
+        weighted_cls_result = torch.sum(cls_all * F.softmax(self.layer_weight, dim=0), dim=1)
+        return weighted_cls_result # [B, class]
+    
+    
+    def loss(self,
+             inputs: list[torch.Tensor],
+             batch_data_samples: list,
+             train_cfg) -> dict:
+        """Forward function for training.
+
+        Args:
+            inputs (Tuple[Tensor]): List of multi-level img features.
+            batch_data_samples (list[:obj:`SegDataSample`]): The seg
+                data samples. It usually includes information such
+                as `img_metas` or `gt_semantic_seg`.
+            train_cfg (dict): The training config.
+
+        Returns:
+            dict[str, Tensor]: a dictionary of loss components
+        """
+        cls_logits = self.forward(inputs)
+        # cls_gts: [B, class]
+        
+        cls_gts = torch.stack(
+            [sample.cls_label for sample in batch_data_samples]
+        ).to(device=cls_logits.device)
+        valid_labels = cls_gts != -1
+        
+        cls_mse = F.mse_loss(cls_logits, cls_gts) * valid_labels
+        cls_acc = self.accuracy(cls_logits, cls_gts)
+        return {
+            'loss_cls_mse': cls_mse,
+            'loss_cls_acc': cls_acc,
+        }
