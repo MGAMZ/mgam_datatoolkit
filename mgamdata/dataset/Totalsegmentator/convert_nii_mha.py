@@ -6,6 +6,9 @@ from multiprocessing import Pool, cpu_count
 from tqdm import tqdm
 import json
 
+
+
+
 def convert_nii_file(args):
     nii_file_path, save_root, data_root = args
     try:
@@ -26,6 +29,8 @@ def convert_nii_file(args):
     except Exception as e:
         return {'file': nii_file_path, 'error': str(e)}  # 失败时返回错误信息
 
+
+
 def convert_folder(data_root, save_root, use_multiprocessing):
     # 收集所有的 nii.gz 文件路径
     nii_files = []
@@ -44,12 +49,24 @@ def convert_folder(data_root, save_root, use_multiprocessing):
     if use_multiprocessing:
         # 使用多进程处理
         with Pool(cpu_count()) as pool:
-            for result in tqdm(pool.imap_unordered(convert_nii_file, [(nii_file, save_root, data_root) for nii_file in nii_files]), total=len(nii_files)):
+            for result in tqdm(
+                iterable=pool.imap_unordered(
+                    convert_nii_file,
+                    [(nii_file, save_root, data_root) for nii_file in nii_files]),
+                total=len(nii_files),
+                desc="Converting files",
+                dynamic_ncols=True):
+                
                 if result:
                     failed_files.append(result)
+    
     else:
         # 单进程处理
-        for nii_file in tqdm(nii_files, desc="Converting files"):
+        for nii_file in tqdm(
+            iterable=nii_files,
+            desc="Converting files",
+            dynamic_ncols=True):
+            
             result = convert_nii_file((nii_file, save_root, data_root))
             if result:
                 failed_files.append(result)
@@ -58,6 +75,8 @@ def convert_folder(data_root, save_root, use_multiprocessing):
     if failed_files:
         with open(os.path.join(save_root, 'failed.json'), 'w') as f:
             json.dump(failed_files, f, indent=4)
+
+
 
 def main():
     parser = argparse.ArgumentParser(description="Convert NIfTI (.nii.gz) files to MetaImage (.mha) format.")
@@ -68,6 +87,9 @@ def main():
     args = parser.parse_args()
     
     convert_folder(args.data_root, args.save_root, args.mp)
+
+
+
 
 if __name__ == "__main__":
     main()
