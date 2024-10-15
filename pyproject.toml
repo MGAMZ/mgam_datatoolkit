@@ -32,6 +32,7 @@ dependencies = [
   "pyyaml",
   "future",
   "tensorboard",
+  "nibabel",
 ]
 
 [project.scripts]

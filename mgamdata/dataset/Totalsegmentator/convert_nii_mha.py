@@ -1,32 +1,42 @@
 import os
 import argparse
 import shutil
-import SimpleITK as sitk
+import json
+import pdb
 from multiprocessing import Pool, cpu_count
 from tqdm import tqdm
-import json
 
+import SimpleITK as sitk
+from monai.data.image_reader import NibabelReader
 
 
 
 def convert_nii_file(args):
     nii_file_path, save_root, data_root = args
     try:
-        # 读取 nii.gz 文件
-        image = sitk.ReadImage(nii_file_path)
-        
         # 构建保存路径，保持原有的文件夹结构
         relative_path = os.path.relpath(os.path.dirname(nii_file_path), data_root)
         save_dir = os.path.join(save_root, relative_path)
         os.makedirs(save_dir, exist_ok=True)
-        
-        # 构建保存的 mha 文件路径
         mha_file_path = os.path.join(save_dir, os.path.basename(nii_file_path).replace('.nii.gz', '.mha'))
+        if os.path.exists(mha_file_path):
+            return None
         
+        # 读取 nii.gz 文件
+        try:
+            image = sitk.ReadImage(nii_file_path)
+        except:
+            monai_nii_reader = NibabelReader()
+            nii_image = monai_nii_reader.read(nii_file_path)
+            image, meta_dict = monai_nii_reader.get_data(nii_image)
+            pdb.set_trace()
+            
         # 保存为 mha 文件
         sitk.WriteImage(image, mha_file_path, useCompression=True)
         return None  # 成功时返回 None
+    
     except Exception as e:
+        raise e
         return {'file': nii_file_path, 'error': str(e)}  # 失败时返回错误信息
 
 
