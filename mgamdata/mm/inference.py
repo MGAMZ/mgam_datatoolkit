@@ -57,10 +57,10 @@ class Inferencer_2D:
                                   dynamic_ncols=True,
                                   leave=False,
                                   mininterval=1):
-            result = self.model.inference(array[None], [sample])
+            result:torch.Tensor = self.model.inference(array[None], [sample])
             results.append(result)
 
-        pred = torch.cat(results, axis=0).transpose(0,1) # [Class, D, H, W]
+        pred = torch.cat(results, dim=0).transpose(0,1) # [Class, D, H, W]
         return pred
 
 
@@ -68,7 +68,7 @@ class Inferencer_2D:
         image_array = sitk.GetArrayFromImage(itk_image) # [D, H, W]
         pred = self.Inference_FromNDArray(image_array) # [Class, D, H, W]
         # 后处理
-        pred = pred.argmax(axis=0).to(dtype=torch.uint8, device='cpu').numpy() # [D, H, W]
+        pred = pred.argmax(dim=0).to(dtype=torch.uint8, device='cpu').numpy() # [D, H, W]
         itk_pred = sitk.GetImageFromArray(pred)
         itk_pred.CopyInformation(itk_image)
         return itk_image, itk_pred
