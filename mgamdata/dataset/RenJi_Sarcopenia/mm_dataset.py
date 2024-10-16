@@ -18,7 +18,7 @@ from mmengine.runner import Runner
 from mmseg.datasets.basesegdataset import BaseSegDataset
 from mmseg.engine.hooks import SegVisualizationHook
 
-from ..dataset.RenJi_Sarcopenia import (
+from . import (
     CLASS_MAP_ABBR, LABEL_COLOR_DICT,
     HUANGSHAN_HOSPITAL_SERIES_UIDS,
     RENJI_HOSPITAL_DUPLICATED_SERIES_UIDS,

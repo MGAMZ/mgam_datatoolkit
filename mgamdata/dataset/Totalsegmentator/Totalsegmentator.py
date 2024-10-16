@@ -1,7 +1,7 @@
 from mmseg.datasets.basesegdataset import BaseSegDataset
 from mmseg.registry import DATASETS
 
-from ..dataset.Totalsegmentator import CLASS_INDEX_MAP
+from . import CLASS_INDEX_MAP
 
 
 
