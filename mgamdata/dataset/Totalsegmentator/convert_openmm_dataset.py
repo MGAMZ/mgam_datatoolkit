@@ -89,4 +89,4 @@ if __name__ == "__main__":
     
     split_slices(args.source_dir, args.target_dir, args.mp)
     # generate indexing json file
-    TotalsegmentatorIndexer(DATA_ROOT)
+    TotalsegmentatorIndexer(os.path.join(args.target_dir))
