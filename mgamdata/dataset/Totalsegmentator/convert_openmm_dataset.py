@@ -8,7 +8,8 @@ import pandas as pd
 import numpy as np
 import SimpleITK as sitk
 
-from mgamdata.dataset.Totalsegmentator import META_CSV_PATH
+from mgamdata.dataset.Totalsegmentator import META_CSV_PATH, DATA_ROOT
+from mgamdata.dataset.Totalsegmentator.mm_dataset import TotalsegmentatorIndexer
 from mgamdata.io.sitk_toolkit import split_image_label_pairs_to_2d
 
 
@@ -57,7 +58,7 @@ def generate_task_args(source_dir:str, target_dir:str, metainfo:pd.DataFrame):
     return task_args
 
 
-def main(source_dir, target_dir, use_multiprocessing):
+def split_slices(source_dir, target_dir, use_multiprocessing):
     metainfo = pd.read_csv(META_CSV_PATH, index_col='image_id')
     task_args = generate_task_args(source_dir, target_dir, metainfo)
     
@@ -86,4 +87,6 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
     
-    main(args.source_dir, args.target_dir, args.mp)
+    split_slices(args.source_dir, args.target_dir, args.mp)
+    # generate indexing json file
+    TotalsegmentatorIndexer(DATA_ROOT)

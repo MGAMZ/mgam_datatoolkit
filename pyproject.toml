@@ -33,6 +33,7 @@ dependencies = [
   "future",
   "tensorboard",
   "nibabel",
+  "orjson",
 ]
 
 [project.scripts]
