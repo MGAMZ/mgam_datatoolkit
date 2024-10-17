@@ -1,6 +1,7 @@
 import os
 import argparse
 import multiprocessing
+import pdb
 from tqdm import tqdm
 
 import cv2
@@ -21,8 +22,8 @@ def process_case(args):
         case_path = os.path.join(source_dir, case)
         ct_path = os.path.join(case_path, 'ct.mha')
         segmentation_path = os.path.join(case_path, 'segmentations.mha')
-        if not os.path.exists(ct_path):
-            return
+        # if not os.path.exists(ct_path):
+        #     return
         
         # 读取数据
         ct_itk_image = sitk.ReadImage(ct_path)
@@ -36,7 +37,7 @@ def process_case(args):
             ann_path = os.path.join(target_ann_dir, case, f"{i:03d}.tiff")
             os.makedirs(os.path.dirname(img_path), exist_ok=True)
             os.makedirs(os.path.dirname(ann_path), exist_ok=True)
-            cv2.imwrite(img_path, img.astype(np.float32), [cv2.IMWRITE_TIFF_COMPRESSION, cv2.IMWRITE_TIFF_COMPRESSION_LZW])
+            cv2.imwrite(img_path, img.astype(np.int16), [cv2.IMWRITE_TIFF_COMPRESSION, cv2.IMWRITE_TIFF_COMPRESSION_LZW])
             cv2.imwrite(ann_path, ann.astype(np.uint8), [cv2.IMWRITE_TIFF_COMPRESSION, cv2.IMWRITE_TIFF_COMPRESSION_LZW])
 
     except Exception as e:

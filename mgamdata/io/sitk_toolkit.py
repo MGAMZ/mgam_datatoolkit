@@ -59,7 +59,7 @@ def sitk_resample_to_spacing_v2(mha:sitk.Image,
     # 执行重采样
     mha_resampled = sitk.Resample(
         image1=mha,
-        size=resampled_size,
+        size=resampled_size,# type:ignore
         interpolator=sitk.sitkLinear if field == 'image' else sitk.sitkNearestNeighbor,
         outputSpacing=spacing,
         outputPixelType=sitk.sitkInt16 if field == 'image' else sitk.sitkUInt8,
@@ -221,7 +221,7 @@ def LoadDcmAsSitkImage_EngineeringOrder(dcm_case_path, spacing, sort_by_distance
     
     resampled_mha = sitk.Resample(
             image1=sitk_image,
-            size=resampled_size,
+            size=resampled_size,# type: ignore
             interpolator=sitk.sitkLinear,
             outputSpacing=spacing,
             outputPixelType=sitk.sitkInt16,
@@ -274,7 +274,7 @@ def LoadDcmAsSitkImage_JianYingOrder(dcm_case_path, spacing
         
         resampled_mha = sitk.Resample(
                 image1=sitk_image,
-                size=resampled_size,
+                size=resampled_size,# type: ignore
                 interpolator=sitk.sitkLinear,
                 outputSpacing=spacing,
                 outputPixelType=sitk.sitkInt16,
@@ -332,7 +332,10 @@ def LoadMhaAnno(mha_root, patient, ori_spacing, out_spacing, resampled_size):
 
 
 
-def merge_masks(mha_paths: list[str], class_index_map: dict[str, int]) -> sitk.Image:
+def merge_masks(mha_paths: list[str], 
+                class_index_map: dict[str, int],
+                dtype=np.uint8
+                ) -> sitk.Image:
     """
     将所有类的掩码合并到一个掩码中并返回SimpleITK图像。
     
@@ -364,7 +367,7 @@ def merge_masks(mha_paths: list[str], class_index_map: dict[str, int]) -> sitk.I
         raise ValueError("No mask found in the provided paths")
     
     # 将合并后的掩码转换为SimpleITK图像
-    merged_mask_image = sitk.GetImageFromArray(merged_mask)
+    merged_mask_image = sitk.GetImageFromArray(merged_mask.astype(dtype))
     merged_mask_image.CopyInformation(mask)
     
     return merged_mask_image
