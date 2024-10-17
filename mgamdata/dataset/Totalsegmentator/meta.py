@@ -1,7 +1,7 @@
 import os
 
 
-data_root = os.environ['Totalsegmentator_data_root']
+DATA_ROOT = os.environ['Totalsegmentator_data_root']
 
 
 CLASS_INDEX_MAP = {
@@ -126,6 +126,5 @@ CLASS_INDEX_MAP = {
 }
 
 
-
-META_CSV_PATH = os.path.join(data_root, 'meta_v2.csv')
+META_CSV_PATH = os.path.join(DATA_ROOT, 'meta_v2.csv')
 

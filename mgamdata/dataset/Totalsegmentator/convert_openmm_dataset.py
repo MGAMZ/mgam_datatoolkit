@@ -8,37 +8,33 @@ import pandas as pd
 import numpy as np
 import SimpleITK as sitk
 
-from mgamdata.dataset.Totalsegmentator import CLASS_INDEX_MAP, META_CSV_PATH
-from mgamdata.io.sitk_toolkit import merge_masks, split_image_label_pairs_to_2d
+from mgamdata.dataset.Totalsegmentator import META_CSV_PATH
+from mgamdata.io.sitk_toolkit import split_image_label_pairs_to_2d
 
 
 
 def process_case(args):
-    case, source_dir, img_dir, ann_dir = args
+    case, source_dir, target_img_dir, target_ann_dir = args
     """处理单个案例的文件复制"""
     try:
         case_path = os.path.join(source_dir, case)
         ct_path = os.path.join(case_path, 'ct.mha')
-        segmentation_path = os.path.join(case_path, 'segmentations')
+        segmentation_path = os.path.join(case_path, 'segmentations.mha')
         if not os.path.exists(ct_path):
             return
         
+        # 读取数据
         ct_itk_image = sitk.ReadImage(ct_path)
+        label_itk_image = sitk.ReadImage(segmentation_path)
         
-        # 融合独立的annotation
-        label_itk_image = merge_masks(
-            mha_paths=[os.path.join(segmentation_path, file) 
-                       for file in os.listdir(segmentation_path)
-                       if file.endswith('.mha')],
-            class_index_map=CLASS_INDEX_MAP
-        )
-        # 拆分成2D图像
-        fetcher = split_image_label_pairs_to_2d(ct_itk_image, label_itk_image)
-        
+        # 2D拆分
+        fetcher_2D_slices = split_image_label_pairs_to_2d(ct_itk_image, label_itk_image)
         # 保存为tiff
-        for i, (img, ann) in enumerate(fetcher):
-            img_path = os.path.join(img_dir, f"{case}_{i:03d}.tiff")
-            ann_path = os.path.join(ann_dir, f"{case}_{i:03d}.tiff")
+        for i, (img, ann) in enumerate(fetcher_2D_slices):
+            img_path = os.path.join(target_img_dir, case, f"{i:03d}.tiff")
+            ann_path = os.path.join(target_ann_dir, case, f"{i:03d}.tiff")
+            os.makedirs(os.path.dirname(img_path), exist_ok=True)
+            os.makedirs(os.path.dirname(ann_path), exist_ok=True)
             cv2.imwrite(img_path, img.astype(np.float32), [cv2.IMWRITE_TIFF_COMPRESSION, cv2.IMWRITE_TIFF_COMPRESSION_LZW])
             cv2.imwrite(ann_path, ann.astype(np.uint8), [cv2.IMWRITE_TIFF_COMPRESSION, cv2.IMWRITE_TIFF_COMPRESSION_LZW])
 
@@ -52,12 +48,10 @@ def generate_task_args(source_dir:str, target_dir:str, metainfo:pd.DataFrame):
     for case in os.listdir(source_dir):
         if os.path.isdir(os.path.join(source_dir, case)):
             split:str = metainfo.loc[case]['split']
-            img_dir = os.path.join(target_dir, 'img_dir', split)
-            ann_dir = os.path.join(target_dir, 'ann_dir', split)
-            os.makedirs(img_dir, exist_ok=True)
-            os.makedirs(ann_dir, exist_ok=True)
+            target_img_dir = os.path.join(target_dir, 'img_dir', split)
+            target_ann_dir = os.path.join(target_dir, 'ann_dir', split)
             
-            one_task = (case, source_dir, img_dir, ann_dir)
+            one_task = (case, source_dir, target_img_dir, target_ann_dir)
             task_args.append(one_task)
             
     return task_args
