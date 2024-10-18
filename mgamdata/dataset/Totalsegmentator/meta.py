@@ -3,6 +3,7 @@ import os
 
 DATA_ROOT = os.environ['Totalsegmentator_data_root']
 DATA_ROOT_SLICE2D_TIFF = os.path.join(DATA_ROOT, 'slice2D_tiff')
+META_CSV_PATH = os.path.join(DATA_ROOT, 'meta_v2.csv')
 
 CLASS_INDEX_MAP = {
     'background': 0,
@@ -125,7 +126,3 @@ CLASS_INDEX_MAP = {
     'vertebrae_T8': 117,
     'vertebrae_T9': 118,
 }
-
-
-META_CSV_PATH = os.path.join(DATA_ROOT, 'meta_v2.csv')
-

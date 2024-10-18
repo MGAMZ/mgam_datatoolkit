@@ -22,8 +22,6 @@ def process_case(args):
         case_path = os.path.join(source_dir, case)
         ct_path = os.path.join(case_path, 'ct.mha')
         segmentation_path = os.path.join(case_path, 'segmentations.mha')
-        # if not os.path.exists(ct_path):
-        #     return
         
         # 读取数据
         ct_itk_image = sitk.ReadImage(ct_path)
