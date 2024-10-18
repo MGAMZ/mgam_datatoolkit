@@ -20,6 +20,8 @@ def convert_one_case(args):
     output_image_mha_path = os.path.join(series_output_folder, 'ct.mha')
     output_anno_mha_path = os.path.join(series_output_folder, 'segmentations.mha')
     os.makedirs(series_output_folder, exist_ok=True)
+    if os.path.exists(output_image_mha_path) and os.path.exists(output_anno_mha_path):
+        return
     
     # 原始扫描转换为SimpleITK格式并保存
     input_image_mha = convert_nii_sitk(input_image_nii_path, dtype=np.int16) # type: ignore
@@ -49,9 +51,10 @@ def merge_one_case_segmentations(corresponding_itk_image:sitk.Image, case_path: 
 def convert_and_save_nii_to_mha(input_dir: str, output_dir: str, use_mp: bool):
     task_list = []
     for series_name in os.listdir(input_dir):
-        series_input_folder = os.path.join(input_dir, series_name)
-        series_output_folder = os.path.join(output_dir, series_name)
-        task_list.append((series_input_folder, series_output_folder))
+        if os.path.isdir(os.path.join(input_dir, series_name)):
+            series_input_folder = os.path.join(input_dir, series_name)
+            series_output_folder = os.path.join(output_dir, series_name)
+            task_list.append((series_input_folder, series_output_folder))
     
     if use_mp:
         with multiprocessing.Pool() as pool:

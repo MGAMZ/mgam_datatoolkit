@@ -47,7 +47,10 @@ def generate_task_args(source_dir:str, target_dir:str, metainfo:pd.DataFrame):
     task_args = []
     for case in os.listdir(source_dir):
         if os.path.isdir(os.path.join(source_dir, case)):
-            split:str = metainfo.loc[case]['split']
+            try:
+                split:str = metainfo.loc[case]['split']
+            except:
+                pdb.set_trace()
             target_img_dir = os.path.join(target_dir, 'img_dir', split)
             target_ann_dir = os.path.join(target_dir, 'ann_dir', split)
             
