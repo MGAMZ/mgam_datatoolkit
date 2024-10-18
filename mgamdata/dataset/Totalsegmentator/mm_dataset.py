@@ -1,12 +1,12 @@
 import os
 from os.path import join
+from tqdm import tqdm
 
 import orjson
 import numpy as np
 
 from mmengine.logging import print_log, MMLogger
 from mmengine.dataset import BaseDataset
-from tqdm import tqdm
 
 from . import CLASS_INDEX_MAP, DATA_ROOT_SLICE2D_TIFF
 
@@ -81,7 +81,8 @@ class TotalsegmentatorSegDataset(BaseDataset):
 
     def load_data_list(self):
         """
-        分割数据集的样本字典需要以下Key:
+        Sample Required Keys in mmseg:
+        
         - img_path: str, 图像路径
         - seg_map_path: str, 分割标签路径
         - label_map: str, 分割标签的类别映射，默认为空。它是矫正映射，如果map没有问题，则不需要矫正。

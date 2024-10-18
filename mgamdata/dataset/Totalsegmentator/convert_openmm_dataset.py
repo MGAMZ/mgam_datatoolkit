@@ -9,7 +9,7 @@ import pandas as pd
 import numpy as np
 import SimpleITK as sitk
 
-from mgamdata.dataset.Totalsegmentator import META_CSV_PATH, DATA_ROOT
+from mgamdata.dataset.Totalsegmentator import META_CSV_PATH
 from mgamdata.dataset.Totalsegmentator.mm_dataset import TotalsegmentatorIndexer
 from mgamdata.io.sitk_toolkit import split_image_label_pairs_to_2d
 
