@@ -97,7 +97,7 @@ class auto_runner:
 
     def experiment_queue(self):
         print("实验队列启动, 正在import依赖...")
-        from .experiment import experiment
+        from mgamdata.mm.experiment import experiment
         
         for exp in self.exp_names:
             exp = self.find_full_exp_name(exp)
