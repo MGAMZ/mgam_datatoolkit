@@ -3,7 +3,6 @@ from os.path import join
 from tqdm import tqdm
 
 import orjson
-import numpy as np
 
 from mmengine.logging import print_log, MMLogger
 from mmseg.datasets.basesegdataset import BaseSegDataset
@@ -61,17 +60,30 @@ class TotalsegmentatorIndexer:
 class TotalsegmentatorSegDataset(BaseSegDataset):
     METAINFO = dict(classes=list(CLASS_INDEX_MAP.keys()))
 
-    def __init__(self, split:str, subset:str|None=None, **kwargs) -> None:
+    def __init__(self,
+                 split:str,
+                 subset:str|None=None,
+                 debug:bool=False,
+                 **kwargs) -> None:
         self.split = split
         self.data_root = DATA_ROOT_SLICE2D_TIFF
         self.indexer = TotalsegmentatorIndexer(self.data_root)
+        self.debug = debug
+        
         if subset is not None:
-            new_classes = get_subset_and_rectify_map(subset)[0].keys()
+            new_classes = list(get_subset_and_rectify_map(subset)[0].keys())
         else:
-            new_classes = CLASS_INDEX_MAP
+            new_classes = self.METAINFO['classes']
+        
         super().__init__(data_root=self.data_root, 
                          metainfo={'classes':new_classes}, 
                          **kwargs)
+
+
+    def _update_palette(self) -> list[list[int]]:
+        '''确保background为RGB全零'''
+        new_palette = super()._update_palette()
+        return [[0,0,0]] + new_palette[1:]
 
 
     def load_data_list(self):
@@ -95,4 +107,9 @@ class TotalsegmentatorSegDataset(BaseSegDataset):
             ))
         print_log(f"Totalsegmentator dataset {self.split} split loaded {len(data_list)} samples.",
                   MMLogger.get_current_instance())
-        return sorted(data_list, key=lambda x: x['img_path'])
+        sorted_samples = sorted(data_list, key=lambda x: x['img_path'])
+        
+        if self.debug:
+            return sorted_samples[:16]
+        else:
+            return sorted_samples

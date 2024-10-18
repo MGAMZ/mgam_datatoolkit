@@ -6,8 +6,6 @@ import logging
 import json
 from functools import partial
 from numbers import Number
-from typing import Dict, Mapping, OrderedDict, List, Optional, Sequence, Union, Tuple
-from typing_extensions import deprecated
 
 import torch
 import cv2
@@ -16,6 +14,7 @@ import numpy as np
 from torch import Tensor
 from torch.distributed.fsdp.wrap import size_based_auto_wrap_policy
 
+from mmengine.dataset.sampler import DefaultSampler
 from mmengine.runner import Runner, IterBasedTrainLoop, FlexibleRunner
 from mmengine.runner.runner import ConfigType
 from mmengine.hooks import LoggerHook
@@ -35,7 +34,7 @@ def DynamicRunnerSelection(cfg: ConfigType) -> Runner:
     else:
         RunnerChoice = Runner
 
-    class mgam_Runner(RunnerChoice):
+    class mgam_Runner(RunnerChoice):    # type: ignore
         def __init__(self, **kwargs):
             self.custom_env(kwargs.get('env_cfg', {}))
             strategy = kwargs.get('cfg', {}).pop('strategy', None)
@@ -43,7 +42,7 @@ def DynamicRunnerSelection(cfg: ConfigType) -> Runner:
             if issubclass(self.__class__, FlexibleRunner):
                 auto_strategy = partial(
                     size_based_auto_wrap_policy, 
-                    min_num_params=1e7)
+                    min_num_params=int(1e7))
                 strategy.update(dict(model_wrapper=dict(auto_wrap_policy=auto_strategy)))
                 
                 kwargs['strategy'] = strategy
@@ -133,7 +132,7 @@ class IterBasedTrainLoop_SupportProfiler(IterBasedTrainLoop):
 class mgam_PerClassMetricLogger_OnTest(LoggerHook):
     def after_test_epoch(self,
                         runner,
-                        metrics:Dict
+                        metrics:dict
                         ) -> None:
         PerClassResult_FromIoUMetric = metrics.pop('Perf/PerClass')
         data_df = pd.DataFrame(PerClassResult_FromIoUMetric)    # [Class, metrics...]
@@ -155,13 +154,13 @@ class LoggerJSON(LoggerHook):
             return metrics.tolist()
         elif isinstance(metrics, Number):
             return metrics
-        elif isinstance(metrics, Dict):
+        elif isinstance(metrics, dict):
             for k in metrics.keys():
                 metrics[k] = LoggerJSON._itemize_metric_(metrics[k])
-        elif isinstance(metrics, List):
+        elif isinstance(metrics, list):
             for i in range(len(metrics)):
                 metrics[i] = LoggerJSON._itemize_metric_(metrics[i])
-        elif isinstance(metrics, Tuple):
+        elif isinstance(metrics, tuple):
             metrics = list(metrics)
             for i in range(len(metrics)):
                 metrics[i] = LoggerJSON._itemize_metric_(metrics[i])
@@ -169,7 +168,7 @@ class LoggerJSON(LoggerHook):
         return metrics
         
     
-    def after_test_epoch(self, runner, metrics:Dict) -> None:
+    def after_test_epoch(self, runner, metrics:dict) -> None:
         self._itemize_metric_(metrics)
         json_save_path = osp.join(
             runner.work_dir, 
@@ -186,8 +185,8 @@ class AmpPatchAccumulateOptimWarpper(AmpOptimWrapper):
     def update_params(  # type: ignore
             self,
             loss: torch.Tensor,
-            step_kwargs: Optional[Dict] = None,
-            zero_kwargs: Optional[Dict] = None,
+            step_kwargs: dict|None = None,
+            zero_kwargs: dict|None = None,
             should_update: bool = True) -> None:
         """Update parameters in :attr:`optimizer`.
 
@@ -248,3 +247,20 @@ class RemasteredFSDP(MMFullyShardedDataParallel):
         return self.module.test_step(*args, **kwargs)
 
 
+
+class RatioSampler(DefaultSampler):
+    """随机激活一定比例的样本"""
+    
+    def __init__(self, use_sample_ratio:float, **kwargs):
+        super().__init__(**kwargs)
+        self.use_sample_ratio = use_sample_ratio
+        print_log(f"RatioSampler used, original num of sample {super().__len__()} -> used {len(self)}")
+
+    def __iter__(self):
+        indices = np.array(list(super().__iter__()))
+        num_samples = int(len(indices) * self.use_sample_ratio)
+        sampled_indices = np.random.choice(indices, num_samples, replace=False)
+        return iter(sampled_indices.tolist())
+
+    def __len__(self):
+        return int(super().__len__() * self.use_sample_ratio)
