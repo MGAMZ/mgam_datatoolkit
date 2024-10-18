@@ -96,13 +96,3 @@ class TotalsegmentatorSegDataset(BaseSegDataset):
         print_log(f"Totalsegmentator dataset {self.split} split loaded {len(data_list)} samples.",
                   MMLogger.get_current_instance())
         return sorted(data_list, key=lambda x: x['img_path'])
-
-
-
-
-
-
-if __name__ == '__main__':
-    dataset = TotalsegmentatorSegDataset('train')
-    for sample in dataset.load_data_list():
-        print(sample)

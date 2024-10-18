@@ -5,6 +5,8 @@ DATA_ROOT = os.environ['Totalsegmentator_data_root']
 DATA_ROOT_SLICE2D_TIFF = os.path.join(DATA_ROOT, 'slice2D_tiff')
 META_CSV_PATH = os.path.join(DATA_ROOT, 'meta_v2.csv')
 
+
+
 CLASS_INDEX_MAP = {
     'background': 0,
     'adrenal_gland_left': 1,
