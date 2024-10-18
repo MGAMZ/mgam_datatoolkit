@@ -126,3 +126,57 @@ CLASS_INDEX_MAP = {
     'vertebrae_T8': 117,
     'vertebrae_T9': 118,
 }
+
+CLASS_SUBSET_MAP = {
+    'organ': [
+        'adrenal_gland_left',
+        'adrenal_gland_right',
+        'aorta',
+        'atrial_appendage_left',
+        'autochthon_left',
+        'autochthon_right',
+        'brachiocephalic_trunk',
+        'brachiocephalic_vein_left',
+        'brachiocephalic_vein_right',
+        'brain',
+        'colon',
+        'common_carotid_artery_left',
+        'common_carotid_artery_right',
+        'duodenum',
+        'esophagus',
+        'gallbladder',
+        'heart',
+        'inferior_vena_cava',
+        'kidney_cyst_left',
+        'kidney_cyst_right',
+        'kidney_left',
+        'kidney_right',
+        'liver',
+        'lung_lower_lobe_left',
+        'lung_lower_lobe_right',
+        'lung_middle_lobe_right',
+        'lung_upper_lobe_left',
+        'lung_upper_lobe_right',
+        'pancreas',
+        'portal_vein_and_splenic_vein',
+        'prostate',
+        'pulmonary_vein',
+        'small_bowel',
+        'spinal_cord',
+        'spleen',
+        'stomach',
+        'thyroid_gland',
+        'trachea',
+        'urinary_bladder'
+    ],
+}
+
+def get_subset_and_rectify_map(subset_name:str):
+    subset_classes = CLASS_SUBSET_MAP[subset_name]
+    subset_map = {name: i+1 for i, name in enumerate(subset_classes)}
+    subset_map.update({'background': 0})
+    
+    remap = [(original_index, subset_map[name])
+             for name, original_index in subset_map.items()]
+    
+    return subset_map, remap

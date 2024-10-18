@@ -9,7 +9,7 @@ from mmengine.logging import print_log, MMLogger
 from mmseg.datasets.basesegdataset import BaseSegDataset
 from tqdm import tqdm
 
-from . import CLASS_INDEX_MAP, DATA_ROOT_SLICE2D_TIFF
+from . import CLASS_INDEX_MAP, DATA_ROOT_SLICE2D_TIFF, get_subset_and_rectify_map
 
 
 
@@ -61,11 +61,17 @@ class TotalsegmentatorIndexer:
 class TotalsegmentatorSegDataset(BaseSegDataset):
     METAINFO = dict(classes=list(CLASS_INDEX_MAP.keys()))
 
-    def __init__(self, split:str, **kwargs) -> None:
+    def __init__(self, split:str, subset:str|None=None, **kwargs) -> None:
         self.split = split
         self.data_root = DATA_ROOT_SLICE2D_TIFF
         self.indexer = TotalsegmentatorIndexer(self.data_root)
-        super().__init__(data_root=self.data_root, **kwargs)
+        if subset is not None:
+            new_classes = get_subset_and_rectify_map(subset)[0].keys()
+        else:
+            new_classes = CLASS_INDEX_MAP
+        super().__init__(data_root=self.data_root, 
+                         metainfo={'classes':new_classes}, 
+                         **kwargs)
 
 
     def load_data_list(self):
@@ -90,6 +96,9 @@ class TotalsegmentatorSegDataset(BaseSegDataset):
         print_log(f"Totalsegmentator dataset {self.split} split loaded {len(data_list)} samples.",
                   MMLogger.get_current_instance())
         return sorted(data_list, key=lambda x: x['img_path'])
+
+
+
 
 
 
