@@ -5,7 +5,7 @@ import orjson
 import numpy as np
 
 from mmengine.logging import print_log, MMLogger
-from mmengine.dataset import BaseDataset
+from mmseg.datasets.basesegdataset import BaseSegDataset
 from tqdm import tqdm
 
 from . import CLASS_INDEX_MAP, DATA_ROOT_SLICE2D_TIFF
@@ -57,26 +57,14 @@ class TotalsegmentatorIndexer:
 
 
 
-class TotalsegmentatorSegDataset(BaseDataset):
+class TotalsegmentatorSegDataset(BaseSegDataset):
     METAINFO = dict(classes=list(CLASS_INDEX_MAP.keys()))
 
     def __init__(self, split:str, **kwargs) -> None:
         self.split = split
         self.data_root = DATA_ROOT_SLICE2D_TIFF
         self.indexer = TotalsegmentatorIndexer(self.data_root)
-        new_palette = self._gen_palette()
-        super().__init__(data_root=self.data_root, 
-                         metainfo=dict(palette=new_palette),
-                         **kwargs)
-    
-    def _gen_palette(self):
-        state = np.random.get_state()
-        np.random.seed(42)
-        # random palette
-        new_palette = np.random.randint(
-            0, 255, size=(len(self.METAINFO.get('classes', None)), 3)).tolist()
-        np.random.set_state(state)
-        return new_palette
+        super().__init__(data_root=self.data_root, **kwargs)
 
 
     def load_data_list(self):
