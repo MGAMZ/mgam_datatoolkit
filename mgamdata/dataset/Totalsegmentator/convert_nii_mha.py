@@ -1,7 +1,6 @@
 import os
 import argparse
 import multiprocessing
-from sympy import series
 from tqdm import tqdm
 
 import numpy as np
