@@ -70,8 +70,8 @@ class LoadFromMHA(BaseTransform):
             mha = sitk_resample_to_spacing_v2(mha, self.spacing, field)
         if self.resample_size is not None:
             mha = sitk_resample_to_size(mha, self.resample_size, field)
-        # mha.GetSize(): [H, W, D]
-        mha_array = sitk.GetArrayFromImage(mha) # [D, W, H]
+        # mha.GetSize(): [X, Y, Z]
+        mha_array = sitk.GetArrayFromImage(mha) # [Z, Y, X]
         return mha_array
 
 

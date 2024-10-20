@@ -2,6 +2,7 @@ import os
 
 
 DATA_ROOT = os.environ['Totalsegmentator_data_root']
+DATA_ROOT_3D_MHA = os.path.join(DATA_ROOT, 'original_mha')
 DATA_ROOT_SLICE2D_TIFF = os.path.join(DATA_ROOT, 'slice2D_tiff')
 META_CSV_PATH = os.path.join(DATA_ROOT, 'meta_v2.csv')
 
