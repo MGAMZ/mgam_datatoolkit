@@ -7,6 +7,8 @@ from torch.utils.checkpoint import checkpoint
 from mmengine.model import BaseModule
 from mmseg.models.decode_heads.decode_head import BaseDecodeHead
 
+from ..mm.mmseg_Dev3D import BaseDecodeHead_3D
+
 
 
 
@@ -1130,151 +1132,42 @@ class MM_MedNext_Decoder(BaseModule):
 
 
 
-class MM_MedNext_Decoder_Classification(BaseModule):
-    def __init__(self, 
-                 embed_dim, 
-                 num_classes, 
-                 threshold:int|list[int],
-                 *args, **kwargs):
-        super().__init__()
-        self.embed_dim = embed_dim
-        self.num_classes = num_classes
-        if isinstance(threshold, int):
-            threshold = [threshold for _ in range(5)]
-        self.threshold = torch.tensor(threshold)[None]
-        self.init_cls_block(*args, **kwargs)
-
-
-    def init_cls_block(self, 
-                       block_counts=[2,2,2,2],
-                       dec_kernel_size=3,
-                       do_res=True,
-                       norm_type='group',
-                       exp_r=4,
-                       dim='2d',
-                       grn=False):
-        if type(exp_r) == int:
-            exp_r = [exp_r for i in range(len(block_counts))]
-        else: 
-            exp_r = self.exp_r
-        n_channels = self.embed_dim
-        n_classes = self.num_classes
-
-        self.dec_block_3 = nn.Sequential(*[
-            MedNeXtBlock(
-                in_channels=n_channels*8,
-                out_channels=n_channels*8,
-                exp_r=exp_r[0],
-                kernel_size=dec_kernel_size,
-                do_res=do_res,
-                norm_type=norm_type,
-                dim=dim,
-                grn=grn
-                )
-            for i in range(block_counts[0])]
+class MM_MedNext_Decoder_3D(BaseDecodeHead_3D):
+    def __init__(self,
+                 embed_dims: int,
+                 num_classes: int,
+                 exp_r = 4,
+                 kernel_size: int = 3,
+                 block_counts: list = [2,2,2,2,2,2,2,2,2],
+                 use_checkpoint: bool = False,
+                 norm_type = 'group',
+                 grn = False,
+                 *args, **kwargs
+                ):
+        super().__init__(
+            in_channels=[embed_dims,
+                         embed_dims*2,
+                         embed_dims*4,
+                         embed_dims*8,
+                         embed_dims*16],
+            channels=embed_dims,
+            num_classes=num_classes,
+            input_transform='multiple_select',
+            in_index=[0,1,2,3,4],
+            *args, **kwargs
         )
-
-        self.dec_block_2 = nn.Sequential(*[
-            MedNeXtBlock(
-                in_channels=n_channels*4,
-                out_channels=n_channels*4,
-                exp_r=exp_r[1],
-                kernel_size=dec_kernel_size,
-                do_res=do_res,
-                norm_type=norm_type,
-                dim=dim,
-                grn=grn
-                )
-            for i in range(block_counts[1])]
-        )
-
-        self.dec_block_1 = nn.Sequential(*[
-            MedNeXtBlock(
-                in_channels=n_channels*2,
-                out_channels=n_channels*2,
-                exp_r=exp_r[2],
-                kernel_size=dec_kernel_size,
-                do_res=do_res,
-                norm_type=norm_type,
-                dim=dim,
-                grn=grn
-                )
-            for i in range(block_counts[2])]
-        )
-
-        self.dec_block_0 = nn.Sequential(*[
-            MedNeXtBlock(
-                in_channels=n_channels,
-                out_channels=n_channels,
-                exp_r=exp_r[3],
-                kernel_size=dec_kernel_size,
-                do_res=do_res,
-                norm_type=norm_type,
-                dim=dim,
-                grn=grn
-                )
-            for i in range(block_counts[3])]
-        )
-
-        self.out_0 = OutBlock(in_channels=n_channels, n_classes=n_classes, dim=dim)
-        self.out_1 = OutBlock(in_channels=n_channels*2, n_classes=n_classes, dim=dim)
-        self.out_2 = OutBlock(in_channels=n_channels*4, n_classes=n_classes, dim=dim)
-        self.out_3 = OutBlock(in_channels=n_channels*8, n_classes=n_classes, dim=dim)
-        self.out_4 = OutBlock(in_channels=n_channels*16, n_classes=n_classes, dim=dim)
-
-        # Used to fix PyTorch checkpointing bug
-        self.layer_weight = nn.Parameter(torch.ones(5), requires_grad=True)  
-        self.block_counts = block_counts
-
-
-    def accuracy(self, preds:torch.Tensor, gts:torch.Tensor):
-        # shape: [B, Classes]
-        binary_cls = (preds > self.threshold.to(preds.device)).to(torch.uint8)
-        correct_count = torch.sum((binary_cls == gts) & (gts != torch.nan))
-        all_count = torch.sum(gts != -1)
-        return correct_count / all_count
-
-
-    def forward(self, inputs:list[torch.Tensor]):
-        (x_res_0, x_res_1, x_res_2, x_res_3, x) = inputs
-        x_cls_0  = F.adaptive_avg_pool2d(self.out_0((self.dec_block_0(x_res_0))), (1,1)).squeeze() # [B, class]
-        x_cls_1  = F.adaptive_avg_pool2d(self.out_1((self.dec_block_1(x_res_1))), (1,1)).squeeze()
-        x_cls_2  = F.adaptive_avg_pool2d(self.out_2((self.dec_block_2(x_res_2))), (1,1)).squeeze()
-        x_cls_3  = F.adaptive_avg_pool2d(self.out_3((self.dec_block_3(x_res_3))), (1,1)).squeeze()
-        x_bottom = F.adaptive_avg_pool2d(self.out_4((x)), (1,1)).squeeze()
-
-        cls_all = torch.stack([x_cls_0, x_cls_1, x_cls_2, x_cls_3, x_bottom], dim=1) # [B, 5, class]
-        weighted_cls_result = torch.sum(cls_all * F.softmax(self.layer_weight, dim=0), dim=1)
-        return weighted_cls_result # [B, class]
-    
-    
-    def loss(self,
-             inputs: list[torch.Tensor],
-             batch_data_samples: list,
-             train_cfg) -> dict:
-        """Forward function for training.
-
-        Args:
-            inputs (Tuple[Tensor]): List of multi-level img features.
-            batch_data_samples (list[:obj:`SegDataSample`]): The seg
-                data samples. It usually includes information such
-                as `img_metas` or `gt_semantic_seg`.
-            train_cfg (dict): The training config.
-
-        Returns:
-            dict[str, Tensor]: a dictionary of loss components
-        """
-        cls_logits = self.forward(inputs)
-        # cls_gts: [B, class]
         
-        cls_gts = torch.stack(
-            [sample.cls_label for sample in batch_data_samples]
-        ).to(device=cls_logits.device)
-        valid_labels = cls_gts != -1
-        
-        cls_mse = F.mse_loss(cls_logits, cls_gts) * valid_labels
-        cls_acc = self.accuracy(cls_logits, cls_gts)
-        return {
-            'loss_cls_mse': cls_mse,
-            'loss_cls_acc': cls_acc,
-        }
+        self.mednext = MM_MedNext_Decoder(
+            embed_dims=embed_dims,
+            num_classes=num_classes,
+            exp_r=exp_r,
+            kernel_size=kernel_size,
+            block_counts=block_counts,
+            use_checkpoint=use_checkpoint,
+            norm_type=norm_type,
+            grn=grn,
+            dim="3d",
+        )
+    
+    def forward(self, inputs):
+        return self.mednext(inputs)

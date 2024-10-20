@@ -92,7 +92,9 @@ class LoadImageFromMHA(LoadFromMHA):
         img_mha = sitk.ReadImage(img_path)
         img = self._process_mha(img_mha, 'image')
         
-        results['img'] = img  # output: [H, W, D]
+        results['img'] = img  # output: [Z, Y, X]
+        results['img_shape'] = img.shape
+        results['ori_shape'] = img.shape
         results['sitk_image'] = img_mha
         return results
 

@@ -1,6 +1,5 @@
 import os.path as osp
 import warnings
-from numbers import Number
 from collections.abc import Sequence
 from typing import Any
 
@@ -10,7 +9,7 @@ from torch import Tensor
 from torch.nn import functional as F
 
 import mmcv
-from mmcv.transforms import to_tensor
+from mmcv.transforms import to_tensor, Resize
 from mmengine.runner import Runner
 from mmengine.fileio import get
 from mmengine.logging import print_log
@@ -559,3 +558,45 @@ class Seg3DDataPreProcessor(SegDataPreProcessor):
                 inputs = torch.stack(inputs, dim=0)
 
         return dict(inputs=inputs, data_samples=data_samples)
+
+
+
+class Resize3D(Resize):
+    @staticmethod
+    def scale_2D_or_3D(original_shape:list[int], target_shape:list[int]):
+        if len(original_shape) == len(target_shape) + 1:
+            return [original_shape[0], *target_shape]
+        elif len(original_shape) == len(target_shape):
+            return target_shape
+        else:
+            raise ValueError(
+                'The dimension of the segmentation map should be equal '
+                'to the scale dimension or the scale dimension plus 1, '
+                f'but got {original_shape} and {target_shape}')
+    
+    
+    def _resize_seg(self, results: dict) -> None:
+        """Resize semantic segmentation map with ``results['scale']``."""
+        for seg_key in results.get('seg_fields', []):
+            if results.get(seg_key, None) is not None:
+                scale = self.scale_2D_or_3D(results[seg_key].shape, results['scale'])
+                results[seg_key] = F.interpolate(
+                    results[seg_key].unsqueeze(0),
+                    size=scale,
+                    mode='nearest')
+
+
+    def _resize_img(self, results: dict) -> None:
+        """Resize images with ``results['scale']``."""
+        if results.get('img', None) is not None:
+            scale = self.scale_2D_or_3D(results['img'].shape, results['scale'])
+            img = F.interpolate(
+                results['img'].unsqueeze(0),
+                size=scale,
+                mode=self.interpolation)
+            
+            results['img'] = img.squeeze(0)
+            results['img_shape'] = img.shape
+            results['scale_factor'] = [
+                new / ori for new, ori in zip(
+                    results['img_shape'], results['ori_shape'])]

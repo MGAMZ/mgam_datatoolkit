@@ -82,7 +82,7 @@ class WindowSet(BaseTransform):
     def _window_norm(self, img: np.ndarray):
         img = np.clip(img, self.clip_range[0], self.clip_range[1])  # Window Clip
         img = img - self.clip_range[0]  # HU bias to positive
-        img = img / (img.max(axis=(-1,-2), keepdims=True) + 1e-7) # Zero-One Normalization
+        img = img / self.width # Zero-One Normalization
         return img.astype(np.float32)
 
     def transform(self, results):
@@ -125,8 +125,8 @@ class RandomRoll(BaseTransform):
     - gt_seg_map
     '''
     def __init__(self, 
-                 direction:Union[str, Sequence[str]],
-                 gap: Union[float, Sequence[float]],
+                 direction: str|Sequence[str],
+                 gap: float|Sequence[float],
                  erase: bool=False,
                  pad_val: int=0,
                  seg_pad_val: int=0):
@@ -174,6 +174,13 @@ class RandomRoll(BaseTransform):
             else:
                 results['img'][..., gap:, :] = self.pad_val
                 results['gt_seg_map'][..., gap:, :] = self.seg_pad_val
+        if axis == -3:
+            if gap > 0:
+                results['img'][..., :gap, :, :] = self.pad_val
+                results['gt_seg_map'][..., :gap, :, :] = self.seg_pad_val
+            else:
+                results['img'][..., gap:, :, :] = self.pad_val
+                results['gt_seg_map'][..., gap:, :, :] = self.seg_pad_val
         return results
     
     
@@ -185,6 +192,10 @@ class RandomRoll(BaseTransform):
         if 'vertical' in self.direction:
             axis = -1
             gap = random.randint(-self.gap['vertical'], self.gap['vertical'])
+            results = self._roll(results, gap, axis)
+        if 'normal' in self.direction:
+            axis = -3
+            gap = random.randint(-self.gap['normal'], self.gap['normal'])
             results = self._roll(results, gap, axis)
         
         return results
