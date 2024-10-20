@@ -101,6 +101,7 @@ class VolumeData(BaseDataElement):
                               f'{value.shape[-3:]} to {value.shape}')
             super().__setattr__(name, value)
 
+
     def __getitem__(self, item: Sequence[int|slice]) -> 'VolumeData':
         """
         Args:
@@ -441,6 +442,7 @@ class BaseDecodeHead_3D(BaseDecodeHead):
             seg_logits, seg_label, ignore_index=self.ignore_index)
         return loss
 
+
     def predict_by_feat(self, seg_logits: Tensor,
                         batch_img_metas: list[dict]) -> Tensor:
         """Transform a batch of output seg_logits to the input shape.
@@ -539,6 +541,7 @@ class Seg3DVisualizationHook(SegVisualizationHook):
                 show=self.show,
                 wait_time=self.wait_time,
                 step=total_curr_iter)
+
 
     def after_test_iter(self, runner: Runner, batch_idx: int, data_batch: dict,
                         outputs: Sequence[Seg3DDataSample]) -> None:
@@ -828,8 +831,8 @@ class Resize3D(Resize):
                 'The dimension of the segmentation map should be equal '
                 'to the scale dimension or the scale dimension plus 1, '
                 f'but got {original_shape} and {target_shape}')
-    
-    
+
+
     def _resize_seg(self, results: dict) -> None:
         """Resize semantic segmentation map with ``results['scale']``."""
         for seg_key in results.get('seg_fields', []):
@@ -884,7 +887,6 @@ class RandomCrop3D(BaseTransform):
             occupy.
         ignore_index (int): The label index to be ignored. Default: 255
     """
-
     def __init__(self,
                  crop_size: int|tuple[int, int, int],
                  cat_max_ratio: float = 1.,
@@ -965,6 +967,7 @@ class RandomCrop3D(BaseTransform):
         img = img[crop_d1:crop_d2, crop_y1:crop_y2, crop_x1:crop_x2, ...]
         return img
 
+
     def transform(self, results: dict) -> dict:
         """Transform function to randomly crop volumes, semantic segmentation
         maps.
@@ -990,6 +993,7 @@ class RandomCrop3D(BaseTransform):
         results['img'] = img
         results['img_shape'] = img.shape[:3]
         return results
+
 
     def __repr__(self):
         return self.__class__.__name__ + f'(crop_size={self.crop_size})'
