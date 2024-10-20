@@ -119,12 +119,12 @@ class LoadMaskFromMHA(LoadFromMHA):
         return mask_channel
     
     def transform(self, results):
-        mask_path = results['label_path']
+        mask_path = results['seg_map_path']
         mask_mha = sitk.ReadImage(mask_path)
         mask_mha.CopyInformation(results['sitk_image'])
         mask = self._process_mha(mask_mha, 'mask')
         
-        results['gt_seg_map_index'] = mask # output: [H, W, D]
-        results['gt_seg_map_channel'] = self._split_channel(mask)
+        results['gt_seg_map'] = mask # output: [H, W, D]
+        results['seg_fields'].append('gt_seg_map')
         return results
 

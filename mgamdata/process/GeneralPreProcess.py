@@ -125,8 +125,8 @@ class RandomRoll(BaseTransform):
     - gt_seg_map
     '''
     def __init__(self, 
-                 direction: str|Sequence[str],
-                 gap: float|Sequence[float],
+                 direction: str|list[str],
+                 gap: float|list[float],
                  erase: bool=False,
                  pad_val: int=0,
                  seg_pad_val: int=0):
@@ -143,10 +143,10 @@ class RandomRoll(BaseTransform):
             direction = [direction]
         if isinstance(gap, float):
             gap = [gap]
-        assert len(direction) == len(gap), "所有参数的长度必须相同"
+        assert len(direction) == len(gap), "所有参数的长度必须相同" # type: ignore
         
         self.direction = direction
-        self.gap = {k:v for k,v in zip(direction, gap)}
+        self.gap = {k:v for k,v in zip(direction, gap)} # type: ignore
         self.erase = erase
         self.pad_val = pad_val
         self.seg_pad_val = seg_pad_val

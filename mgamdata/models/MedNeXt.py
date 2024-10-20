@@ -994,7 +994,10 @@ class MM_MedNext_Decoder(BaseModule):
         else:
             assert isinstance(exp_r, list)
         
-        self.checkpoint = lambda f,x: checkpoint(f,x,use_reentrant=False) if use_checkpoint else lambda f,x: x
+        if use_checkpoint:
+            self.checkpoint = lambda f,x: checkpoint(f, x, use_reentrant=False)
+        else:
+            self.checkpoint = lambda f,x: f(x)
         
         self.up_3 = MedNeXtUpBlock(
             in_channels=16*embed_dims,
@@ -1106,28 +1109,28 @@ class MM_MedNext_Decoder(BaseModule):
     def forward(self, inputs):
         (x_res_0, x_res_1, x_res_2, x_res_3, x) = inputs
         
-        x_up_3 = self.up_3(x)
-        dec_x = x_res_3 + x_up_3 
-        x = self.dec_block_3(dec_x)
+        x_up_3 = self.checkpoint(self.up_3, x)
+        dec_x = x_res_3 + x_up_3
+        x = self.checkpoint(self.dec_block_3, dec_x)
 
         del x_res_3, x_up_3
 
-        x_up_2 = self.up_2(x)
+        x_up_2 = self.checkpoint(self.up_2, x)
         dec_x = x_res_2 + x_up_2 
-        x = self.dec_block_2(dec_x)
+        x = self.checkpoint(self.dec_block_2, dec_x)
         del x_res_2, x_up_2
 
-        x_up_1 = self.up_1(x)
+        x_up_1 = self.checkpoint(self.up_1, x)
         dec_x = x_res_1 + x_up_1 
-        x = self.dec_block_1(dec_x)
+        x = self.checkpoint(self.dec_block_1, dec_x)
         del x_res_1, x_up_1
 
-        x_up_0 = self.up_0(x)
+        x_up_0 = self.checkpoint(self.up_0, x)
         dec_x = x_res_0 + x_up_0 
-        x = self.dec_block_0(dec_x)
+        x = self.checkpoint(self.dec_block_0, dec_x)
         del x_res_0, x_up_0, dec_x
 
-        x = self.cls_seg(x)
+        x = self.checkpoint(self.cls_seg, x)
         return x
 
 

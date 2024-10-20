@@ -1,4 +1,5 @@
 import os.path as osp
+import pdb
 import warnings
 from collections.abc import Sequence
 from typing import Any
@@ -9,7 +10,7 @@ from torch import Tensor
 from torch.nn import functional as F
 
 import mmcv
-from mmcv.transforms import to_tensor, Resize
+from mmcv.transforms import to_tensor, Resize, BaseTransform
 from mmengine.runner import Runner
 from mmengine.fileio import get
 from mmengine.logging import print_log
@@ -20,7 +21,7 @@ from mmseg.models.segmentors.encoder_decoder import EncoderDecoder
 from mmseg.models.decode_heads.decode_head import BaseDecodeHead
 from mmseg.models.losses.dice_loss import DiceLoss
 from mmseg.datasets.transforms import PackSegInputs
-from mmseg.utils import stack_batch
+from mmseg.models.losses.accuracy import accuracy
 
 
 
@@ -241,8 +242,11 @@ class Seg3DDataSample(BaseDataElement):
 class EncoderDecoder_3D(EncoderDecoder):
     """Encoder Decoder segmentors for 3D data."""
 
-    def slide_inference(self, inputs: Tensor,
-                        batch_img_metas: list[dict]) -> Tensor:
+    def slide_inference(
+        self, 
+        inputs: Tensor,
+        batch_img_metas: list[dict],
+        ) -> Tensor:
         """Inference by sliding-window with overlap.
 
         If d_crop > d_img or h_crop > h_img or w_crop > w_img, the small patch will be used to
@@ -262,6 +266,7 @@ class EncoderDecoder_3D(EncoderDecoder):
                 input volume.
         """
 
+        accu_device:str = self.test_cfg.slide_accumulate_device
         d_stride, h_stride, w_stride = self.test_cfg.stride # type: ignore
         d_crop, h_crop, w_crop = self.test_cfg.crop_size # type: ignore
         batch_size, _, d_img, h_img, w_img = inputs.size()
@@ -269,8 +274,8 @@ class EncoderDecoder_3D(EncoderDecoder):
         d_grids = max(d_img - d_crop + d_stride - 1, 0) // d_stride + 1
         h_grids = max(h_img - h_crop + h_stride - 1, 0) // h_stride + 1
         w_grids = max(w_img - w_crop + w_stride - 1, 0) // w_stride + 1
-        preds = inputs.new_zeros((batch_size, out_channels, d_img, h_img, w_img))
-        count_mat = inputs.new_zeros((batch_size, 1, d_img, h_img, w_img))
+        preds = inputs.new_zeros((batch_size, out_channels, d_img, h_img, w_img)).to(device=accu_device)
+        count_mat = inputs.new_zeros((batch_size, 1, d_img, h_img, w_img)).to(device=accu_device)
         for d_idx in range(d_grids):
             for h_idx in range(h_grids):
                 for w_idx in range(w_grids):
@@ -288,7 +293,8 @@ class EncoderDecoder_3D(EncoderDecoder):
                     batch_img_metas[0]['img_shape'] = crop_vol.shape[2:]
                     # the output of encode_decode is seg logits tensor map
                     # with shape [N, C, D, H, W]
-                    crop_seg_logit = self.encode_decode(crop_vol, batch_img_metas)
+                    crop_seg_logit = self.encode_decode(
+                        crop_vol, batch_img_metas).to(accu_device, non_blocking=True)
                     preds += F.pad(crop_seg_logit,
                                    (int(x1), int(preds.shape[4] - x2), int(y1),
                                     int(preds.shape[3] - y2), int(z1), int(preds.shape[2] - z2)))
@@ -300,6 +306,82 @@ class EncoderDecoder_3D(EncoderDecoder):
         return seg_logits
 
 
+    def postprocess_result(self,
+                        seg_logits: Tensor,
+                        data_samples: list[Seg3DDataSample]|None = None) -> list[Seg3DDataSample]:
+        """ Convert results list to `SegDataSample` for 3D Volume segmentation.
+        Args:
+            seg_logits (Tensor): The segmentation results, seg_logits from
+                model of each input image with shape [B, C, Z, Y, X].
+            data_samples (list[:obj:`SegDataSample`]): The seg data samples.
+                It usually includes information such as `metainfo` and
+                `gt_sem_seg`. Default to None.
+        Returns:
+            list[:obj:`SegDataSample`]: Segmentation results of the
+            input images. Each SegDataSample usually contain:
+
+            - ``pred_sem_seg``(VolumeData): Prediction of semantic segmentation.
+            - ``seg_logits``(VolumeData): Predicted logits of semantic
+                segmentation before normalization.
+        """
+        batch_size, C, Z, Y, X = seg_logits.shape
+
+        if data_samples is None:
+            data_samples = [Seg3DDataSample() for _ in range(batch_size)]
+            only_prediction = True
+        else:
+            only_prediction = False
+
+        for i in range(batch_size):
+            if not only_prediction:
+                img_meta = data_samples[i].metainfo
+                # remove padding area
+                if 'img_padding_size' not in img_meta:
+                    padding_size = img_meta.get('padding_size', [0] * 6)
+                else:
+                    padding_size = img_meta['img_padding_size']
+                padding_left, padding_right, padding_top, padding_bottom, padding_front, padding_back = padding_size
+                # i_seg_logits shape is 1, C, Z, Y, X after remove padding
+                i_seg_logits = seg_logits[i:i + 1, :,
+                                        padding_front:Z - padding_back,
+                                        padding_top:Y - padding_bottom,
+                                        padding_left:X - padding_right]
+
+                flip = img_meta.get('flip', None)
+                if flip:
+                    flip_direction = img_meta.get('flip_direction', None)
+                    assert flip_direction in ['horizontal', 'vertical', 'depth']
+                    if flip_direction == 'horizontal':
+                        i_seg_logits = i_seg_logits.flip(dims=(4, ))
+                    elif flip_direction == 'vertical':
+                        i_seg_logits = i_seg_logits.flip(dims=(3, ))
+                    else:
+                        i_seg_logits = i_seg_logits.flip(dims=(2, ))
+
+                # resize as original shape
+                i_seg_logits = F.interpolate(
+                    i_seg_logits,
+                    size=img_meta['ori_shape'],
+                    mode='trilinear').squeeze(0)
+            else:
+                i_seg_logits = seg_logits[i]
+
+            if C > 1:
+                i_seg_pred = i_seg_logits.argmax(dim=0, keepdim=True)
+            else:
+                i_seg_logits = i_seg_logits.sigmoid()
+                i_seg_pred = (i_seg_logits >
+                            self.decode_head.threshold).to(i_seg_logits)
+            data_samples[i].set_data({
+                'seg_logits':
+                VolumeData(**{'data': i_seg_logits}), # type: ignore
+                'pred_sem_seg':
+                VolumeData(**{'data': i_seg_pred}) # type: ignore
+            })
+
+        return data_samples
+
+
 
 class BaseDecodeHead_3D(BaseDecodeHead):
     def __init__(self, *args, **kwargs):
@@ -307,7 +389,85 @@ class BaseDecodeHead_3D(BaseDecodeHead):
         self.conv_seg = torch.nn.Conv3d(
             self.channels, self.out_channels, kernel_size=1)
         if self.dropout_ratio > 0:
-            self.dropout = torch.nn.Dropout3d(self.dropout_ratio)
+            self.dropout = torch.nn.Dropout3d(self.dropout_ratio)    
+
+
+    def loss_by_feat(self, seg_logits: Tensor,
+                     batch_data_samples: list[Seg3DDataSample]) -> dict:
+        """Compute segmentation loss.
+
+        Args:
+            seg_logits (Tensor): The output from decode head forward function.
+            batch_data_samples (List[:obj:`SegDataSample`]): The seg
+                data samples. It usually includes information such
+                as `metainfo` and `gt_sem_seg`.
+
+        Returns:
+            dict[str, Tensor]: a dictionary of loss components
+        """
+
+        # [B, C, Z, Y, X]
+        seg_label = self._stack_batch_gt(batch_data_samples) # type: ignore
+        loss = dict()
+        seg_logits = F.interpolate(
+            input=seg_logits,
+            size=seg_label.shape[2:],
+            mode='trilinear')
+        if self.sampler is not None:
+            seg_weight = self.sampler.sample(seg_logits, seg_label)
+        else:
+            seg_weight = None
+        seg_label = seg_label.squeeze(1)
+
+        if not isinstance(self.loss_decode, torch.nn.ModuleList):
+            losses_decode = [self.loss_decode]
+        else:
+            losses_decode = self.loss_decode
+        for loss_decode in losses_decode:
+            if loss_decode.loss_name not in loss:
+                loss[loss_decode.loss_name] = loss_decode(
+                    seg_logits,
+                    seg_label,
+                    weight=seg_weight,
+                    ignore_index=self.ignore_index)
+            else:
+                loss[loss_decode.loss_name] += loss_decode(
+                    seg_logits,
+                    seg_label,
+                    weight=seg_weight,
+                    ignore_index=self.ignore_index)
+
+        loss['acc_seg'] = accuracy(
+            seg_logits, seg_label, ignore_index=self.ignore_index)
+        return loss
+
+    def predict_by_feat(self, seg_logits: Tensor,
+                        batch_img_metas: list[dict]) -> Tensor:
+        """Transform a batch of output seg_logits to the input shape.
+
+        Args:
+            seg_logits (Tensor): The output from decode head forward function.
+            batch_img_metas (list[dict]): Meta information of each image, e.g.,
+                image size, scaling factor, etc.
+
+        Returns:
+            Tensor: Outputs segmentation logits map.
+        """
+
+        if isinstance(batch_img_metas[0]['img_shape'], torch.Size):
+            # slide inference
+            size = batch_img_metas[0]['img_shape']
+        elif 'pad_shape' in batch_img_metas[0]:
+            size = batch_img_metas[0]['pad_shape'][:2]
+        else:
+            size = batch_img_metas[0]['img_shape']
+
+        seg_logits = F.interpolate(
+            input=seg_logits,
+            size=size,
+            mode='trilinear',
+            align_corners=self.align_corners)
+        return seg_logits
 
 
 
@@ -328,7 +488,7 @@ class DiceLoss_3D(DiceLoss):
         """
         num_classes = pred.shape[1]
         one_hot_target = torch.clamp(target, min=0, max=num_classes)
-        one_hot_target = torch.nn.functional.one_hot(one_hot_target,
+        one_hot_target = torch.nn.functional.one_hot(one_hot_target.to(torch.int64),
                                                     num_classes + 1)
         one_hot_target = one_hot_target[..., :num_classes].permute(0, 4, 1, 2, 3)
         return one_hot_target
@@ -509,6 +669,101 @@ class Seg3DDataPreProcessor(SegDataPreProcessor):
         self.batch_augments = batch_augments
         self.test_cfg = test_cfg
 
+    @staticmethod
+    def stack_batch_3D(
+        inputs: list[Tensor],
+        data_samples: list[Seg3DDataSample]|None = None,
+        size: tuple|None = None,
+        size_divisor: int|None = None,
+        pad_val: int|float = 0,
+        seg_pad_val: int|float = 255):
+        
+        """Stack multiple 3D volume inputs to form a batch and pad the volumes and gt_sem_segs
+        to the max shape using the right bottom padding mode.
+
+        Args:
+            inputs (List[Tensor]): The input multiple tensors. each is a
+                CZYX 4D-tensor.
+            data_samples (list[:obj:`SegDataSample`]): The list of data samples.
+                It usually includes information such as `gt_sem_seg`.
+            size (tuple, optional): Fixed padding size.
+            size_divisor (int, optional): The divisor of padded size.
+            pad_val (int, float): The padding value. Defaults to 0
+            seg_pad_val (int, float): The padding value. Defaults to 255
+
+        Returns:
+        Tensor: The 5D-tensor.
+        List[:obj:`SegDataSample`]: After the padding of the gt_seg_map.
+        """
+        assert isinstance(inputs, list), \
+            f'Expected input type to be list, but got {type(inputs)}'
+        assert len({tensor.ndim for tensor in inputs}) == 1, \
+            f'Expected the dimensions of all inputs must be the same, ' \
+            f'but got {[tensor.ndim for tensor in inputs]}'
+        assert inputs[0].ndim == 4, f'Expected tensor dimension to be 4, ' \
+            f'but got {inputs[0].ndim}'
+        assert len({tensor.shape[0] for tensor in inputs}) == 1, \
+            f'Expected the channels of all inputs must be the same, ' \
+            f'but got {[tensor.shape[0] for tensor in inputs]}'
+
+        # only one of size and size_divisor should be valid
+        assert (size is not None) ^ (size_divisor is not None), \
+            'only one of size and size_divisor should be valid'
+
+        padded_inputs = []
+        padded_samples = []
+        inputs_sizes = [(img.shape[-3], img.shape[-2], img.shape[-1]) for img in inputs]
+        max_size = np.stack(inputs_sizes).max(0)
+        if size_divisor is not None and size_divisor > 1:
+            # the last three dims are Z,Y,X, all subject to divisibility requirement
+            max_size = (max_size + (size_divisor - 1)) // size_divisor * size_divisor
+
+        for i in range(len(inputs)):
+            tensor = inputs[i]
+            if size is not None:
+                if len(size) == 2:
+                    size = (tensor.shape[-3], *size)
+                depth = max(size[-3] - tensor.shape[-3], 0)
+                height = max(size[-2] - tensor.shape[-2], 0)
+                width = max(size[-1] - tensor.shape[-1], 0)
+                # (padding_left, padding_right, padding_top, padding_bottom, padding_front, padding_back)
+                padding_size = (0, width, 0, height, 0, depth)
+            elif size_divisor is not None:
+                depth = max(max_size[-3] - tensor.shape[-3], 0)
+                height = max(max_size[-2] - tensor.shape[-2], 0)
+                width = max(max_size[-1] - tensor.shape[-1], 0)
+                padding_size = (0, width, 0, height, 0, depth)
+            else:
+                padding_size = [0, 0, 0, 0, 0, 0]
+
+            # pad volume
+            pad_volume = F.pad(tensor, padding_size, value=pad_val)
+            padded_inputs.append(pad_volume)
+            # pad gt_sem_seg
+            if data_samples is not None:
+                data_sample = data_samples[i]
+                pad_shape = None
+                if 'gt_sem_seg' in data_sample:
+                    gt_sem_seg = data_sample.gt_sem_seg.data
+                    del data_sample.gt_sem_seg.data
+                    data_sample.gt_sem_seg.data = F.pad(
+                        gt_sem_seg, padding_size, value=seg_pad_val)
+                    pad_shape = data_sample.gt_sem_seg.shape
+                data_sample.set_metainfo({
+                    'img_shape': tensor.shape[-3:],
+                    'pad_shape': pad_shape,
+                    'padding_size': padding_size
+                })
+                padded_samples.append(data_sample)
+            else:
+                padded_samples.append(
+                    dict(
+                        img_padding_size=padding_size,
+                        pad_shape=pad_volume.shape[-3:]))
+
+        return torch.stack(padded_inputs, dim=0), padded_samples
+
+
     def forward(self, data: dict, training: bool = False) -> dict[str, Any]:
         """Perform normalization, padding based on ``BaseDataPreprocessor``.
 
@@ -530,7 +785,7 @@ class Seg3DDataPreProcessor(SegDataPreProcessor):
         if training:
             assert data_samples is not None, ('During training, ',
                                               '`data_samples` must be define.')
-            inputs, data_samples = stack_batch(
+            inputs, data_samples = self.stack_batch_3D(
                 inputs=inputs,
                 data_samples=data_samples,
                 size=self.size,
@@ -546,7 +801,7 @@ class Seg3DDataPreProcessor(SegDataPreProcessor):
             assert all(input_.shape[1:] == vol_size for input_ in inputs),  \
                 'The volume size in a batch should be the same.'
             if self.test_cfg:
-                inputs, padded_samples = stack_batch(
+                inputs, padded_samples = self.stack_batch_3D(
                     inputs=inputs,
                     size=self.test_cfg.get('size', None),
                     size_divisor=self.test_cfg.get('size_divisor', None),
@@ -580,23 +835,161 @@ class Resize3D(Resize):
         for seg_key in results.get('seg_fields', []):
             if results.get(seg_key, None) is not None:
                 scale = self.scale_2D_or_3D(results[seg_key].shape, results['scale'])
+                original = torch.from_numpy(results[seg_key])
                 results[seg_key] = F.interpolate(
-                    results[seg_key].unsqueeze(0),
+                    original[None, None],
                     size=scale,
-                    mode='nearest')
+                    mode='nearest'
+                )[0,0].numpy()
 
 
     def _resize_img(self, results: dict) -> None:
         """Resize images with ``results['scale']``."""
         if results.get('img', None) is not None:
             scale = self.scale_2D_or_3D(results['img'].shape, results['scale'])
+            original = torch.from_numpy(results['img'].astype(np.float32))
             img = F.interpolate(
-                results['img'].unsqueeze(0),
+                original[None, None],
                 size=scale,
-                mode=self.interpolation)
+                mode='trilinear')
             
-            results['img'] = img.squeeze(0)
+            results['img'] = img[0,0].numpy().astype(results['img'].dtype)
             results['img_shape'] = img.shape
             results['scale_factor'] = [
                 new / ori for new, ori in zip(
                     results['img_shape'], results['ori_shape'])]
+
+
+
+class RandomCrop3D(BaseTransform):
+    """Random crop the 3D volume & seg.
+
+    Required Keys:
+
+    - img
+    - gt_seg_map
+
+    Modified Keys:
+
+    - img
+    - img_shape
+    - gt_seg_map
+
+
+    Args:
+        crop_size (Union[int, Tuple[int, int, int]]):  Expected size after cropping
+            with the format of (d, h, w). If set to an integer, then cropping
+            depth, width and height are equal to this integer.
+        cat_max_ratio (float): The maximum ratio that single category could
+            occupy.
+        ignore_index (int): The label index to be ignored. Default: 255
+    """
+
+    def __init__(self,
+                 crop_size: int|tuple[int, int, int],
+                 cat_max_ratio: float = 1.,
+                 ignore_index: int = 255):
+        super().__init__()
+        assert isinstance(crop_size, int) or (
+            isinstance(crop_size, tuple) and len(crop_size) == 3
+        ), 'The expected crop_size is an integer, or a tuple containing three integers'
+
+        if isinstance(crop_size, int):
+            crop_size = (crop_size, crop_size, crop_size)
+        assert crop_size[0] > 0 and crop_size[1] > 0 and crop_size[2] > 0
+        self.crop_size = crop_size
+        self.cat_max_ratio = cat_max_ratio
+        self.ignore_index = ignore_index
+
+
+    def crop_bbox(self, results: dict) -> tuple:
+        """get a crop bounding box.
+
+        Args:
+            results (dict): Result dict from loading pipeline.
+
+        Returns:
+            tuple: Coordinates of the cropped volume.
+        """
+
+        def generate_crop_bbox(img: np.ndarray) -> tuple:
+            """Randomly get a crop bounding box.
+
+            Args:
+                img (np.ndarray): Original input volume.
+
+            Returns:
+                tuple: Coordinates of the cropped volume.
+            """
+
+            margin_d = max(img.shape[0] - self.crop_size[0], 0)
+            margin_h = max(img.shape[1] - self.crop_size[1], 0)
+            margin_w = max(img.shape[2] - self.crop_size[2], 0)
+            offset_d = np.random.randint(0, margin_d + 1)
+            offset_h = np.random.randint(0, margin_h + 1)
+            offset_w = np.random.randint(0, margin_w + 1)
+            crop_d1, crop_d2 = offset_d, offset_d + self.crop_size[0]
+            crop_y1, crop_y2 = offset_h, offset_h + self.crop_size[1]
+            crop_x1, crop_x2 = offset_w, offset_w + self.crop_size[2]
+
+            return crop_d1, crop_d2, crop_y1, crop_y2, crop_x1, crop_x2
+
+        img = results['img']
+        crop_bbox = generate_crop_bbox(img)
+        if self.cat_max_ratio < 1.:
+            # Repeat 10 times
+            for _ in range(10):
+                seg_temp = self.crop(results['gt_seg_map'], crop_bbox)
+                labels, cnt = np.unique(seg_temp, return_counts=True)
+                cnt = cnt[labels != self.ignore_index]
+                if len(cnt) > 1 and np.max(cnt) / np.sum(
+                        cnt) < self.cat_max_ratio:
+                    break
+                crop_bbox = generate_crop_bbox(img)
+
+        return crop_bbox
+
+
+    def crop(self, img: np.ndarray, crop_bbox: tuple) -> np.ndarray:
+        """Crop from ``img``
+
+        Args:
+            img (np.ndarray): Original input volume.
+            crop_bbox (tuple): Coordinates of the cropped volume.
+
+        Returns:
+            np.ndarray: The cropped volume.
+        """
+
+        crop_d1, crop_d2, crop_y1, crop_y2, crop_x1, crop_x2 = crop_bbox
+        img = img[crop_d1:crop_d2, crop_y1:crop_y2, crop_x1:crop_x2, ...]
+        return img
+
+    def transform(self, results: dict) -> dict:
+        """Transform function to randomly crop volumes, semantic segmentation
+        maps.
+
+        Args:
+            results (dict): Result dict from loading pipeline.
+
+        Returns:
+            dict: Randomly cropped results, 'img_shape' key in result dict is
+                updated according to crop size.
+        """
+
+        img = results['img']
+        crop_bbox = self.crop_bbox(results)
+
+        # crop the volume
+        img = self.crop(img, crop_bbox)
+
+        # crop semantic seg
+        for key in results.get('seg_fields', []):
+            results[key] = self.crop(results[key], crop_bbox)
+
+        results['img'] = img
+        results['img_shape'] = img.shape[:3]
+        return results
+
+    def __repr__(self):
+        return self.__class__.__name__ + f'(crop_size={self.crop_size})'
