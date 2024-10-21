@@ -5,11 +5,12 @@ from tqdm import tqdm
 import orjson
 import pandas as pd
 
+from mmcv.transforms import BaseTransform
 from mmengine.logging import print_log, MMLogger
 from mmseg.datasets.basesegdataset import BaseSegDataset
 from tqdm import tqdm
 
-from . import (
+from .meta import (
     CLASS_INDEX_MAP, DATA_ROOT_SLICE2D_TIFF, 
     get_subset_and_rectify_map, DATA_ROOT_3D_MHA, META_CSV_PATH
 )
@@ -185,3 +186,14 @@ class TotalsegmentatorSeg3DDataset(BaseSegDataset):
             return sorted_samples[:16]
         else:
             return sorted_samples
+
+
+
+class ParseID(BaseTransform):
+    def transform(self, results):
+        results['series_id'] = os.path.basename(
+            os.path.dirname(results['img_path'])
+        )
+        return results
+
+

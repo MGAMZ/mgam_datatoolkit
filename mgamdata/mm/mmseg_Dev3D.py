@@ -3,6 +3,7 @@ import pdb
 import warnings
 from collections.abc import Sequence
 from typing import Any
+from tqdm import tqdm
 
 import numpy as np
 import torch
@@ -11,17 +12,20 @@ from torch.nn import functional as F
 
 import mmcv
 from mmcv.transforms import to_tensor, Resize, BaseTransform
+from mmengine.dist import master_only
 from mmengine.runner import Runner
 from mmengine.fileio import get
 from mmengine.logging import print_log
 from mmengine.structures.base_data_element import BaseDataElement
 from mmseg.engine.hooks import SegVisualizationHook
+from mmseg.datasets.transforms import PackSegInputs
 from mmseg.models.data_preprocessor import SegDataPreProcessor
 from mmseg.models.segmentors.encoder_decoder import EncoderDecoder
 from mmseg.models.decode_heads.decode_head import BaseDecodeHead
 from mmseg.models.losses.dice_loss import DiceLoss
-from mmseg.datasets.transforms import PackSegInputs
 from mmseg.models.losses.accuracy import accuracy
+from mmseg.visualization.local_visualizer import SegLocalVisualizer
+from mmseg.structures.seg_data_sample import SegDataSample, PixelData
 
 
 
@@ -242,7 +246,6 @@ class Seg3DDataSample(BaseDataElement):
 
 class EncoderDecoder_3D(EncoderDecoder):
     """Encoder Decoder segmentors for 3D data."""
-
     def slide_inference(
         self, 
         inputs: Tensor,
@@ -275,8 +278,15 @@ class EncoderDecoder_3D(EncoderDecoder):
         d_grids = max(d_img - d_crop + d_stride - 1, 0) // d_stride + 1
         h_grids = max(h_img - h_crop + h_stride - 1, 0) // h_stride + 1
         w_grids = max(w_img - w_crop + w_stride - 1, 0) // w_stride + 1
-        preds = inputs.new_zeros((batch_size, out_channels, d_img, h_img, w_img)).to(device=accu_device)
-        count_mat = inputs.new_zeros((batch_size, 1, d_img, h_img, w_img)).to(device=accu_device)
+        preds = torch.zeros(
+            size=(batch_size, out_channels, d_img, h_img, w_img),
+            dtype=torch.float32,
+            device=accu_device)
+        count_mat = torch.zeros(
+            size=(batch_size, 1, d_img, h_img, w_img),
+            dtype=torch.int32,
+            device=accu_device)
+        
         for d_idx in range(d_grids):
             for h_idx in range(h_grids):
                 for w_idx in range(w_grids):
@@ -296,10 +306,7 @@ class EncoderDecoder_3D(EncoderDecoder):
                     # with shape [N, C, D, H, W]
                     crop_seg_logit = self.encode_decode(
                         crop_vol, batch_img_metas).to(accu_device, non_blocking=True)
-                    preds += F.pad(crop_seg_logit,
-                                   (int(x1), int(preds.shape[4] - x2), int(y1),
-                                    int(preds.shape[3] - y2), int(z1), int(preds.shape[2] - z2)))
-
+                    preds[:, :, z1:z2, y1:y2, x1:x2] += crop_seg_logit
                     count_mat[:, :, z1:z2, y1:y2, x1:x2] += 1
         assert (count_mat == 0).sum() == 0
         seg_logits = preds / count_mat
@@ -511,28 +518,18 @@ class Seg3DVisualizationHook(SegVisualizationHook):
                        data_batch: dict,
                        outputs: Sequence[Seg3DDataSample]
                        ) -> None:
-        """Run after every ``self.interval`` validation iterations.
-
-        Args:
-            runner (:obj:`Runner`): The runner of the validation process.
-            batch_idx (int): The index of the current batch in the val loop.
-            data_batch (dict): Data from dataloader.
-            outputs (Sequence[:obj:`SegDataSample`]]): A batch of data samples
-                that contain annotations and predictions.
-        """
         if self.draw is False:
             return
 
-        # There is no guarantee that the same batch of images
-        # is visualized for each evaluation.
         total_curr_iter = runner.iter + batch_idx
 
-        # Visualize only the first data
-        img_path = outputs[0].img_path
-        img_bytes = get(img_path, backend_args=self.backend_args)
-        img = mmcv.imfrombytes(img_bytes, channel_order='rgb')
-        window_name = f'val_{osp.basename(img_path)}'
-
+        # NOTE Override original implementation.
+        # data batch inputs [N, C, Z, Y, X], but requires RGB at last dimension.
+        img = data_batch['inputs'][0].permute(1,2,3,0).numpy()
+        # img: [Z, Y, X, 1] -> [Z, Y, X, 3]
+        img = np.repeat(img, 3, axis=-1)
+        series_id = outputs[0].metainfo['series_id']
+        window_name = f'val_{series_id}'
         if total_curr_iter % self.interval == 0:
             self._visualizer.add_datasample(
                 window_name,
@@ -559,13 +556,14 @@ class Seg3DVisualizationHook(SegVisualizationHook):
 
         for data_sample in outputs:
             self._test_index += 1
-
-            img_path = data_sample.img_path
-            window_name = f'test_{osp.basename(img_path)}'
-
-            img_path = data_sample.img_path
-            img_bytes = get(img_path, backend_args=self.backend_args)
-            img = mmcv.imfrombytes(img_bytes, channel_order='rgb')
+            
+            # NOTE Override original implementation.
+            # data batch inputs [N, C, Z, Y, X], but requires RGB at last dimension.
+            img = data_batch['inputs'][0].permute(1,2,3,0).numpy()
+            # img: [Z, Y, X, 1] -> [Z, Y, X, 3]
+            img = np.repeat(img, 3, axis=-1)
+            series_id = outputs[0].metainfo['series_id']
+            window_name = f'val_{series_id}'
 
             self._visualizer.add_datasample(
                 window_name,
@@ -574,6 +572,59 @@ class Seg3DVisualizationHook(SegVisualizationHook):
                 show=self.show,
                 wait_time=self.wait_time,
                 step=self._test_index)
+
+
+
+class Seg3DLocalVisualizer(SegLocalVisualizer):
+    def add_datasample(
+        self,
+        name: str,
+        image: np.ndarray,
+        data_sample: Seg3DDataSample|None=None,
+        *args, **kwargs
+    ) -> None:
+        """ Randomly select a slice from the 3D volume and fall back to 2D visualize.
+        
+        Args:
+            name: ...
+            image (np.ndarray): The image to visualize, shape (Z, Y, X, C).
+            data_sample (Seg3DDataSample, optional): The data sample to visualize.
+                - gt_sem_seg (VolumeData): data shape (Z, Y, X)
+                - pred_sem_seg (VolumeData): data shape (Z, Y, X)
+                - seg_logits (VolumeData): data shape (Classes, Z, Y, X)
+        """
+        assert image.ndim == 4, f'The input image must be 4D, but got '\
+                                f'shape {image.shape}.'
+        z = len(image)
+        name += f'_z{z}'
+        random_selected_z = np.random.randint(0, z)
+        image = np.take(image, random_selected_z, axis=-3)
+        image = (image/image.max()*255).astype(np.uint8)
+        
+        
+        if data_sample is not None:
+            if 'gt_sem_seg' in data_sample:
+                assert data_sample.gt_sem_seg.data.size(-3) == z
+            if 'pred_sem_seg' in data_sample:
+                assert data_sample.pred_sem_seg.data.size(-3) == z
+            if 'seg_logits' in data_sample:
+                assert data_sample.seg_logits.data.size(-3) == z
+            
+            gt_sem_seg_2d = PixelData(data=data_sample.gt_sem_seg.data[0, random_selected_z])
+            pred_sem_seg_2d = PixelData(data=data_sample.pred_sem_seg.data[0, random_selected_z])
+            seg_logits_2d = PixelData(data=data_sample.seg_logits.data[:, random_selected_z])
+            
+            data_sample_2D = SegDataSample(
+                gt_sem_seg=gt_sem_seg_2d,
+                pred_sem_seg=pred_sem_seg_2d,
+                seg_logits=seg_logits_2d,
+            )
+            data_sample_2D.set_metainfo(data_sample.metainfo)
+        
+        else:
+            data_sample_2D = None
+        
+        return super().add_datasample(name, image, data_sample_2D, *args, **kwargs)
 
 
 
@@ -814,7 +865,6 @@ class Seg3DDataPreProcessor(SegDataPreProcessor):
                     data_sample.set_metainfo({**pad_info}) # type: ignore
             else:
                 inputs = torch.stack(inputs, dim=0)
-
         return dict(inputs=inputs, data_samples=data_samples)
 
 
