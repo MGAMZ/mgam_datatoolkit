@@ -1,10 +1,10 @@
-import os.path as osp
 import pdb
 import warnings
 from collections.abc import Sequence
 from typing import Any
 from tqdm import tqdm
 
+import cv2
 import numpy as np
 import torch
 from torch import Tensor
@@ -520,7 +520,6 @@ class Seg3DVisualizationHook(SegVisualizationHook):
                        ) -> None:
         if self.draw is False:
             return
-
         total_curr_iter = runner.iter + batch_idx
 
         # NOTE Override original implementation.
@@ -530,14 +529,15 @@ class Seg3DVisualizationHook(SegVisualizationHook):
         img = np.repeat(img, 3, axis=-1)
         series_id = outputs[0].metainfo['series_id']
         window_name = f'val_{series_id}'
-        if total_curr_iter % self.interval == 0:
+        
+        if (total_curr_iter % self.interval == 0) or (total_curr_iter == 1):
             self._visualizer.add_datasample(
                 window_name,
                 img,
                 data_sample=outputs[0],
                 show=self.show,
                 wait_time=self.wait_time,
-                step=total_curr_iter)
+                step=batch_idx)
 
 
     def after_test_iter(self, runner: Runner, batch_idx: int, data_batch: dict,
@@ -576,6 +576,14 @@ class Seg3DVisualizationHook(SegVisualizationHook):
 
 
 class Seg3DLocalVisualizer(SegLocalVisualizer):
+    def __init__(self,
+                 name,
+                 resize:Sequence[int]|None=None,
+                 *args, **kwargs):
+        super().__init__(name=name, *args, **kwargs)
+        self.resize = resize
+    
+    
     def add_datasample(
         self,
         name: str,
@@ -587,37 +595,40 @@ class Seg3DLocalVisualizer(SegLocalVisualizer):
         
         Args:
             name: ...
-            image (np.ndarray): The image to visualize, shape (Z, Y, X, C).
+            image (np.ndarray): The image to visualize, NdArray (Z, Y, X, C).
             data_sample (Seg3DDataSample, optional): The data sample to visualize.
-                - gt_sem_seg (VolumeData): data shape (Z, Y, X)
-                - pred_sem_seg (VolumeData): data shape (Z, Y, X)
-                - seg_logits (VolumeData): data shape (Classes, Z, Y, X)
+                - gt_sem_seg (data:VolumeData): tensor (1, Z, Y, X)
+                - pred_sem_seg (data:VolumeData): tensor (1, Z, Y, X)
+                - seg_logits (data:VolumeData): tensor (Classes, Z, Y, X)
         """
         assert image.ndim == 4, f'The input image must be 4D, but got '\
                                 f'shape {image.shape}.'
-        z = len(image)
-        name += f'_z{z}'
-        random_selected_z = np.random.randint(0, z)
-        image = np.take(image, random_selected_z, axis=-3)
-        image = (image/image.max()*255).astype(np.uint8)
-        
+        Z, Y, X, C = image.shape
+        name += f'_z{Z}'
+        random_selected_z = np.random.randint(0, Z)
+        image = np.take(image, random_selected_z, axis=0)
+        image = (image/image.max()*255).astype(np.uint8) # (Y, X, C)
+        if self.resize is not None:
+            image = cv2.resize(image, self.resize, interpolation=cv2.INTER_LINEAR)
         
         if data_sample is not None:
             if 'gt_sem_seg' in data_sample:
-                assert data_sample.gt_sem_seg.data.size(-3) == z
-            if 'pred_sem_seg' in data_sample:
-                assert data_sample.pred_sem_seg.data.size(-3) == z
-            if 'seg_logits' in data_sample:
-                assert data_sample.seg_logits.data.size(-3) == z
+                assert data_sample.gt_sem_seg.data.shape[-3:] == torch.Size([Z, Y, X])
+                gt_sem_seg_2d = data_sample.gt_sem_seg.data[:, random_selected_z].to(torch.uint8)
+                if self.resize is not None:
+                    gt_sem_seg_2d = F.interpolate(
+                        gt_sem_seg_2d[None], self.resize, mode='nearest').squeeze(0)
             
-            gt_sem_seg_2d = PixelData(data=data_sample.gt_sem_seg.data[0, random_selected_z])
-            pred_sem_seg_2d = PixelData(data=data_sample.pred_sem_seg.data[0, random_selected_z])
-            seg_logits_2d = PixelData(data=data_sample.seg_logits.data[:, random_selected_z])
+            if 'pred_sem_seg' in data_sample:
+                assert data_sample.pred_sem_seg.data.shape[-3:] == torch.Size([Z, Y, X])
+                pred_sem_seg_2d = data_sample.pred_sem_seg.data[:, random_selected_z].to(torch.uint8)
+                if self.resize is not None:
+                    pred_sem_seg_2d = F.interpolate(
+                        pred_sem_seg_2d[None], self.resize, mode='nearest').squeeze(0)
             
             data_sample_2D = SegDataSample(
-                gt_sem_seg=gt_sem_seg_2d,
-                pred_sem_seg=pred_sem_seg_2d,
-                seg_logits=seg_logits_2d,
+                gt_sem_seg=PixelData(data=gt_sem_seg_2d),
+                pred_sem_seg=PixelData(data=pred_sem_seg_2d),
             )
             data_sample_2D.set_metainfo(data_sample.metainfo)
         
