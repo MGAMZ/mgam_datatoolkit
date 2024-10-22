@@ -8,7 +8,7 @@ from tqdm import tqdm
 import cv2
 import numpy as np
 import torch
-from torch import Tensor
+from torch import Tensor, Type
 from torch.nn import functional as F
 
 from mmcv.transforms import to_tensor, Resize, BaseTransform
@@ -994,13 +994,15 @@ class RandomCrop3D(BaseTransform):
                  cat_max_ratio: float = 1.,
                  ignore_index: int = 255):
         super().__init__()
-        assert isinstance(crop_size, int) or (
-            isinstance(crop_size, tuple) and len(crop_size) == 3
-        ), 'The expected crop_size is an integer, or a tuple containing three integers'
-
-        if isinstance(crop_size, int):
+        if isinstance(crop_size, Sequence):
+            assert len(crop_size) == 3, \
+                f'The expected crop_size containing 3 integers, but got {crop_size}'
+        elif isinstance(crop_size, int):
             crop_size = (crop_size, crop_size, crop_size)
-        assert crop_size[0] > 0 and crop_size[1] > 0 and crop_size[2] > 0
+        else:
+            raise TypeError(f"Unsupported crop size: {crop_size}")
+        
+        assert min(crop_size) > 0
         self.crop_size = crop_size
         self.cat_max_ratio = cat_max_ratio
         self.ignore_index = ignore_index

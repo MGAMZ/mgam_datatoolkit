@@ -10,11 +10,11 @@ from mgamdata.mm.mmseg_Dev3D import RandomCrop3D
 
 
 def crop_per_series(args:tuple):
-    cropper, series_path, num_cropped, save_path = args
+    cropper, series_path, num_cropped, save_folder = args
     cropper: RandomCrop3D
     series_path: str
     num_cropped: int
-    save_path: str
+    save_folder: str
     
     image_itk_image = sitk.ReadImage(os.path.join(series_path, 'ct.mha'))
     anno_itk_image = sitk.ReadImage(os.path.join(series_path, 'segmentations.mha'))
@@ -22,28 +22,35 @@ def crop_per_series(args:tuple):
     anno_array = sitk.GetArrayFromImage(anno_itk_image)
     data = {
         'img': image_array,
-        'gt_sem_seg': anno_array,
-        'seg_fields': ['gt_sem_seg'],
+        'gt_seg_map': anno_array,
+        'seg_fields': ['gt_seg_map'],
     }
     
-    os.makedirs(save_path, exist_ok=True)
+    if num_cropped is None:
+        num_cropped = int(np.prod(np.array(image_array.shape) // np.array(cropper.crop_size)))
+    
+    os.makedirs(save_folder, exist_ok=True)
     for crop_idx in range(num_cropped):
+        save_path = os.path.join(save_folder, f'{os.path.basename(save_folder)}_{crop_idx}.npz')
+        if os.path.exists(save_path):
+            continue
+        
         crop_bbox = cropper.crop_bbox(data)
         cropped_image_array = cropper.crop(image_array, crop_bbox).astype(np.int16)
         cropped_anno_array = cropper.crop(anno_array, crop_bbox).astype(np.uint8)
         np.savez_compressed(
-            file=os.path.join(save_path, f'{os.path.basename(save_path)}_{crop_idx}.npz'),
+            file=save_path,
             img=cropped_image_array,
-            gt_sem_seg=cropped_anno_array)
+            gt_seg_map=cropped_anno_array)
 
 
 if __name__ == '__main__':
     argparser = argparse.ArgumentParser('Pre-Random-Crop 3D')
     argparser.add_argument('source_mha_folder', type=str, help='The folder containing mha files.')
     argparser.add_argument('dest_npz_folder', type=str, help='The folder to save npz files.')
-    argparser.add_argument('crop_size', type=int, nargs=3, help='The size of cropped volume.')
-    argparser.add_argument('crop_cat_max', type=float, default=0.9, help='Max ratio for single catagory can occupy.')
-    argparser.add_argument('num_cropped', type=int, help='The number of cropped volumes per series.')
+    argparser.add_argument('--crop-size', type=int, nargs=3, required=True, help='The size of cropped volume.')
+    argparser.add_argument('--crop-cat-max', type=float, default=0.9, help='Max ratio for single catagory can occupy.')
+    argparser.add_argument('--num-cropped', type=int, default=None, help='The number of cropped volumes per series.')
     argparser.add_argument('--ignore-index', type=int, default=0, help='The index to ignore in segmentation.')
     argparser.add_argument('--mp', action='store_true', default=False, help='Whether to use multiprocessing.')
     args = argparser.parse_args()

@@ -1,3 +1,5 @@
+from typing import Sequence
+
 import cv2
 import numpy as np
 import SimpleITK as sitk
@@ -128,3 +130,35 @@ class LoadMaskFromMHA(LoadFromMHA):
         results['seg_fields'].append('gt_seg_map')
         return results
 
+
+
+class LoadSampleFromNpz(BaseTransform):
+    '''
+    Required Keys:
+
+    - img_path
+    - seg_map_path
+
+    Modified Keys:
+
+    - img
+    - gt_seg_map
+    - seg_fields
+    '''
+    def __init__(self, load_type:str|Sequence[str]):
+        self.load_type = load_type if isinstance(load_type, Sequence) else [load_type]
+        assert all([load_type in ['img', 'anno'] for load_type in self.load_type])
+    
+    
+    def transform(self, results):
+        assert results['img_path'] == results['seg_map_path']
+        sample_path = results['img_path']
+        sample = np.load(sample_path)
+        
+        if 'img' in self.load_type:
+            results['img'] = sample['img']
+        if 'anno' in self.load_type:
+            results['gt_seg_map'] = sample['gt_seg_map']
+            results['seg_fields'].append('gt_seg_map')
+        
+        return results

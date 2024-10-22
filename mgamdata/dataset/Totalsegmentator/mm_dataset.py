@@ -186,6 +186,19 @@ class TotalsegmentatorSeg3DDataset(BaseSegDataset):
 
 
 
+class Tsd3D_PreCrop_Npz(TotalsegmentatorSeg3DDataset):
+    def iter_series(self):
+        activate_series = self.meta_table[self.meta_table['split'] == self.split]
+        activate_series_id = activate_series['image_id'].tolist()
+        self.data_root: str
+        for series in activate_series_id:
+            samples = os.path.join(self.data_root, series)
+            for cropped_sample in os.listdir(samples):
+                if cropped_sample.endswith('.npz'):
+                    yield (os.path.join(samples, cropped_sample),
+                           os.path.join(samples, cropped_sample))
+
+
 class ParseID(BaseTransform):
     def transform(self, results):
         results['series_id'] = os.path.basename(
