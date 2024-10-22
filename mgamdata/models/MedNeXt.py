@@ -982,13 +982,14 @@ class MM_MedNext_Decoder(BaseModule):
         use_checkpoint: bool = False,
         block_counts: list = [2,2,2,2,2,2,2,2,2], # Can be used to test staging ratio: 
                                             # [3,3,9,3] in Swin as opposed to [2,2,2,2,2] in nnUNet
+        deep_supervision: bool = False,
         norm_type = 'group',
         dim = '2d',                                # 2d or 3d
         grn = False,
         *args, **kwargs,
     ):
-        super().__init__(*args, **kwargs,)
-        
+        super().__init__(*args, **kwargs)
+        self.deep_supervision = deep_supervision
         if type(exp_r) == int:
             exp_r = [exp_r] * len(block_counts)
         else:
@@ -1101,37 +1102,51 @@ class MM_MedNext_Decoder(BaseModule):
 
         self.block_counts = block_counts
     
-        if dim == '2d':
-            self.cls_seg = nn.Conv2d(embed_dims, num_classes, kernel_size=1)
-        elif dim == '3d':
-            self.cls_seg = nn.Conv3d(embed_dims, num_classes, kernel_size=1)
+        # output projections
+        self.out_0 = OutBlock(in_channels=embed_dims, n_classes=num_classes, dim=dim)
+        if deep_supervision:
+            self.out_1 = OutBlock(in_channels=embed_dims*2, n_classes=num_classes, dim=dim)
+            self.out_2 = OutBlock(in_channels=embed_dims*4, n_classes=num_classes, dim=dim)
+            self.out_3 = OutBlock(in_channels=embed_dims*8, n_classes=num_classes, dim=dim)
+            self.out_4 = OutBlock(in_channels=embed_dims*16, n_classes=num_classes, dim=dim)
     
     def forward(self, inputs):
         (x_res_0, x_res_1, x_res_2, x_res_3, x) = inputs
+        if self.deep_supervision:
+            x_ds_4 = self.checkpoint(self.out_4, x)
         
         x_up_3 = self.checkpoint(self.up_3, x)
         dec_x = x_res_3 + x_up_3
         x = self.checkpoint(self.dec_block_3, dec_x)
-
+        if self.deep_supervision:
+            x_ds_3 = self.checkpoint(self.out_3, x)
         del x_res_3, x_up_3
 
         x_up_2 = self.checkpoint(self.up_2, x)
         dec_x = x_res_2 + x_up_2 
         x = self.checkpoint(self.dec_block_2, dec_x)
+        if self.deep_supervision:
+            x_ds_2 = self.checkpoint(self.out_2, x)
         del x_res_2, x_up_2
 
         x_up_1 = self.checkpoint(self.up_1, x)
         dec_x = x_res_1 + x_up_1 
         x = self.checkpoint(self.dec_block_1, dec_x)
+        if self.deep_supervision:
+            x_ds_1 = self.checkpoint(self.out_1, x)
         del x_res_1, x_up_1
 
         x_up_0 = self.checkpoint(self.up_0, x)
         dec_x = x_res_0 + x_up_0 
         x = self.checkpoint(self.dec_block_0, dec_x)
+        x = self.checkpoint(self.out_0, x)
         del x_res_0, x_up_0, dec_x
 
-        x = self.checkpoint(self.cls_seg, x)
-        return x
+        if self.deep_supervision:
+            # deep_out element: Tensor[N, C, Z, Y, X]
+            return [x, x_ds_1, x_ds_2, x_ds_3, x_ds_4]
+        else: 
+            return x
 
 
 
@@ -1140,8 +1155,9 @@ class MM_MedNext_Decoder_3D(BaseDecodeHead_3D):
                  embed_dims: int,
                  num_classes: int,
                  exp_r = 4,
-                 kernel_size: int = 3,
+                 kernel_size: int = 7,
                  block_counts: list = [2,2,2,2,2,2,2,2,2],
+                 deep_supervision: bool = False,
                  use_checkpoint: bool = False,
                  norm_type = 'group',
                  grn = False,
@@ -1160,12 +1176,14 @@ class MM_MedNext_Decoder_3D(BaseDecodeHead_3D):
             *args, **kwargs
         )
         
+        self.deep_supervision = deep_supervision
         self.mednext = MM_MedNext_Decoder(
             embed_dims=embed_dims,
             num_classes=num_classes,
             exp_r=exp_r,
             kernel_size=kernel_size,
             block_counts=block_counts,
+            deep_supervision=deep_supervision,
             use_checkpoint=use_checkpoint,
             norm_type=norm_type,
             grn=grn,
