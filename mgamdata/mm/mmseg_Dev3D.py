@@ -1,3 +1,4 @@
+from abc import abstractmethod
 import pdb
 import warnings
 from collections.abc import Sequence
@@ -395,30 +396,28 @@ class BaseDecodeHead_3D(BaseDecodeHead):
         if self.dropout_ratio > 0:
             self.dropout = torch.nn.Dropout3d(self.dropout_ratio)    
 
+    @abstractmethod
+    def forward(self, inputs: tuple[Tensor]) -> tuple[Tensor]:
+        ...
 
-    def loss_by_feat(self, seg_logits: Tensor,
-                     batch_data_samples: list[Seg3DDataSample]) -> dict:
-        """Compute segmentation loss.
 
-        Args:
-            seg_logits (Tensor): The output from decode head forward function.
-            batch_data_samples (List[:obj:`SegDataSample`]): The seg
-                data samples. It usually includes information such
-                as `metainfo` and `gt_sem_seg`.
-
-        Returns:
-            dict[str, Tensor]: a dictionary of loss components
-        """
-
-        # [B, C, Z, Y, X]
-        seg_label = self._stack_batch_gt(batch_data_samples) # type: ignore
-        loss = dict()
-        seg_logits = F.interpolate(
-            input=seg_logits,
-            size=seg_label.shape[2:],
-            mode='trilinear')
+    def loss_per_layer(self,
+                       seg_logit:Tensor,
+                       seg_label:Tensor,
+                       losses_dict:dict,
+                       weight:float=1.,
+                      ) -> dict:
+        # seg_logit = F.interpolate(
+        #     input=seg_logit,
+        #     size=seg_label.shape[2:],
+        #     mode='trilinear')
+        seg_label = F.interpolate(
+            input=seg_label,
+            size=seg_logit.shape[2:],
+            mode='nearest')
+        
         if self.sampler is not None:
-            seg_weight = self.sampler.sample(seg_logits, seg_label)
+            seg_weight = self.sampler.sample(seg_logit, seg_label)
         else:
             seg_weight = None
         seg_label = seg_label.squeeze(1)
@@ -427,37 +426,83 @@ class BaseDecodeHead_3D(BaseDecodeHead):
             losses_decode = [self.loss_decode]
         else:
             losses_decode = self.loss_decode
+        
         for loss_decode in losses_decode:
-            if loss_decode.loss_name not in loss:
-                loss[loss_decode.loss_name] = loss_decode(
-                    seg_logits,
+            if loss_decode.loss_name not in losses_dict:
+                losses_dict[loss_decode.loss_name] = loss_decode(
+                    seg_logit,
                     seg_label,
                     weight=seg_weight,
-                    ignore_index=self.ignore_index)
+                    ignore_index=self.ignore_index) * weight
             else:
-                loss[loss_decode.loss_name] += loss_decode(
-                    seg_logits,
+                losses_dict[loss_decode.loss_name] += loss_decode(
+                    seg_logit,
                     seg_label,
                     weight=seg_weight,
-                    ignore_index=self.ignore_index)
+                    ignore_index=self.ignore_index) * weight
 
-        loss['acc_seg'] = accuracy(
-            seg_logits, seg_label, ignore_index=self.ignore_index)
-        return loss
+        return losses_dict
 
 
-    def predict_by_feat(self, seg_logits: Tensor,
-                        batch_img_metas: list[dict]) -> Tensor:
-        """Transform a batch of output seg_logits to the input shape.
+    def loss(self,
+             inputs: tuple[Tensor],
+             batch_data_samples: list[Seg3DDataSample],
+             train_cfg: dict) -> dict:
+        """Forward function for training.
 
         Args:
-            seg_logits (Tensor): The output from decode head forward function.
-            batch_img_metas (list[dict]): Meta information of each image, e.g.,
-                image size, scaling factor, etc.
+            inputs (Tuple[Tensor]): 
+                List of multi-level img features.
+                (N, C, Z, Y, X)
+            
+            batch_data_samples (list[:obj:`SegDataSample`]): The seg
+                data samples. It usually includes information such
+                as `img_metas` or `gt_semantic_seg`.
+            
+            train_cfg (dict): The training config.
+
+        Returns:
+            dict[str, Tensor]: a dictionary of loss components
+        """
+        # list of Tensor: [B, C, Z, Y, X]
+        seg_logits = self.forward(inputs)
+        # [B, C, Z, Y, X]
+        seg_label = self._stack_batch_gt(batch_data_samples) # type: ignore
+        
+        losses = dict()
+        
+        for i, seg_logit in enumerate(seg_logits):
+            losses = self.loss_per_layer(
+                seg_logit, seg_label, losses, weight=1/(2**i))
+        losses['acc_seg'].append(
+            accuracy(seg_logits[0],
+                     seg_label,
+                     ignore_index=self.ignore_index))
+
+        return losses
+
+
+    def predict(self,
+                inputs: tuple[Tensor],
+                batch_img_metas: list[dict],
+                test_cfg: dict) -> Tensor:
+        """Forward function for prediction.
+
+        Args:
+            inputs (Tuple[Tensor]): List of multi-level img features.
+            batch_img_metas (dict): List Image info where each dict may also
+                contain: 'img_shape', 'scale_factor', 'flip', 'img_path',
+                'ori_shape', and 'pad_shape'.
+                For details on the values of these keys see
+                `mmseg/datasets/pipelines/formatting.py:PackSegInputs`.
+            test_cfg (dict): The testing config.
 
         Returns:
             Tensor: Outputs segmentation logits map.
         """
+        seg_logits = self.forward(inputs)[0]    # Select the last output, shape: [B, C, Z, Y, X]
+        # check shape: [C, Z, Y, X]
+        assert seg_logits[0].shape == batch_img_metas[0]['gt_sem_seg'].shape
 
         if isinstance(batch_img_metas[0]['img_shape'], torch.Size):
             # slide inference

@@ -1144,9 +1144,9 @@ class MM_MedNext_Decoder(BaseModule):
 
         if self.deep_supervision:
             # deep_out element: Tensor[N, C, Z, Y, X]
-            return [x, x_ds_1, x_ds_2, x_ds_3, x_ds_4]
+            return (x, x_ds_1, x_ds_2, x_ds_3, x_ds_4)
         else: 
-            return x
+            return (x,)
 
 
 

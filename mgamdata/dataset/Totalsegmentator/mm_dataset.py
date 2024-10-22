@@ -12,8 +12,7 @@ from tqdm import tqdm
 
 from .meta import (
     CLASS_INDEX_MAP, DATA_ROOT_SLICE2D_TIFF, 
-    get_subset_and_rectify_map, DATA_ROOT_3D_MHA, META_CSV_PATH
-)
+    get_subset_and_rectify_map, DATA_ROOT_3D_MHA, META_CSV_PATH)
 
 
 
@@ -150,6 +149,7 @@ class TotalsegmentatorSeg3DDataset(BaseSegDataset):
     def iter_series(self):
         activate_series = self.meta_table[self.meta_table['split'] == self.split]
         activate_series_id = activate_series['image_id'].tolist()
+        self.data_root: str
         for series in activate_series_id:
             yield (os.path.join(self.data_root, series, 'ct.mha'),
                    os.path.join(self.data_root, series, 'segmentations.mha'))
