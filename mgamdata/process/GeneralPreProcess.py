@@ -219,4 +219,5 @@ class InstanceNorm(BaseTransform):
     def transform(self, results):
         results['img'] = (results['img'] - results['img'].mean())
         results['img'] = results['img'] / (results['img'].std() + self.eps)
+        results['img'] = results['img'].astype(np.float32)
         return results

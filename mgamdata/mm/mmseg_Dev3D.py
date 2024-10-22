@@ -10,12 +10,8 @@ import torch
 from torch import Tensor
 from torch.nn import functional as F
 
-import mmcv
 from mmcv.transforms import to_tensor, Resize, BaseTransform
-from mmengine.dist import master_only
 from mmengine.runner import Runner
-from mmengine.fileio import get
-from mmengine.logging import print_log
 from mmengine.structures.base_data_element import BaseDataElement
 from mmseg.engine.hooks import SegVisualizationHook
 from mmseg.datasets.transforms import PackSegInputs
@@ -497,8 +493,8 @@ class DiceLoss_3D(DiceLoss):
         """
         num_classes = pred.shape[1]
         one_hot_target = torch.clamp(target, min=0, max=num_classes)
-        one_hot_target = torch.nn.functional.one_hot(one_hot_target.to(torch.int64),
-                                                    num_classes + 1)
+        one_hot_target = torch.nn.functional.one_hot(
+            one_hot_target.to(torch.int64), num_classes+1)
         one_hot_target = one_hot_target[..., :num_classes].permute(0, 4, 1, 2, 3)
         return one_hot_target
 
@@ -507,6 +503,7 @@ class DiceLoss_3D(DiceLoss):
         if (pred.shape != target.shape):
             target = self._expand_onehot_labels_dice_3D(
                 pred, target)
+            assert pred.shape == target.shape
         return super().forward(pred, target, *args, **kwargs)
 
 
