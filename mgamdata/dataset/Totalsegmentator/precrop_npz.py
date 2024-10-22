@@ -46,13 +46,13 @@ def crop_per_series(args:tuple):
 
 if __name__ == '__main__':
     argparser = argparse.ArgumentParser('Pre-Random-Crop 3D')
-    argparser.add_argument('source_mha_folder', type=str, help='The folder containing mha files.')
-    argparser.add_argument('dest_npz_folder', type=str, help='The folder to save npz files.')
-    argparser.add_argument('--crop-size', type=int, nargs=3, required=True, help='The size of cropped volume.')
-    argparser.add_argument('--crop-cat-max', type=float, default=0.9, help='Max ratio for single catagory can occupy.')
-    argparser.add_argument('--num-cropped', type=int, default=None, help='The number of cropped volumes per series.')
-    argparser.add_argument('--ignore-index', type=int, default=0, help='The index to ignore in segmentation.')
-    argparser.add_argument('--mp', action='store_true', default=False, help='Whether to use multiprocessing.')
+    argparser.add_argument('source_mha_folder', type=str,   help='The folder containing mha files.')
+    argparser.add_argument('dest_npz_folder',   type=str,   help='The folder to save npz files.')
+    argparser.add_argument('--crop-size',       type=int,   nargs=3, required=True, help='The size of cropped volume.')
+    argparser.add_argument('--crop-cat-max',    type=float, default=0.9, help='Max ratio for single catagory can occupy.')
+    argparser.add_argument('--num-cropped',     type=int,   default=None, help='The number of cropped volumes per series.')
+    argparser.add_argument('--ignore-index',    type=int,   default=255, help='The index to ignore in segmentation.')
+    argparser.add_argument('--mp', action='store_true',     default=False, help='Whether to use multiprocessing.')
     args = argparser.parse_args()
     
     task_list = []
