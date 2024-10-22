@@ -474,10 +474,11 @@ class BaseDecodeHead_3D(BaseDecodeHead):
         for i, seg_logit in enumerate(seg_logits):
             losses = self.loss_per_layer(
                 seg_logit, seg_label, losses, weight=1/(2**i))
-        losses['acc_seg'].append(
-            accuracy(seg_logits[0],
-                     seg_label,
-                     ignore_index=self.ignore_index))
+        
+        losses['acc_seg'] = accuracy(
+            seg_logits[0],
+            seg_label.squeeze(1),
+            ignore_index=self.ignore_index)
 
         return losses
 
@@ -501,8 +502,6 @@ class BaseDecodeHead_3D(BaseDecodeHead):
             Tensor: Outputs segmentation logits map.
         """
         seg_logits = self.forward(inputs)[0]    # Select the last output, shape: [B, C, Z, Y, X]
-        # check shape: [C, Z, Y, X]
-        assert seg_logits[0].shape == batch_img_metas[0]['gt_sem_seg'].shape
 
         if isinstance(batch_img_metas[0]['img_shape'], torch.Size):
             # slide inference
@@ -1007,7 +1006,7 @@ class RandomCrop3D(BaseTransform):
         self.ignore_index = ignore_index
 
 
-    def crop_bbox(self, results: dict) -> tuple:
+    def crop_bbox(self, results: dict, failed_times:int=0) -> tuple:
         """get a crop bounding box.
 
         Args:
@@ -1043,12 +1042,12 @@ class RandomCrop3D(BaseTransform):
         crop_bbox = generate_crop_bbox(img)
         if self.cat_max_ratio < 1.:
             # Repeat 10 times
-            for _ in range(10):
+            for crop_time in range(10):
                 seg_temp = self.crop(results['gt_seg_map'], crop_bbox)
                 labels, cnt = np.unique(seg_temp, return_counts=True)
                 cnt = cnt[labels != self.ignore_index]
-                if len(cnt) > 1 and np.max(cnt) / np.sum(
-                        cnt) < self.cat_max_ratio:
+                if (len(cnt) > 1) and \
+                    ((np.max(cnt) / np.sum(cnt)) < self.cat_max_ratio):
                     break
                 crop_bbox = generate_crop_bbox(img)
 
@@ -1100,3 +1099,6 @@ class RandomCrop3D(BaseTransform):
 
     def __repr__(self):
         return self.__class__.__name__ + f'(crop_size={self.crop_size})'
+
+
+
