@@ -130,7 +130,6 @@ class TotalsegmentatorSeg3DDataset(BaseSegDataset):
                  debug:bool=False,
                  **kwargs) -> None:
         self.split = split
-        self.data_root = DATA_ROOT_3D_MHA
         self.debug = debug
         self.meta_table = pd.read_csv(META_CSV_PATH)
         
@@ -139,9 +138,7 @@ class TotalsegmentatorSeg3DDataset(BaseSegDataset):
         else:
             new_classes = self.METAINFO['classes']
         
-        super().__init__(data_root=self.data_root, 
-                         metainfo={'classes':new_classes}, 
-                         **kwargs)
+        super().__init__(metainfo={'classes':new_classes}, **kwargs)
 
 
     def _update_palette(self) -> list[list[int]]:
