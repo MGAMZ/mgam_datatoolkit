@@ -1,5 +1,6 @@
 import os
 import argparse
+import json
 import multiprocessing as mp
 from tqdm import tqdm
 
@@ -54,6 +55,11 @@ if __name__ == '__main__':
     argparser.add_argument('--ignore-index',    type=int,   default=255, help='The index to ignore in segmentation.')
     argparser.add_argument('--mp', action='store_true',     default=False, help='Whether to use multiprocessing.')
     args = argparser.parse_args()
+    
+    os.makedirs(args.dest_npz_folder, exist_ok=True)
+    json.dump(vars(args),
+              open(os.path.join(args.dest_npz_folder, 'crop_meta.json'), 'w'),
+              indent=4)
     
     task_list = []
     for series in os.listdir(args.source_mha_folder):
