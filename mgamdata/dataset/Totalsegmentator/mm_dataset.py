@@ -199,11 +199,10 @@ class Tsd3D_PreCrop_Npz(TotalsegmentatorSeg3DDataset):
                            os.path.join(samples, cropped_sample))
 
 
+
 class ParseID(BaseTransform):
     def transform(self, results):
         results['series_id'] = os.path.basename(
             os.path.dirname(results['img_path'])
         )
         return results
-
-

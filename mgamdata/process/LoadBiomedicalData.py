@@ -97,7 +97,6 @@ class LoadImageFromMHA(LoadFromMHA):
         results['img'] = img  # output: [Z, Y, X]
         results['img_shape'] = img.shape
         results['ori_shape'] = img.shape
-        results['sitk_image'] = img_mha
         return results
 
 
