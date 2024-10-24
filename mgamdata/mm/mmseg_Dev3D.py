@@ -578,7 +578,7 @@ class Seg3DVisualizationHook(SegVisualizationHook):
                 data_sample=outputs[0],
                 show=self.show,
                 wait_time=self.wait_time,
-                step=batch_idx)
+                step=total_curr_iter)
 
 
     def after_test_iter(self, runner: Runner, batch_idx: int, data_batch: dict,
