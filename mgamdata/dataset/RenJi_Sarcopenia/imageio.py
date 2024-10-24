@@ -73,7 +73,6 @@ def load_ct_as_sitk_image(file_path, get_raw_value=False):
     return sitk_image
 
 
-
 def dcm_2_mha(dcm_path, mha_path, use_compress):
     res = load_ct_info(dcm_path)
     sitk.WriteImage(res['sitk_image'], mha_path, use_compress)

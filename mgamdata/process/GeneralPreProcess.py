@@ -217,7 +217,8 @@ class InstanceNorm(BaseTransform):
         self.eps = eps
     
     def transform(self, results):
+        ori_dtype = results['img'].dtype
         results['img'] = (results['img'] - results['img'].mean())
         results['img'] = results['img'] / (results['img'].std() + self.eps)
-        results['img'] = results['img'].astype(np.float32)
+        results['img'] = results['img'].astype(ori_dtype)
         return results
