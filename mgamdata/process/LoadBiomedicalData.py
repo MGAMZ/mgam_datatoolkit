@@ -122,7 +122,6 @@ class LoadMaskFromMHA(LoadFromMHA):
     def transform(self, results):
         mask_path = results['seg_map_path']
         mask_mha = sitk.ReadImage(mask_path)
-        mask_mha.CopyInformation(results['sitk_image'])
         mask = self._process_mha(mask_mha, 'mask')
         
         results['gt_seg_map'] = mask # output: [H, W, D]
