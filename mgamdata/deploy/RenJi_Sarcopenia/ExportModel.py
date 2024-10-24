@@ -19,6 +19,8 @@ class mm_model_warpper(torch.nn.Module):
         self.model:EncoderDecoder = init_model(args.cfg_path, args.ckpt_path).cuda()
         self.requires_grad_(False)
         self.eval()
+        self.args = args
+
     
     def forward(self, inputs):
         return self.model._forward(inputs)
@@ -55,7 +57,7 @@ def export_jit(model, image:torch.Tensor, label:np.ndarray):
     # JIT trace
     exported = torch.jit.trace(model, image)
     
-    # output: torch.Size([1, 5, 512, 512]) | torch.float32
+    # output: torch.Size([1, 5, 512, 512]) | torch.float32 or torch.float16
     # 直接推理
     no_jit_pred = model(image)
     # JIT推理
@@ -110,6 +112,8 @@ def export_onnx(model, image:torch.Tensor, label:np.ndarray):
 
 def main(args):
     model = mm_model_warpper(args)
+    if args.fp16:
+        model = model.half()
     
     # 拿一个样本来，简单预处理
     image, label = fetch_sample()
@@ -118,7 +122,9 @@ def main(args):
     
     # 处理后，神经网络的输入如下
     # [1, 1, 512, 512]
-    image = torch.stack(data['inputs']).to(dtype=torch.float32, device='cuda')
+    image = torch.stack(data['inputs']).to(
+        dtype=torch.float16 if args.fp16 else torch.float32, 
+        device='cuda')
     print(f"The Input has shape: {image.shape}")
 
     if args.export_type == 'onnx':
@@ -134,5 +140,6 @@ if __name__ == '__main__':
     parser.add_argument('cfg_path', type=str, help='Config file path')
     parser.add_argument('ckpt_path', type=str, help='Checkpoint file path')
     parser.add_argument('save_path', type=str, help='Output path')
+    parser.add_argument('--fp16', action='store_true', default=False, help='Whether to use fp16')
     args = parser.parse_args()
     main(args)

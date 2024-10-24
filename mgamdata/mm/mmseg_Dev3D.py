@@ -277,11 +277,11 @@ class EncoderDecoder_3D(EncoderDecoder):
         w_grids = max(w_img - w_crop + w_stride - 1, 0) // w_stride + 1
         preds = torch.zeros(
             size=(batch_size, out_channels, d_img, h_img, w_img),
-            dtype=torch.float32,
+            dtype=torch.float16,
             device=accu_device)
         count_mat = torch.zeros(
             size=(batch_size, 1, d_img, h_img, w_img),
-            dtype=torch.int32,
+            dtype=torch.uint8,
             device=accu_device)
         
         for d_idx in range(d_grids):
