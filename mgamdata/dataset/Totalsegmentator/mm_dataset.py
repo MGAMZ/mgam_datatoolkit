@@ -132,7 +132,7 @@ class TotalsegmentatorSeg3DDataset(BaseSegDataset):
         self.debug = debug
         self.meta_table = pd.read_csv(META_CSV_PATH)
         
-        if subset is not None:
+        if subset is not None and subset != 'all':
             new_classes = list(get_subset_and_rectify_map(subset)[0].keys())
         else:
             new_classes = self.METAINFO['classes']
