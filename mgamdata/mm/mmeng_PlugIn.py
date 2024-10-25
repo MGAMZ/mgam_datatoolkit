@@ -18,7 +18,7 @@ from mmengine.dataset.sampler import DefaultSampler
 from mmengine.runner import Runner, IterBasedTrainLoop, FlexibleRunner
 from mmengine.runner.runner import ConfigType
 from mmengine.hooks import LoggerHook
-from mmengine.logging import print_log
+from mmengine.logging import print_log, MMLogger
 from mmengine.optim.optimizer import AmpOptimWrapper
 from mmengine.model.wrappers import MMDistributedDataParallel, MMFullyShardedDataParallel
 
@@ -254,7 +254,8 @@ class RatioSampler(DefaultSampler):
     def __init__(self, use_sample_ratio:float, **kwargs):
         super().__init__(**kwargs)
         self.use_sample_ratio = use_sample_ratio
-        print_log(f"RatioSampler used, original num of sample {super().__len__()} -> used {len(self)}")
+        print_log(f"RatioSampler used, original num of sample {super().__len__()} -> used {len(self)}",
+                  MMLogger.get_current_instance())
 
     def __iter__(self):
         indices = np.array(list(super().__iter__()))
