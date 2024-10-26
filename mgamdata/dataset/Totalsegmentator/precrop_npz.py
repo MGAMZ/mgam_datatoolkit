@@ -1,3 +1,38 @@
+"""
+MGAM Datatoolkits Totalsegmentator 3D Pre-Crop Script.
+
+The source structure:
+
+data_root
+├── case1/
+│   ├── ct.mha
+│   └── segmentations.mha
+│
+├── case2/
+│   ├── ct.mha
+│   └── segmentations.mha
+│
+└── ...
+
+dest_root
+├── case1/
+│   ├── case1_0.npz
+│   │   ├── img
+│   │   └── gt_seg_map
+│   │
+│   ├── case1_1.npz
+│   │   └── ...
+│   │
+│   └── ...
+│
+├── case2/
+│   └── ...
+│
+└── ...
+
+"""
+
+
 import os
 import argparse
 import json
@@ -7,7 +42,6 @@ from tqdm import tqdm
 import numpy as np
 import SimpleITK as sitk
 
-from mgamdata.mm.mmseg_Dev3D import RandomCrop3D
 
 
 def crop_per_series(args:tuple):
@@ -52,7 +86,11 @@ if __name__ == '__main__':
     argparser.add_argument('--crop-size',       type=int,   nargs=3, required=True, help='The size of cropped volume.')
     argparser.add_argument('--crop-cat-max',    type=float, default=0.9, help='Max ratio for single catagory can occupy.')
     argparser.add_argument('--num-cropped',     type=int,   default=None, help='The number of cropped volumes per series.')
-    argparser.add_argument('--ignore-index',    type=int,   default=255, help='The index to ignore in segmentation.')
+    argparser.add_argument('--ignore-index',    type=int,   default=255, 
+                           help='The index to ignore in segmentation. '
+                                'It will not taken into consideration during '
+                                'the determination of whether the cropped patch '
+                                'meets the `crop-cat-max` setting.')
     argparser.add_argument('--mp', action='store_true',     default=False, help='Whether to use multiprocessing.')
     args = argparser.parse_args()
     
@@ -61,6 +99,7 @@ if __name__ == '__main__':
               open(os.path.join(args.dest_npz_folder, 'crop_meta.json'), 'w'),
               indent=4)
     
+    from mgamdata.mm.mmseg_Dev3D import RandomCrop3D
     task_list = []
     for series in os.listdir(args.source_mha_folder):
         task_list.append((

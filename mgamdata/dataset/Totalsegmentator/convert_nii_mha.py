@@ -8,14 +8,14 @@ import numpy as np
 import SimpleITK as sitk
 
 from mgamdata.io.nii_toolkit import convert_nii_sitk, merge_masks
-from mgamdata.io.sitk_toolkit import sitk_resample_to_spacing_v2
+from mgamdata.io.sitk_toolkit import sitk_resample_to_spacing_v2, sitk_resample_to_size
 from mgamdata.dataset.Totalsegmentator.meta import CLASS_INDEX_MAP
 
 
 
 
 def convert_one_case(args):
-    series_input_folder, series_output_folder, spacing = args
+    series_input_folder, series_output_folder, spacing, size = args
     # 构建路径，保持文件存储结构不变
     input_image_nii_path = os.path.join(series_input_folder, 'ct.nii.gz')
     output_image_mha_path = os.path.join(series_output_folder, 'ct.mha')
@@ -25,16 +25,20 @@ def convert_one_case(args):
         return
     
     # 原始扫描转换为SimpleITK格式并保存
-    input_image_mha = convert_nii_sitk(input_image_nii_path, dtype=np.int16) # type: ignore
-    original_input_image_mha = input_image_mha
-    if spacing is not None:
-        input_image_mha = sitk_resample_to_spacing_v2(input_image_mha, spacing, 'image')
-    sitk.WriteImage(input_image_mha, output_image_mha_path, useCompression=True)
-    
     # 类分离的标注文件合并后保存
-    merged_itk = merge_one_case_segmentations(original_input_image_mha, series_input_folder)
+    input_image_mha = convert_nii_sitk(input_image_nii_path, dtype=np.int16) # type: ignore
+    merged_itk = merge_one_case_segmentations(input_image_mha, series_input_folder)
+    
     if spacing is not None:
-        merged_itk = sitk_resample_to_spacing_v2(merged_itk, spacing, 'label')
+        assert size is None, "Cannot set both spacing and size."
+        input_image_mha = sitk_resample_to_spacing_v2(input_image_mha, spacing, 'image')
+        merged_itk = sitk_resample_to_spacing_v2(merged_itk, spacing, 'image')
+    if size is not None:
+        assert spacing is None, "Cannot set both spacing and size."
+        input_image_mha = sitk_resample_to_size(input_image_mha, size, 'label')
+        merged_itk = sitk_resample_to_size(merged_itk, size, 'label')
+    
+    sitk.WriteImage(input_image_mha, output_image_mha_path, useCompression=True)
     sitk.WriteImage(merged_itk, output_anno_mha_path, useCompression=True)
 
 
@@ -59,13 +63,14 @@ def merge_one_case_segmentations(corresponding_itk_image:sitk.Image,
 def convert_and_save_nii_to_mha(input_dir: str, 
                                 output_dir: str, 
                                 use_mp: bool,
-                                spacing:Sequence[float|int]|None=None):
+                                spacing:Sequence[float|int]|None=None,
+                                size:Sequence[float|int]|None=None):
     task_list = []
     for series_name in os.listdir(input_dir):
         if os.path.isdir(os.path.join(input_dir, series_name)):
             series_input_folder = os.path.join(input_dir, series_name)
             series_output_folder = os.path.join(output_dir, series_name)
-            task_list.append((series_input_folder, series_output_folder, spacing))
+            task_list.append((series_input_folder, series_output_folder, spacing, size))
     
     if use_mp:
         with multiprocessing.Pool() as pool:
@@ -91,9 +96,10 @@ def main():
     parser.add_argument('output_dir', type=str, help="Save MHA files.")
     parser.add_argument('--mp', action='store_true', help="Use multiprocessing.")
     parser.add_argument('--spacing', type=float, nargs=3, default=None, help="Resample to this spacing.")
+    parser.add_argument('--size', type=int, nargs=3, default=None, help="Crop to this size.")
     args = parser.parse_args()
     
-    convert_and_save_nii_to_mha(args.input_dir, args.output_dir, args.mp, args.spacing)
+    convert_and_save_nii_to_mha(args.input_dir, args.output_dir, args.mp, args.spacing, args.size)
 
 
 

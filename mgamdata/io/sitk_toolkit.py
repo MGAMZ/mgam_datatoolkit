@@ -2,7 +2,7 @@ import os
 import os.path as osp
 import pdb
 import warnings
-from typing import Tuple, Optional
+from collections.abc import Sequence
 from glob import glob
 from colorama import Style, Fore
 from typing_extensions import deprecated
@@ -15,7 +15,7 @@ import SimpleITK as sitk
 
 @deprecated("已在V2版本中实现性能改进")
 def sitk_resample_to_spacing(image: sitk.Image, 
-                             new_spacing:Tuple[float, float, float], 
+                             new_spacing:tuple[float, float, float], 
                              interpolator,
                              default_value=0.):
     """ 
@@ -34,13 +34,13 @@ def sitk_resample_to_spacing(image: sitk.Image,
 
 
 def sitk_resample_to_spacing_v2(mha:sitk.Image, 
-                                spacing:Tuple[float,float,float], 
+                                spacing:Sequence[float], 
                                 field:str):
     """改进后的重采样方法。
 
     Args:
         mha (sitk.Image): 输入sitk.Image
-        spacing (Tuple[float,float,float]): 新的spacing
+        spacing (tuple[float,float,float]): 新的spacing
         field (str, optional): 重采样的对象。 可选'image', 'label', 'mask'.
                                本参数将决定插值方法和数据格式。
     
@@ -51,6 +51,7 @@ def sitk_resample_to_spacing_v2(mha:sitk.Image,
     assert field in ['image', 'label', 'mask'], "field must be one of ['image', 'label', 'mask']"
     
     # 计算重采样后的Spacing
+    spacing = spacing[::-1]
     original_size = mha.GetSize()
     original_spacing = mha.GetSpacing()
     spacing_ratio = [original_spacing[i]/spacing[i] for i in range(3)]
@@ -100,9 +101,12 @@ def sitk_resample_to_image(image:sitk.Image,
 
 
 
-def sitk_resample_to_size(image, new_size, field='image'):
+def sitk_resample_to_size(image, new_size:list[float], field='image'):
+    new_size = new_size[::-1]
     original_size = image.GetSize()
     original_spacing = image.GetSpacing()
+    if len(new_size) == 2:
+        new_size = new_size + [original_size[-1]]
     new_spacing = np.divide(original_spacing, np.divide(new_size, original_size))
     resampled = sitk.Resample(
         image1=image,
@@ -134,10 +138,10 @@ def calculate_origin_offset(new_spacing, old_spacing):
 
 
 def LoadDcmAsSitkImage_EngineeringOrder(dcm_case_path, spacing, sort_by_distance=True
-    ) -> Tuple[sitk.Image, 
-         Optional[Tuple[float, float, float]], 
-         Optional[Tuple[int, int, int]],
-         Optional[Tuple[int, int, int]]
+    ) -> tuple[sitk.Image, 
+         tuple[float, float, float]|None, 
+         tuple[int, int, int]|None,
+         tuple[int, int, int]|None
     ]:
     # Spacing: [D, H, W]
     
@@ -235,10 +239,10 @@ def LoadDcmAsSitkImage_EngineeringOrder(dcm_case_path, spacing, sort_by_distance
 
 
 def LoadDcmAsSitkImage_JianYingOrder(dcm_case_path, spacing
-    ) -> Tuple[sitk.Image, 
-               Optional[Tuple[float, float, float]], 
-               Optional[Tuple[int, int, int]],
-               Optional[Tuple[int, int, int]]
+    ) -> tuple[sitk.Image, 
+               tuple[float, float, float]|None, 
+               tuple[int, int, int]|None,
+               tuple[int, int, int]|None
     ]:
     
     dcms = []
@@ -287,7 +291,7 @@ def LoadDcmAsSitkImage_JianYingOrder(dcm_case_path, spacing
 
 
 
-def LoadDcmAsSitkImage(mode:str, dcm_case_path:str, spacing:Tuple[float, float, float]):
+def LoadDcmAsSitkImage(mode:str, dcm_case_path:str, spacing:tuple[float, float, float]):
     assert mode.lower() in ['engineering', 'jianying'], "mode must be one of ['engineering', 'jianying']"
 
     if mode.lower() == 'engineering':
