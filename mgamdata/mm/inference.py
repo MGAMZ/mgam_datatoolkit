@@ -10,6 +10,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import SimpleITK as sitk
 from torch import Tensor
+from torch.nn import functional as F
 
 from mmseg.models.segmentors import BaseSegmentor
 from mmseg.apis.inference import init_model, _preprare_data
@@ -79,13 +80,19 @@ class Inferencer_2D:
         return self.Inference_FromITK(image)
 
 
-    def Inference_FromITKFolder(self, folder:str):
+    def Inference_FromITKFolder(self, folder:str, check_exist_path:str|None=None):
         mha_files = []
         for root, _, files in os.walk(folder):
             for file in files:
                 if file.endswith('.mha'):
-                    mha_files.append(osp.join(root, file))
-        print(f"Inferencing from Folder: {folder}.")
+                    if check_exist_path is not None:
+                        if os.path.exists(osp.join(check_exist_path, file)):
+                            print(f"Already inferenced: {file}.")
+                            continue
+                    else:
+                        mha_files.append(osp.join(root, file))
+        
+        print(f"\nInferencing from Folder: {folder}, Total {len(mha_files)} mha files.\n")
         
         for mha_path in tqdm(mha_files,
                              desc='Inference_FromITKFolder',
@@ -93,6 +100,7 @@ class Inferencer_2D:
                              dynamic_ncols=True):
             itk_image = sitk.ReadImage(mha_path)
             itk_image, itk_pred = self.Inference_FromITK(itk_image)
+            tqdm.write(f"Successfully inferenced: {os.path.basename(mha_path)}.")
             yield itk_image, itk_pred, mha_path
 
 
