@@ -239,22 +239,26 @@ class ParalleledMultiWindowProcessing(BaseModule):
         """
         x = []
         projector_aux_losses = []
+        streams = [torch.cuda.Stream() for _ in range(self.num_windows)]
         
         for i in range(self.num_windows):
-            extracted = getattr(self, f"window_extractor_{i}")(inputs)
-            
-            # window_response = getattr(self, f"window_extractor_{i}").current_response
-            # print(f"Auto Window Response: Mean {window_response.mean():.2f} Std {window_response.std():.2f} "
-            #   f"Max {window_response.max():.2f} Min {window_response.min():.2f}")
-            
-            projected = getattr(
-                self, f"value_wise_projector_{i}").forward(extracted)
-            x.append(projected)
-            
-            if enable_projector_aux_loss:
-                projector_aux_loss = getattr(
-                    self, f"value_wise_projector_{i}").regulation()
-                projector_aux_losses.append(projector_aux_loss)
+            with torch.cuda.stream(streams[i]):
+                extracted = getattr(self, f"window_extractor_{i}")(inputs)
+                
+                # window_response = getattr(self, f"window_extractor_{i}").current_response
+                # print(f"Auto Window Response: Mean {window_response.mean():.2f} Std {window_response.std():.2f} "
+                #   f"Max {window_response.max():.2f} Min {window_response.min():.2f}")
+                
+                projected = getattr(
+                    self, f"value_wise_projector_{i}").forward(extracted)
+                x.append(projected)
+                
+                if enable_projector_aux_loss:
+                    projector_aux_loss = getattr(
+                        self, f"value_wise_projector_{i}").regulation()
+                    projector_aux_losses.append(projector_aux_loss)
+        
+        torch.cuda.synchronize()
         
         x = torch.stack(x, dim=0) # [W, N, C, ...]
         x = self.cross_window_fusion(x) # [N, Win*C, ...]
