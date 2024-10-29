@@ -9,7 +9,11 @@ import SimpleITK as sitk
 
 
 
-def convert_nii_sitk(nii_path:str, dtype=np.float32) -> sitk.Image:
+def convert_nii_sitk(nii_path:str, 
+                     dtype=np.float32, 
+                     nii_fdata_order:str='zyx') -> sitk.Image:
+    """保证itk mha格式维度顺序为zyx"""
+    
     nib_img = nib.load(nii_path)
     nib_array:np.ndarray = nib_img.get_fdata()
     nib_meta = nib_img.header
@@ -17,10 +21,19 @@ def convert_nii_sitk(nii_path:str, dtype=np.float32) -> sitk.Image:
     nib_origin = nib_meta.get_qform()[0:3, 3].tolist()
     nib_direction = nib_meta.get_qform()[0:3, 0:3].flatten().tolist()
     
+    if nii_fdata_order == 'xyz':
+        nib_array = np.transpose(nib_array, (2, 1, 0))
+    elif nii_fdata_order == 'zyx':
+        nib_spacing = nib_spacing[::-1]
+        nib_origin = nib_origin[::-1]
+        nib_direction = nib_direction[::-1]
+    else:
+        raise ValueError(f"Invalid nii_fdata_order: {nii_fdata_order}")
+    
     sitk_img = sitk.GetImageFromArray(nib_array.astype(dtype))
-    sitk_img.SetSpacing(nib_spacing[::-1])
-    sitk_img.SetOrigin(nib_origin[::-1])
-    sitk_img.SetDirection(nib_direction[::-1])
+    sitk_img.SetSpacing(nib_spacing)
+    sitk_img.SetOrigin(nib_origin)
+    sitk_img.SetDirection(nib_direction)
     return sitk_img
 
 
