@@ -1,9 +1,7 @@
 import pdb
-from collections.abc import Sequence
 
 import torch
 from torch import Tensor
-from torch.utils.checkpoint import checkpoint
 
 from mmengine.model.base_module import BaseModule
 from mmseg.registry import MODELS
@@ -15,20 +13,25 @@ from mgamdata.mm.mmseg_Dev3D import EncoderDecoder_3D
 class WindowExtractor(BaseModule):
     "Extract values from raw array using a learnable window."
 
+    DYNAMIC_WEAK_RESPONSE_AMPLIFIER = 10
+    DYNAMIC_INTENSE_RESPONSE_AMPLIFIER = 10
+    DYNAMIC_RANGE_AMPLIFIER = 100
+
     def __init__(self, 
                  value_range:list[int],
+                 eps:float=1e-6,
                  *args, **kwargs):
         assert len(value_range) == 2 and value_range[1] > value_range[0]
         super().__init__(*args, **kwargs)
         self.value_range = value_range
         self.window_sample = torch.arange(*self.value_range)
         self.dynamic_range = torch.nn.Parameter(
-            torch.tensor([(value_range[1] - value_range[0]) / 2],
-                         dtype=torch.float32))
+            torch.tensor([0.5], dtype=torch.float32))
         self.dynamic_weak_response = torch.nn.Parameter(
             torch.tensor([1], dtype=torch.float32))
         self.dynamic_intense_response = torch.nn.Parameter(
             torch.tensor([1], dtype=torch.float32))
+        self.eps = eps
     
     @property
     @torch.inference_mode()
@@ -45,13 +48,20 @@ class WindowExtractor(BaseModule):
         Args:
             inputs (Tensor): (...)
         """
-        response = self.dynamic_range * \
-            (
-                self.dynamic_weak_response * torch.exp(x / self.dynamic_range) \
-                - self.dynamic_intense_response * torch.exp(-x / self.dynamic_range)
+        d_r = self.dynamic_range * self.DYNAMIC_RANGE_AMPLIFIER
+        d_wr = self.dynamic_weak_response * self.DYNAMIC_WEAK_RESPONSE_AMPLIFIER
+        d_ir = self.dynamic_intense_response * self.DYNAMIC_INTENSE_RESPONSE_AMPLIFIER
+        d_r = torch.relu(d_r) + self.eps
+        d_wr = torch.relu(d_wr) + self.eps
+        d_ir = torch.relu(d_ir) + self.eps
+        
+        response = \
+            d_r * (
+                  d_wr * torch.exp( x / d_r) \
+                - d_ir * torch.exp(-x / d_r)
             ) / (
-                self.dynamic_weak_response * torch.exp(x / self.dynamic_range) \
-                + self.dynamic_intense_response * torch.exp(-x / self.dynamic_range)
+                  d_wr * torch.exp( x / d_r) \
+                + d_ir * torch.exp(-x / d_r)
             )
         
         return response
@@ -90,10 +100,10 @@ class ValueWiseProjector(BaseModule):
                 affine=True,
                 track_running_stats=True)
         
-        self.projection_activation = torch.nn.Tanh()
         self.projection_coefficient = torch.nn.Parameter(
             torch.cat([torch.ones(1), torch.zeros(order-1)]))
         self.projection_bias = torch.nn.Parameter(torch.randn(1) / 10)
+        self.projection_exponent = torch.arange(1, order+1)
         
         self.sample_data = torch.arange(
             *self.valid_range, 
@@ -128,8 +138,9 @@ class ValueWiseProjector(BaseModule):
         Args:
             inputs (Tensor): (N, C, ...)
         """
-        normed = self.pmwm_norm(inputs)
-        response = self.projection_activation(normed)
+        
+        response:torch.Tensor = self.pmwm_norm(inputs)
+        
         """
         high_order_mapping = 
             x^order * W_order + 
@@ -144,11 +155,12 @@ class ValueWiseProjector(BaseModule):
         Args:
             inputs (Tensor): (...)
         """
-        projected = torch.stack([
-            response**(i+1) * self.projection_coefficient[i] 
-            for i in range(self.order)
-        ]).sum(dim=0) + self.projection_bias
-        return projected
+        self.projection_exponent = self.projection_exponent.to(device=inputs.device)
+        projected = response.expand(self.order, *response.shape).moveaxis(0, -1) # [..., order]
+        projected = torch.pow(projected, self.projection_exponent) # [..., order]
+        projected = torch.matmul(projected, self.projection_coefficient) # [...]
+        projected += self.projection_bias # [...]
+        return projected # [...]
 
 
 
@@ -230,10 +242,9 @@ class ParalleledMultiWindowProcessing(BaseModule):
         
         # TODO Maybe Point-Wise Attention?
         self.cross_window_fusion = BatchCrossWindowFusion(self.num_windows)
-        self.streams = [torch.cuda.Stream() for _ in range(self.num_windows)]
 
 
-    def forward(self, inputs:Tensor, enable_projector_aux_loss:bool=False):
+    def forward(self, inputs:Tensor, regulation_weight:float=0.):
         """
         Args:
             inputs (Tensor): (N, C, ...)
@@ -242,24 +253,19 @@ class ParalleledMultiWindowProcessing(BaseModule):
         projector_aux_losses = []
         
         for i in range(self.num_windows):
-            with torch.cuda.stream(self.streams[i]):
-                extracted = getattr(self, f"window_extractor_{i}")(inputs)
-        
-                projected = getattr(
-                    self, f"value_wise_projector_{i}").forward(extracted)
-                x.append(projected)
-                
-                if enable_projector_aux_loss:
-                    projector_aux_loss = getattr(
-                        self, f"value_wise_projector_{i}").regulation()
-                    projector_aux_losses.append(projector_aux_loss)
-        
-        torch.cuda.synchronize()
+            extracted = getattr(self, f"window_extractor_{i}")(inputs)
+            projected = getattr(self, f"value_wise_projector_{i}").forward(extracted)
+            x.append(projected)
+            
+            if regulation_weight != 0:
+                projector_aux_loss = regulation_weight * getattr(
+                    self, f"value_wise_projector_{i}").regulation()
+                projector_aux_losses.append(projector_aux_loss)
         
         x = torch.stack(x, dim=0) # [W, N, C, ...]
         x = self.cross_window_fusion(x) # [N, Win*C, ...]
         
-        if enable_projector_aux_loss:
+        if regulation_weight != 0:
             projector_aux_losses = torch.stack(projector_aux_losses, dim=0).mean()
         else:
             projector_aux_losses = None
@@ -271,27 +277,27 @@ class ParalleledMultiWindowProcessing(BaseModule):
 class AutoWindowSetting(EncoderDecoder_3D):
     "Compatible Plugin for Auto Window Setting."
     
-    def __init__(self, pmwp:dict, enable_projector_loss:bool=True, *args, **kwargs):
+    def __init__(self, pmwp:dict, regulation_weight:float=0., *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.pmwp:ParalleledMultiWindowProcessing = MODELS.build(pmwp)
-        self.enable_projector_loss = enable_projector_loss
+        self.regulation_weight = regulation_weight
     
     
-    def extract_feat(self, inputs:Tensor, use_projector_aux_loss:bool=False):
+    def extract_feat(self, inputs:Tensor, regulation_weight:float=0.):
         # inputs: [N, C, ...]
         # pmwp_out: [N, num_window * C, ...]
         # TODO Downsampling Channel?
-        pmwp_out, projector_aux_loss = self.pmwp(inputs, use_projector_aux_loss)
+        pmwp_out, projector_aux_loss = self.pmwp(inputs, regulation_weight)
         
-        if use_projector_aux_loss:
+        if regulation_weight != 0:
             return super().extract_feat(pmwp_out), projector_aux_loss
         else:
             return super().extract_feat(pmwp_out)
     
     
     def loss(self, inputs: Tensor, data_samples):
-        if self.enable_projector_loss:
-            x, projector_loss = self.extract_feat(inputs, True)
+        if self.regulation_weight != 0:
+            x, projector_loss = self.extract_feat(inputs, self.regulation_weight)
             losses = dict(loss_aux_projector=projector_loss)
         else:
             x = self.extract_feat(inputs)
