@@ -447,9 +447,9 @@ data_root = os.environ['sarcopenia_data_root']
 GT_FOLDERS_PRIORITY_ORIGINAL_ENGINEERSORT = [
     join(data_root, 'Check_8081', 'mha_original_EngineerSort'),
     join(data_root, 'Check_8016', 'mha_original_EngineerSort'),
-    join(data_root, 'Check_7622', 'mha_original_EngineerSort'),
-    join(data_root, 'Check_7393', 'mha_original_EngineerSort'),
-    join(data_root, 'Check_6947', 'mha_original_EngineerSort'),
+    join(data_root, 'Check_7644', 'mha_original_EngineerSort'),
+    join(data_root, 'Check_7461', 'mha_original_EngineerSort'),
+    join(data_root, 'Check_6973', 'mha_original_EngineerSort'),
 ]
 
 

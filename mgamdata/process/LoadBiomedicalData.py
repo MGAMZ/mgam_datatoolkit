@@ -110,15 +110,8 @@ class LoadMaskFromMHA(LoadFromMHA):
 
     Modified Keys:
 
-    - gt_seg_map_index
-    - gt_seg_map_channel
+    - gt_seg_map
     '''
-    @staticmethod
-    def _split_channel(mask:np.ndarray):
-        class_idxs = np.unique(mask)
-        mask_channel = np.stack([mask==class_id for class_id in class_idxs], axis=-4)
-        return mask_channel
-    
     def transform(self, results):
         mask_path = results['seg_map_path']
         mask_mha = sitk.ReadImage(mask_path)

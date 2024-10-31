@@ -193,11 +193,10 @@ def get_mask_3d(src_folder, dst_folder, image_folder, cat):
                     '失败原因': str(success),
                 })
         
-        if len(failed) > 0:
-            json.dump(failed, 
-                      open(os.path.join(dst_folder, 'failed.json'), 'w'), 
-                      indent=4, 
-                      ensure_ascii=False)
+        json.dump(failed, 
+                    open(os.path.join(dst_folder, 'failed.json'), 'w'), 
+                    indent=4, 
+                    ensure_ascii=False)
 
 
 

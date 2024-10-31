@@ -1,5 +1,6 @@
 import os
 import random
+import pdb
 from typing import List, Dict, Sequence, Union
 from typing_extensions import deprecated
 
@@ -221,4 +222,18 @@ class InstanceNorm(BaseTransform):
         results['img'] = (results['img'] - results['img'].mean())
         results['img'] = results['img'] / (results['img'].std() + self.eps)
         results['img'] = results['img'].astype(ori_dtype)
+        return results
+
+
+
+class ExpandOneHot(BaseTransform):
+    def __init__(self, num_classes:int):
+        self.num_classes = num_classes
+    
+    def transform(self, results):
+        mask = results['gt_seg_map'] # [...]
+        # # eye: Identity Matrix [num_classes, num_classes]
+        mask_channel = np.eye(self.num_classes)[mask]
+        mask_channel = np.moveaxis(mask_channel, -1, 0).astype(np.uint8)
+        results['gt_seg_map_one_hot'] = mask_channel # [num_classes, ...]
         return results

@@ -216,6 +216,18 @@ class Seg3DDataSample(BaseDataElement):
         del self._gt_sem_seg
 
     @property
+    def gt_sem_seg_one_hot(self) -> VolumeData:
+        return self._gt_sem_seg_one_hot
+
+    @gt_sem_seg_one_hot.setter
+    def gt_sem_seg_one_hot(self, value: VolumeData) -> None:
+        self.set_field(value, '_gt_sem_seg_one_hot', dtype=VolumeData)
+
+    @gt_sem_seg_one_hot.deleter
+    def gt_sem_seg_one_hot(self) -> None:
+        del self._gt_sem_seg_one_hot
+
+    @property
     def pred_sem_seg(self) -> VolumeData:
         return self._pred_sem_seg
 
@@ -389,8 +401,12 @@ class EncoderDecoder_3D(EncoderDecoder):
 
 
 class BaseDecodeHead_3D(BaseDecodeHead):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, loss_gt_key:str='gt_sem_seg', *args, **kwargs):
+        assert loss_gt_key in ['gt_sem_seg', 'gt_sem_seg_one_hot'], \
+            f"loss_gt_key currently supports ['gt_sem_seg', 'gt_sem_seg_one_hot'], \
+              but got {loss_gt_key}"
         super().__init__(*args, **kwargs)
+        self.loss_gt_key = loss_gt_key
         self.conv_seg = torch.nn.Conv3d(
             self.channels, self.out_channels, kernel_size=1)
         if self.dropout_ratio > 0:
@@ -407,10 +423,6 @@ class BaseDecodeHead_3D(BaseDecodeHead):
                        losses_dict:dict,
                        weight:float=1.,
                       ) -> dict:
-        # seg_logit = F.interpolate(
-        #     input=seg_logit,
-        #     size=seg_label.shape[2:],
-        #     mode='trilinear')
         seg_label = F.interpolate(
             input=seg_label,
             size=seg_logit.shape[2:],
@@ -466,14 +478,21 @@ class BaseDecodeHead_3D(BaseDecodeHead):
         """
         # list of Tensor: [B, C, Z, Y, X]
         seg_logits = self.forward(inputs)
-        # [B, C, Z, Y, X]
-        seg_label = self._stack_batch_gt(batch_data_samples) # type: ignore
-        
+        # [B, 1, Z, Y, X]
+        seg_label = self._stack_batch_gt(
+            batch_data_samples, 'gt_sem_seg') # type: ignore
+        # [B, Class, Z, Y, X]
+        if self.loss_gt_key == 'gt_sem_seg_one_hot':
+            seg_label_loss = self._stack_batch_gt(
+                batch_data_samples, 'gt_sem_seg_one_hot') # type: ignore
+        else:
+            seg_label_loss = seg_label
         losses = dict()
         
+        # NOTE Deep Supervision Loss Calculation.
         for i, seg_logit in enumerate(seg_logits):
             losses = self.loss_per_layer(
-                seg_logit, seg_label, losses, weight=1/(2**i))
+                seg_logit, seg_label_loss, losses, weight=1/(2**i))
         
         losses['acc_seg'] = accuracy(
             seg_logits[0],
@@ -519,6 +538,13 @@ class BaseDecodeHead_3D(BaseDecodeHead):
         return seg_logits
 
 
+    def _stack_batch_gt(self, batch_data_samples: list[Seg3DDataSample], gt_key) -> Tensor:
+        gt_semantic_segs = [
+            data_sample.get(gt_key).data for data_sample in batch_data_samples
+        ]
+        return torch.stack(gt_semantic_segs, dim=0)
+
+
 
 class DiceLoss_3D(DiceLoss):
     def _expand_onehot_labels_dice_3D(
@@ -544,6 +570,9 @@ class DiceLoss_3D(DiceLoss):
 
 
     def forward(self, pred, target, *args, **kwargs):
+        assert pred.shape == target.shape, (
+            "The one hot expansion has been done in the preprocess function."
+            "Multiple framework modifications are introduced as well.")
         if (pred.shape != target.shape):
             target = self._expand_onehot_labels_dice_3D(
                 pred, target)
@@ -716,8 +745,13 @@ class PackSeg3DInputs(PackSegInputs):
                               'map is 3D, but got '
                               f'{results["gt_seg_map"].shape}')
                 data = to_tensor(results['gt_seg_map'].astype(np.uint8))
-            gt_sem_seg_data = dict(data=data)
-            data_sample.gt_sem_seg = VolumeData(**gt_sem_seg_data)  # type: ignore
+            data_sample.gt_sem_seg = VolumeData(data=data)  # type: ignore
+        if 'gt_seg_map_one_hot' in results:
+            assert len(results['gt_seg_map_one_hot'].shape) == 4, \
+                f'The shape of gt_seg_map_one_hot should be `[X, Y, Z, Classes]`, ' \
+                f'but got {results["gt_seg_map_one_hot"].shape}'
+            data = to_tensor(results['gt_seg_map_one_hot'].astype(np.uint8))
+            data_sample.gt_sem_seg_one_hot = VolumeData(data=data)
 
         img_meta = {}
         for key in self.meta_keys:
@@ -753,8 +787,10 @@ class Seg3DDataPreProcessor(SegDataPreProcessor):
         seg_pad_val: int|float = 255,
         batch_augments:list[dict]|None = None,
         test_cfg: dict|None = None,
+        non_blocking: bool=True
     ):
         super().__init__()
+        self._non_blocking = non_blocking
         self.size = size
         self.size_divisor = size_divisor
         self.pad_val = pad_val
@@ -855,6 +891,12 @@ class Seg3DDataPreProcessor(SegDataPreProcessor):
                     data_sample.gt_sem_seg.data = F.pad(
                         gt_sem_seg, padding_size, value=seg_pad_val)
                     pad_shape = data_sample.gt_sem_seg.shape
+                if 'gt_sem_seg_one_hot' in data_sample:
+                    gt_sem_seg_one_hot = data_sample.gt_sem_seg_one_hot.data
+                    del data_sample.gt_sem_seg_one_hot.data
+                    data_sample.gt_sem_seg_one_hot.data = F.pad(
+                        gt_sem_seg_one_hot, padding_size, value=0)
+                    pad_shape = data_sample.gt_sem_seg_one_hot.shape
                 data_sample.set_metainfo({
                     'img_shape': tensor.shape[-3:],
                     'pad_shape': pad_shape,
@@ -1101,6 +1143,3 @@ class RandomCrop3D(BaseTransform):
 
     def __repr__(self):
         return self.__class__.__name__ + f'(crop_size={self.crop_size})'
-
-
-

@@ -213,7 +213,7 @@ class ParalleledMultiWindowProcessing(BaseModule):
         self.data_range = data_range
         self.dim = dim
         self._init_PMWP()
-
+    
 
     def _init_PMWP(self):
         for i in range(self.num_windows):
@@ -230,6 +230,7 @@ class ParalleledMultiWindowProcessing(BaseModule):
         
         # TODO Maybe Point-Wise Attention?
         self.cross_window_fusion = BatchCrossWindowFusion(self.num_windows)
+        self.streams = [torch.cuda.Stream() for _ in range(self.num_windows)]
 
 
     def forward(self, inputs:Tensor, enable_projector_aux_loss:bool=False):
@@ -239,16 +240,11 @@ class ParalleledMultiWindowProcessing(BaseModule):
         """
         x = []
         projector_aux_losses = []
-        streams = [torch.cuda.Stream() for _ in range(self.num_windows)]
         
         for i in range(self.num_windows):
-            with torch.cuda.stream(streams[i]):
+            with torch.cuda.stream(self.streams[i]):
                 extracted = getattr(self, f"window_extractor_{i}")(inputs)
-                
-                # window_response = getattr(self, f"window_extractor_{i}").current_response
-                # print(f"Auto Window Response: Mean {window_response.mean():.2f} Std {window_response.std():.2f} "
-                #   f"Max {window_response.max():.2f} Min {window_response.min():.2f}")
-                
+        
                 projected = getattr(
                     self, f"value_wise_projector_{i}").forward(extracted)
                 x.append(projected)
@@ -281,14 +277,14 @@ class AutoWindowSetting(EncoderDecoder_3D):
         self.enable_projector_loss = enable_projector_loss
     
     
-    def extract_feat(self, inputs:Tensor, projector_aux_loss:bool=False):
+    def extract_feat(self, inputs:Tensor, use_projector_aux_loss:bool=False):
         # inputs: [N, C, ...]
         # pmwp_out: [N, num_window * C, ...]
         # TODO Downsampling Channel?
-        pmwp_out, projector_aux = self.pmwp(inputs, projector_aux_loss)
+        pmwp_out, projector_aux_loss = self.pmwp(inputs, use_projector_aux_loss)
         
-        if projector_aux_loss:
-            return super().extract_feat(pmwp_out), projector_aux
+        if use_projector_aux_loss:
+            return super().extract_feat(pmwp_out), projector_aux_loss
         else:
             return super().extract_feat(pmwp_out)
     

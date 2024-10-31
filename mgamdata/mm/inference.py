@@ -89,8 +89,7 @@ class Inferencer_2D:
                         if os.path.exists(osp.join(check_exist_path, file)):
                             print(f"Already inferenced: {file}.")
                             continue
-                    else:
-                        mha_files.append(osp.join(root, file))
+                    mha_files.append(osp.join(root, file))
         
         print(f"\nInferencing from Folder: {folder}, Total {len(mha_files)} mha files.\n")
         
