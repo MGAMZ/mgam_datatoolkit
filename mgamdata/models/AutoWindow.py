@@ -140,6 +140,7 @@ class ValueWiseProjector(BaseModule):
         """
         
         response:torch.Tensor = self.pmwm_norm(inputs)
+        response = torch.tanh(response)
         
         """
         high_order_mapping = 
@@ -157,7 +158,9 @@ class ValueWiseProjector(BaseModule):
         """
         self.projection_exponent = self.projection_exponent.to(device=inputs.device)
         projected = response.expand(self.order, *response.shape).moveaxis(0, -1) # [..., order]
+        # fetch exponent
         projected = torch.pow(projected, self.projection_exponent) # [..., order]
+        # weighted sum
         projected = torch.matmul(projected, self.projection_coefficient) # [...]
         projected += self.projection_bias # [...]
         return projected # [...]
