@@ -29,12 +29,12 @@ dependencies = [
   "ftfy",
   "regex",
   "pynvml",
-  "pyyaml",
   "future",
   "tensorboard",
   "nibabel",
   "orjson",
   "HolisticTraceAnalysis",
+  "pylint-django",
 ]
 
 [project.scripts]

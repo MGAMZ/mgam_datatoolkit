@@ -1,4 +1,5 @@
 import pdb
+from typing_extensions import deprecated
 
 import torch
 from torch import Tensor
@@ -40,7 +41,6 @@ class WindowExtractor(BaseModule):
         response = self.forward(self.window_sample).cpu().numpy()
         return response
     
-    
     def forward(self, x:Tensor):
         """
         :math:: response = 4096\frac{1\exp\left(\frac{x}{4096}\right)-400\exp\left(-\frac{x}{4096}\right)}{1\exp\left(\frac{x}{4096}\right)+400\exp\left(-\frac{x}{4096}\right)}
@@ -63,9 +63,7 @@ class WindowExtractor(BaseModule):
                   d_wr * torch.exp( x / d_r) \
                 + d_ir * torch.exp(-x / d_r)
             )
-        
         return response
-
 
 
 class ValueWiseProjector(BaseModule):
@@ -73,22 +71,20 @@ class ValueWiseProjector(BaseModule):
     Value-Wise Projector for one window remapping operation.
     The extracted value are fine-tuned by this projector.
     """
-    
+
     def __init__(self, 
-                 in_channels:int, 
-                 order:int=1,
-                 regulation_nbins:int=512,
+                 in_channels: int,
+                 num_rect: int,
+                 momentum: float=0.1,
                  valid_range:list[int] = [-1024, 3072],
                  dim:str='3d',
                  *args, **kwargs):
-        assert order > 0, f"The order of projector should be greater than 0, got {order}."
         super().__init__(*args, **kwargs)
         self.in_channels = in_channels
-        self.order = order
-        self.regulation_nbins = regulation_nbins
+        self.num_rect = num_rect
         self.valid_range = valid_range
         self.dim = dim
-        
+
         if dim.lower() == '2d':
             self.pmwm_norm = torch.nn.InstanceNorm2d(
                 num_features=in_channels,
@@ -99,72 +95,53 @@ class ValueWiseProjector(BaseModule):
                 num_features=in_channels,
                 affine=True,
                 track_running_stats=True)
+
+        self.rectify_intense = torch.nn.Parameter(
+            torch.ones(num_rect))
+        self.rectify_location = torch.nn.Parameter(
+            torch.zeros(num_rect))
         
-        self.projection_coefficient = torch.nn.Parameter(
-            torch.cat([torch.ones(1), torch.zeros(order-1)]))
-        self.projection_bias = torch.nn.Parameter(torch.randn(1) / 10)
-        self.projection_exponent = torch.arange(1, order+1)
-        
-        self.sample_data = torch.arange(
-            *self.valid_range, 
-            step=self.regulation_nbins,
-            pin_memory=True
-            )[None,None,None].to(
-                device=self.projection_coefficient.device,
-                dtype=torch.float32)
-    
+        self.regulation_memory = []
+        self.regulation_memory_limit = int(1 / (1 - momentum))
+
     @property
     @torch.inference_mode()
     def current_projection(self):
         sample_data = torch.arange(self.regulation_nbins).to(
             device=self.projection_coefficient.device)
         return self.forward(sample_data).cpu().numpy()
-    
-    
-    def regulation(self):
+
+    def regulation(self, inputs:Tensor) -> Tensor:
         """
         Limit the projector ability to ensure it's behavior,
         which aligns with the physical meaning.
         """
-        self.sample_data = self.sample_data.to(device=self.projection_bias.device)
-        projected_value = self.forward(self.sample_data)
-        ascend_regulation = (projected_value.diff() - 1).abs().mean()
-        smoothness_regulation = (projected_value.diff() - 1).std()
-        return ascend_regulation + smoothness_regulation
-    
-    
-    def forward(self, inputs:Tensor) -> Tensor:
-        """
-        Args:
-            inputs (Tensor): (N, C, ...)
-        """
+        with torch.no_grad():
+            iter_std = inputs.std()
+            if not torch.isnan(iter_std):
+                self.regulation_memory.append(inputs.std())
+            self.regulation_memory = self.regulation_memory[-self.regulation_memory_limit:]
+            target_std = torch.stack(self.regulation_memory).mean()
         
-        response:torch.Tensor = self.pmwm_norm(inputs)
-        response = torch.tanh(response)
-        
+        regulation_loss = torch.abs(self.rectify_location.std() - target_std)
+        return regulation_loss * len(self.regulation_memory) / self.regulation_memory_limit
+
+    def forward(self, inputs:Tensor) -> Tensor|tuple[Tensor, Tensor]:
         """
-        high_order_mapping = 
-            x^order * W_order + 
-            x^(order-1) * W_(order-1) +
-            ...
-            x^4 * W_4 (projection_coefficient[4]) + 
-            x^3 * W_3 (projection_coefficient[3]) + 
-            x^2 * W_2 (projection_coefficient[2]) + 
-            x^1 * W_1 (projection_coefficient[1]) + 
-            W_0 (projection_bias)
-        
         Args:
             inputs (Tensor): (...)
         """
-        self.projection_exponent = self.projection_exponent.to(device=inputs.device)
-        projected = response.expand(self.order, *response.shape).moveaxis(0, -1) # [..., order]
-        # fetch exponent
-        projected = torch.pow(projected, self.projection_exponent) # [..., order]
-        # weighted sum
-        projected = torch.matmul(projected, self.projection_coefficient) # [...]
-        projected += self.projection_bias # [...]
-        return projected # [...]
+        normed:Tensor = self.pmwm_norm(inputs) # [...]
 
+        rectified = torch.tanh(
+            self.rectify_location   # [num_rect]
+            + normed.expand(
+                self.num_rect, 
+                *normed.shape
+            ).moveaxis(0,-1) # [..., num_rect]
+        ) * self.rectify_intense # rectified: [..., num_rect]
+        
+        return torch.sum(rectified, dim=-1) # [...]
 
 
 class BatchCrossWindowFusion(BaseModule):
@@ -176,7 +153,6 @@ class BatchCrossWindowFusion(BaseModule):
     @property
     def current_fusion(self):
         return self.window_fusion_weight.detach().cpu().numpy()
-    
     
     def forward(self, inputs:Tensor):
         """
@@ -199,7 +175,6 @@ class BatchCrossWindowFusion(BaseModule):
         return window_concat_on_channel # [N, Win*C, ...]
 
 
-
 class ParalleledMultiWindowProcessing(BaseModule):
     """The top module of Paralleled Multi-Window Processing."""
     
@@ -209,8 +184,8 @@ class ParalleledMultiWindowProcessing(BaseModule):
                  window_embed_dims:int=32,
                  window_width:int=200,
                  num_windows:int=4,
-                 num_bins:int=512,
-                 proj_order:int=1,
+                 num_rect:int=8,
+                 rect_momentum:float=0.1,
                  data_range:list[int]=[-1024, 3072],
                  dim='3d',
                  *args, **kwargs
@@ -223,13 +198,12 @@ class ParalleledMultiWindowProcessing(BaseModule):
         self.window_embed_dims = window_embed_dims
         self.window_width = window_width
         self.num_windows = num_windows
-        self.num_bins = num_bins
-        self.proj_order = proj_order
+        self.num_rect = num_rect
+        self.rect_momentum = rect_momentum
         self.data_range = data_range
         self.dim = dim
         self._init_PMWP()
     
-
     def _init_PMWP(self):
         for i in range(self.num_windows):
             setattr(self, f"window_extractor_{i}", 
@@ -238,14 +212,13 @@ class ParalleledMultiWindowProcessing(BaseModule):
             setattr(self, f"value_wise_projector_{i}", 
                 ValueWiseProjector(
                     in_channels=self.in_channels,
-                    order=self.proj_order,
-                    regulation_nbins=self.num_bins,
+                    num_rect=self.num_rect,
+                    momentum=self.rect_momentum,
                     valid_range=self.data_range,
                     dim=self.dim))
         
         # TODO Maybe Point-Wise Attention?
         self.cross_window_fusion = BatchCrossWindowFusion(self.num_windows)
-
 
     def forward(self, inputs:Tensor, regulation_weight:float=0.):
         """
@@ -262,7 +235,7 @@ class ParalleledMultiWindowProcessing(BaseModule):
             
             if regulation_weight != 0:
                 projector_aux_loss = regulation_weight * getattr(
-                    self, f"value_wise_projector_{i}").regulation()
+                    self, f"value_wise_projector_{i}").regulation(extracted)
                 projector_aux_losses.append(projector_aux_loss)
         
         x = torch.stack(x, dim=0) # [W, N, C, ...]
@@ -276,7 +249,6 @@ class ParalleledMultiWindowProcessing(BaseModule):
         return x, projector_aux_losses # [N, Win*C, ...]
 
 
-
 class AutoWindowSetting(EncoderDecoder_3D):
     "Compatible Plugin for Auto Window Setting."
     
@@ -284,7 +256,6 @@ class AutoWindowSetting(EncoderDecoder_3D):
         super().__init__(*args, **kwargs)
         self.pmwp:ParalleledMultiWindowProcessing = MODELS.build(pmwp)
         self.regulation_weight = regulation_weight
-    
     
     def extract_feat(self, inputs:Tensor, regulation_weight:float=0.):
         # inputs: [N, C, ...]
@@ -296,7 +267,6 @@ class AutoWindowSetting(EncoderDecoder_3D):
             return super().extract_feat(pmwp_out), projector_aux_loss
         else:
             return super().extract_feat(pmwp_out)
-    
     
     def loss(self, inputs: Tensor, data_samples):
         if self.regulation_weight != 0:
