@@ -230,8 +230,8 @@ class ParalleledMultiWindowProcessing(BaseModule):
         
         for i in range(self.num_windows):
             extracted = getattr(self, f"window_extractor_{i}")(inputs)
-            projected = getattr(self, f"value_wise_projector_{i}").forward(extracted)
-            x.append(projected)
+            # projected = getattr(self, f"value_wise_projector_{i}").forward(extracted)
+            x.append(extracted)
             
             if regulation_weight != 0:
                 projector_aux_loss = regulation_weight * getattr(

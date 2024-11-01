@@ -35,6 +35,7 @@ dependencies = [
   "orjson",
   "HolisticTraceAnalysis",
   "pylint-django",
+  "tensorrt",
 ]
 
 [project.scripts]
