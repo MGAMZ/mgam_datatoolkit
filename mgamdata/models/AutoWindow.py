@@ -4,6 +4,7 @@ from typing_extensions import deprecated
 import torch
 from torch import Tensor
 
+from mmengine.logging import print_log, MMLogger
 from mmengine.model.base_module import BaseModule
 from mmseg.registry import MODELS
 
@@ -13,26 +14,32 @@ from mgamdata.mm.mmseg_Dev3D import EncoderDecoder_3D
 
 class WindowExtractor(BaseModule):
     "Extract values from raw array using a learnable window."
-
-    DYNAMIC_WEAK_RESPONSE_AMPLIFIER = 10
-    DYNAMIC_INTENSE_RESPONSE_AMPLIFIER = 10
-    DYNAMIC_RANGE_AMPLIFIER = 100
-
+    
     def __init__(self, 
                  value_range:list[int],
-                 eps:float=1e-6,
+                 eps:float=1.0,
+                 log_interval:int|None=None,
                  *args, **kwargs):
         assert len(value_range) == 2 and value_range[1] > value_range[0]
         super().__init__(*args, **kwargs)
         self.value_range = value_range
         self.window_sample = torch.arange(*self.value_range)
-        self.dynamic_range = torch.nn.Parameter(
-            torch.tensor([0.5], dtype=torch.float32))
-        self.dynamic_weak_response = torch.nn.Parameter(
-            torch.tensor([1], dtype=torch.float32))
-        self.dynamic_intense_response = torch.nn.Parameter(
-            torch.tensor([1], dtype=torch.float32))
         self.eps = eps
+        self.log_interval = log_interval
+        self.log_count = 0
+        
+        # Dynamic Weak Response - a
+        self.d_wr = torch.nn.Parameter(torch.ones(1))
+        # Dynamic Intense Response - b
+        self.d_ir = torch.nn.Parameter(torch.ones(1))
+        # Dynamic Perception Field - d
+        self.d_pf = torch.nn.Parameter(torch.ones(1))
+        # Dynamic Range - g
+        self.d_r = torch.nn.Parameter(torch.ones(1))
+        # Global Response - c
+        self.g_r = torch.nn.Parameter(torch.ones(1))
+        # Range Rectification Coefficient - h
+        self.rrc = value_range[1] - value_range[0]
     
     @property
     @torch.inference_mode()
@@ -41,28 +48,40 @@ class WindowExtractor(BaseModule):
         response = self.forward(self.window_sample).cpu().numpy()
         return response
     
+    def log(self):
+        if self.log_interval is not None:
+            self.log_count = (self.log_count + 1) % self.log_interval
+            if self.log_count == 0:
+                sample_response = self.current_response()
+                print_log(f"WinExt: d_wr: {self.d_wr.item():.4f}, "
+                          f"d_ir: {self.d_ir.item():.4f}, "
+                          f"d_pf: {self.d_pf.item():.4f}, "
+                          f"d_r: {self.d_r.item():.4f}, "
+                          f"g_r: {self.g_r.item():.4f}, "
+                          f"rrc: {self.rrc}. "
+                          f"std {sample_response.std():.2f}, "
+                          f"max {sample_response.max():.2f}, "
+                          f"min {sample_response.min():.2f}.")
+    
     def forward(self, x:Tensor):
         """
-        :math:: response = 4096\frac{1\exp\left(\frac{x}{4096}\right)-400\exp\left(-\frac{x}{4096}\right)}{1\exp\left(\frac{x}{4096}\right)+400\exp\left(-\frac{x}{4096}\right)}
-        
         Args:
             inputs (Tensor): (...)
         """
-        d_r = self.dynamic_range * self.DYNAMIC_RANGE_AMPLIFIER
-        d_wr = self.dynamic_weak_response * self.DYNAMIC_WEAK_RESPONSE_AMPLIFIER
-        d_ir = self.dynamic_intense_response * self.DYNAMIC_INTENSE_RESPONSE_AMPLIFIER
-        d_r = torch.relu(d_r) + self.eps
-        d_wr = torch.relu(d_wr) + self.eps
-        d_ir = torch.relu(d_ir) + self.eps
+        
+        exp = (x / self.rrc + self.d_pf) \
+            / (self.g_r * self.d_r)
         
         response = \
-            d_r * (
-                  d_wr * torch.exp( x / d_r) \
-                - d_ir * torch.exp(-x / d_r)
+            self.d_r * (
+                  self.d_wr * torch.exp( exp) \
+                - self.d_ir * torch.exp(-exp)
             ) / (
-                  d_wr * torch.exp( x / d_r) \
-                + d_ir * torch.exp(-x / d_r)
+                  self.d_wr * torch.exp( exp) \
+                + self.d_ir * torch.exp(-exp)
             )
+        
+        self.log()
         return response
 
 
@@ -188,6 +207,7 @@ class ParalleledMultiWindowProcessing(BaseModule):
                  rect_momentum:float=0.1,
                  data_range:list[int]=[-1024, 3072],
                  dim='3d',
+                 log_interval:int|None=None,
                  *args, **kwargs
                 ):
         assert dim.lower() in ['2d', '3d']
@@ -202,13 +222,15 @@ class ParalleledMultiWindowProcessing(BaseModule):
         self.rect_momentum = rect_momentum
         self.data_range = data_range
         self.dim = dim
+        self.log_interval = log_interval
         self._init_PMWP()
     
     def _init_PMWP(self):
         for i in range(self.num_windows):
             setattr(self, f"window_extractor_{i}", 
                 WindowExtractor(
-                    value_range=self.data_range))
+                    value_range=self.data_range,
+                    log_interval=self.log_interval))
             setattr(self, f"value_wise_projector_{i}", 
                 ValueWiseProjector(
                     in_channels=self.in_channels,
