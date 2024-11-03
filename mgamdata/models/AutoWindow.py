@@ -1,3 +1,4 @@
+from curses import window
 import pdb
 
 import torch
@@ -12,17 +13,24 @@ from mgamdata.mm.mmseg_Dev3D import EncoderDecoder_3D, PixelShuffle3D, PixelUnsh
 
 
 class DynamicParam(BaseModule):
-    def __init__(self, in_channels, dim:str):
-        conv = torch.nn.Conv2d if dim=='2d' else torch.nn.Conv3d
-        self.conv = conv(in_channels, in_channels, 7, 3, 0, bias=0)
-    def forward(self):
-        ...
+    def __init__(self, in_channels:int, mid_channels:int, dim:str, *args, **kwargs):
+        super().__init__()
+        self.param = torch.nn.Parameter(torch.empty(1))
+        torch.nn.init.normal_(self.param, mean=1, std=0.5)
+    
+    def forward(self, *args, **kwargs) -> Tensor:
+        return self.param
+    
+    def __repr__(self):
+        return "{:.3f}".format(self.param.item())
 
 
 class WindowExtractor(BaseModule):
     "Extract values from raw array using a learnable window."
     
-    def __init__(self, 
+    def __init__(self,
+                 in_channels:int,
+                 embed_dims:int,
                  value_range:list[int],
                  eps:float=1.0,
                  log_interval:int|None=None,
@@ -30,31 +38,32 @@ class WindowExtractor(BaseModule):
                  *args, **kwargs):
         assert len(value_range) == 2 and value_range[1] > value_range[0]
         super().__init__(*args, **kwargs)
+        self.in_channels = in_channels
         self.value_range = value_range
-        self.window_sample = torch.arange(*self.value_range)
         self.eps = eps
         self.dim = dim
         self.log_interval = log_interval
         self.log_count = 0
+        self.window_sample = torch.arange(*self.value_range)
         
         # Dynamic Weak Response - a
-        self.d_wr = torch.nn.Parameter(torch.nn.init.normal_(torch.empty(1), mean=1))
+        self.d_wr = DynamicParam(in_channels, embed_dims, dim)
         # Dynamic Intense Response - b
-        self.d_ir = torch.nn.Parameter(torch.nn.init.normal_(torch.empty(1), mean=1))
+        self.d_ir = DynamicParam(in_channels, embed_dims, dim)
         # Dynamic Perception Field - d
-        self.d_pf = torch.nn.Parameter(torch.nn.init.normal_(torch.empty(1), mean=1))
+        self.d_pf = DynamicParam(in_channels, embed_dims, dim)
         # Dynamic Range - g
-        self.d_r = torch.nn.Parameter(torch.nn.init.normal_(torch.empty(1), mean=1))
+        self.d_r = DynamicParam(in_channels, embed_dims, dim)
         # Global Response - c
-        self.g_r = torch.nn.Parameter(torch.nn.init.normal_(torch.empty(1), mean=1))
+        self.g_r = DynamicParam(in_channels, embed_dims, dim)
         # Global Offset - k
-        self.g_o = torch.nn.Parameter(torch.nn.init.normal_(torch.empty(1), mean=0))
+        self.g_o = torch.nn.Parameter(torch.zeros(1))
         # Range Rectification Coefficient - h
         self.rrc = value_range[1] - value_range[0]
     
     @torch.inference_mode()
     def current_response(self):
-        self.window_sample = self.window_sample.to(device=self.d_wr.device)
+        self.window_sample = self.window_sample.to(device=self.g_o.device, non_blocking=True)
         response = self.forward(self.window_sample, log_override=False).cpu().numpy()
         return response
     
@@ -64,13 +73,13 @@ class WindowExtractor(BaseModule):
             if self.log_count == 0:
                 sample_response = self.current_response()
                 msg = (
-                    f"d_wr: {self.d_wr.item():.3f}, "
-                    f"d_ir: {self.d_ir.item():.3f}, "
-                    f"d_pf: {self.d_pf.item():.3f}, "
-                    f"d_r: {self.d_r.item():.3f}, "
-                    f"g_r: {self.g_r.item():.3f}, "
+                    f"d_wr: {repr(self.d_wr)}, "
+                    f"d_ir: {repr(self.d_ir)}, "
+                    f"d_pf: {repr(self.d_pf)}, "
+                    f"d_r: {repr(self.d_r)}, "
+                    f"g_r: {repr(self.g_r)}, "
                     f"g_o: {self.g_o.item():.3f}, "
-                    f"rrc: {self.rrc}. "
+                    f"rrc: {repr(self.rrc)}. "
                     f"std {sample_response.std():.2f}, "
                     f"max {sample_response.max():.2f}, "
                     f"min {sample_response.min():.2f}.")
@@ -82,19 +91,25 @@ class WindowExtractor(BaseModule):
         Args:
             inputs (Tensor): (...)
         """
-        exp = (x / self.rrc + self.d_pf) \
-            / (self.g_r * self.d_r)
+        d_pf = self.d_pf(x)
+        g_r = self.g_r(x)
+        d_r = self.d_r(x)
+        d_wr = self.d_wr(x)
+        d_ir = self.d_ir(x)
+        
+        exp = (x / self.rrc + d_pf) \
+            / (g_r * d_r)
         
         response = \
-            self.d_r * (
-                  self.d_wr * torch.exp( exp) \
-                - self.d_ir * torch.exp(-exp)
+            d_r * (
+                  d_wr * torch.exp( exp) \
+                - d_ir * torch.exp(-exp)
             ) / (
-                  self.d_wr * torch.exp( exp) \
-                + self.d_ir * torch.exp(-exp)
+                  d_wr * torch.exp( exp) \
+                + d_ir * torch.exp(-exp)
             ) + (
-                self.d_r * self.g_o
-            )
+            d_r * self.g_o
+        )
         
         # Avoid infinite recursion during current_response calculation.
         if log_override:
@@ -204,7 +219,8 @@ class ParalleledMultiWindowProcessing(BaseModule):
     def __init__(self,
                  in_channels:int,
                  embed_dims:int,
-                 window_ratio:int=4,
+                 window_embed_dims:int|None=None,
+                 num_windows:int=4,
                  num_rect:int=8,
                  rect_momentum:float=0.99,
                  data_range:list[int]=[-1024, 3072],
@@ -218,8 +234,10 @@ class ParalleledMultiWindowProcessing(BaseModule):
         
         self.in_channels = in_channels
         self.embed_dims = embed_dims
-        self.window_ratio = window_ratio
-        self.num_windows = window_ratio**2 if dim == '2d' else window_ratio**3
+        self.num_windows = num_windows
+        self.window_embed_dims = window_embed_dims \
+                                 if window_embed_dims is not None else \
+                                 embed_dims // self.num_windows
         self.num_rect = num_rect
         self.rect_momentum = rect_momentum
         self.data_range = data_range
@@ -232,6 +250,8 @@ class ParalleledMultiWindowProcessing(BaseModule):
         for i in range(self.num_windows):
             setattr(self, f"window_extractor_{i}", 
                 WindowExtractor(
+                    in_channels=self.in_channels,
+                    embed_dims=self.embed_dims,
                     value_range=self.data_range,
                     log_interval=self.log_interval,
                     dim=self.dim))
@@ -243,10 +263,6 @@ class ParalleledMultiWindowProcessing(BaseModule):
                     valid_range=self.data_range,
                     dim=self.dim))
         
-        shuffle = PixelShuffle3D if self.dim == '3d' else torch.nn.PixelShuffle
-        unshuffle = PixelUnshuffle3D if self.dim == '3d' else torch.nn.PixelUnshuffle
-        self.pixel_shuffle = shuffle(self.window_ratio)
-        self.pixel_unshuffle = unshuffle(self.window_ratio)
         # TODO Maybe Point-Wise Attention?
         self.cross_window_fusion = BatchCrossWindowFusion(self.num_windows)
 
@@ -258,11 +274,9 @@ class ParalleledMultiWindowProcessing(BaseModule):
         C = inputs.size(1)
         x = []
         projector_aux_losses = []
-        sub_inputs = self.pixel_unshuffle(inputs) # [N, Win*C, ...]
         
         for i in range(self.num_windows):
-            sub_input = sub_inputs[:, C*i : C*(i+1), ...]
-            proj = getattr(self, f"window_extractor_{i}")(sub_input)
+            proj = getattr(self, f"window_extractor_{i}")(inputs)
             proj = getattr(self, f"value_wise_projector_{i}").forward(proj)
             x.append(proj)
             
@@ -273,7 +287,6 @@ class ParalleledMultiWindowProcessing(BaseModule):
         
         x = torch.stack(x) # [Win, N, C, ...]
         x = self.cross_window_fusion(x) # [N, Win*C, ...]
-        x = self.pixel_shuffle(x) # [N, C, ...]
         
         if regulation_weight != 0:
             projector_aux_losses = torch.stack(projector_aux_losses, dim=0).mean()
