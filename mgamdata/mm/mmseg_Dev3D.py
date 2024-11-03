@@ -1132,3 +1132,37 @@ class RandomCrop3D(BaseTransform):
 
     def __repr__(self):
         return self.__class__.__name__ + f'(crop_size={self.crop_size})'
+
+
+class PixelShuffle3D(torch.nn.Module):
+    def __init__(self, upscale_factor):
+        super(PixelShuffle3D, self).__init__()
+        self.upscale_factor = upscale_factor
+
+    def forward(self, inputs:Tensor):
+        batch, channels, x, y, z = inputs.size()
+        r = self.upscale_factor
+        out_channels = channels // (r ** 3)
+        if channels % (r ** 3) != 0:
+            raise ValueError(f"Input channels ({channels}) must be divisible by upscale_factor^3 ({r}).")
+        mid = inputs.view(batch, out_channels, r, r, r, x, y, z)
+        mid = mid.permute(0, 1, 5, 2, 6, 3, 7, 4)
+        outputs = mid.contiguous().view(batch, out_channels, x * r, y * r, z * r)
+        return outputs
+
+
+class PixelUnshuffle3D(torch.nn.Module):
+    def __init__(self, downscale_factor):
+        super(PixelUnshuffle3D, self).__init__()
+        self.downscale_factor = downscale_factor
+
+    def forward(self, inputs:Tensor):
+        batch, channels, x, y, z = inputs.size()
+        r = self.downscale_factor
+        out_channels = channels * (r ** 3)
+        if x % r != 0 or y % r != 0 or z % r != 0:
+            raise ValueError(f"Input channels ({channels}) must be divisible by downscale_factor ({r}).")
+        mid = inputs.view(batch, channels, x // r, r, y // r, r, z // r, r)
+        mid = mid.permute(0, 1, 3, 5, 7, 2, 4, 6)
+        outputs = mid.contiguous().view(batch, out_channels, x // r, y // r, z // r)
+        return outputs

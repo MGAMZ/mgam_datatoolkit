@@ -7,8 +7,16 @@ from mmengine.logging import print_log, MMLogger
 from mmengine.model.base_module import BaseModule
 from mmseg.registry import MODELS
 
-from mgamdata.mm.mmseg_Dev3D import EncoderDecoder_3D
+from mgamdata.mm.mmseg_Dev3D import EncoderDecoder_3D, PixelShuffle3D, PixelUnshuffle3D
 
+
+
+class DynamicParam(BaseModule):
+    def __init__(self, in_channels, dim:str):
+        conv = torch.nn.Conv2d if dim=='2d' else torch.nn.Conv3d
+        self.conv = conv(in_channels, in_channels, 7, 3, 0, bias=0)
+    def forward(self):
+        ...
 
 
 class WindowExtractor(BaseModule):
@@ -18,25 +26,29 @@ class WindowExtractor(BaseModule):
                  value_range:list[int],
                  eps:float=1.0,
                  log_interval:int|None=None,
+                 dim='3d',
                  *args, **kwargs):
         assert len(value_range) == 2 and value_range[1] > value_range[0]
         super().__init__(*args, **kwargs)
         self.value_range = value_range
         self.window_sample = torch.arange(*self.value_range)
         self.eps = eps
+        self.dim = dim
         self.log_interval = log_interval
         self.log_count = 0
         
         # Dynamic Weak Response - a
-        self.d_wr = torch.nn.Parameter(torch.ones(1))
+        self.d_wr = torch.nn.Parameter(torch.nn.init.normal_(torch.empty(1), mean=1))
         # Dynamic Intense Response - b
-        self.d_ir = torch.nn.Parameter(torch.ones(1))
+        self.d_ir = torch.nn.Parameter(torch.nn.init.normal_(torch.empty(1), mean=1))
         # Dynamic Perception Field - d
-        self.d_pf = torch.nn.Parameter(torch.ones(1))
+        self.d_pf = torch.nn.Parameter(torch.nn.init.normal_(torch.empty(1), mean=1))
         # Dynamic Range - g
-        self.d_r = torch.nn.Parameter(torch.ones(1))
+        self.d_r = torch.nn.Parameter(torch.nn.init.normal_(torch.empty(1), mean=1))
         # Global Response - c
-        self.g_r = torch.nn.Parameter(torch.ones(1))
+        self.g_r = torch.nn.Parameter(torch.nn.init.normal_(torch.empty(1), mean=1))
+        # Global Offset - k
+        self.g_o = torch.nn.Parameter(torch.nn.init.normal_(torch.empty(1), mean=0))
         # Range Rectification Coefficient - h
         self.rrc = value_range[1] - value_range[0]
     
@@ -46,21 +58,24 @@ class WindowExtractor(BaseModule):
         response = self.forward(self.window_sample, log_override=False).cpu().numpy()
         return response
     
-    def log(self):
+    def log(self) -> str|None:
         if self.log_interval is not None:
             self.log_count = (self.log_count + 1) % self.log_interval
             if self.log_count == 0:
                 sample_response = self.current_response()
-                print_log(msg=f"WinExt: d_wr: {self.d_wr.item():.4f}, "
-                              f"d_ir: {self.d_ir.item():.4f}, "
-                              f"d_pf: {self.d_pf.item():.4f}, "
-                              f"d_r: {self.d_r.item():.4f}, "
-                              f"g_r: {self.g_r.item():.4f}, "
-                              f"rrc: {self.rrc}. "
-                              f"std {sample_response.std():.2f}, "
-                              f"max {sample_response.max():.2f}, "
-                              f"min {sample_response.min():.2f}.",
-                          logger=MMLogger.get_current_instance())
+                msg = (
+                    f"d_wr: {self.d_wr.item():.3f}, "
+                    f"d_ir: {self.d_ir.item():.3f}, "
+                    f"d_pf: {self.d_pf.item():.3f}, "
+                    f"d_r: {self.d_r.item():.3f}, "
+                    f"g_r: {self.g_r.item():.3f}, "
+                    f"g_o: {self.g_o.item():.3f}, "
+                    f"rrc: {self.rrc}. "
+                    f"std {sample_response.std():.2f}, "
+                    f"max {sample_response.max():.2f}, "
+                    f"min {sample_response.min():.2f}.")
+                print_log(msg, MMLogger.get_current_instance())
+                return msg
     
     def forward(self, x:Tensor, log_override:bool=True):
         """
@@ -77,7 +92,11 @@ class WindowExtractor(BaseModule):
             ) / (
                   self.d_wr * torch.exp( exp) \
                 + self.d_ir * torch.exp(-exp)
+            ) + (
+                self.d_r * self.g_o
             )
+        
+        # Avoid infinite recursion during current_response calculation.
         if log_override:
             self.log()
         return response
@@ -101,17 +120,6 @@ class ValueWiseProjector(BaseModule):
         self.num_rect = num_rect
         self.valid_range = valid_range
         self.dim = dim
-
-        if dim.lower() == '2d':
-            self.pmwm_norm = torch.nn.InstanceNorm2d(
-                num_features=in_channels,
-                affine=True, 
-                track_running_stats=True)
-        else:
-            self.pmwm_norm = torch.nn.InstanceNorm3d(
-                num_features=in_channels,
-                affine=True,
-                track_running_stats=True)
 
         self.rectify_intense = torch.nn.Parameter(
             torch.ones(num_rect))
@@ -148,13 +156,11 @@ class ValueWiseProjector(BaseModule):
         Args:
             inputs (Tensor): (...)
         """
-        normed:Tensor = self.pmwm_norm(inputs) # [...]
-
         rectified = torch.tanh(
             self.rectify_location   # [num_rect]
-            + normed.expand(
+            + inputs.expand(
                 self.num_rect, 
-                *normed.shape
+                *inputs.shape
             ).moveaxis(0,-1) # [..., num_rect]
         ) * self.rectify_intense # rectified: [..., num_rect]
         
@@ -198,9 +204,7 @@ class ParalleledMultiWindowProcessing(BaseModule):
     def __init__(self,
                  in_channels:int,
                  embed_dims:int,
-                 window_embed_dims:int=32,
-                 window_width:int=200,
-                 num_windows:int=4,
+                 window_ratio:int=4,
                  num_rect:int=8,
                  rect_momentum:float=0.99,
                  data_range:list[int]=[-1024, 3072],
@@ -214,9 +218,8 @@ class ParalleledMultiWindowProcessing(BaseModule):
         
         self.in_channels = in_channels
         self.embed_dims = embed_dims
-        self.window_embed_dims = window_embed_dims
-        self.window_width = window_width
-        self.num_windows = num_windows
+        self.window_ratio = window_ratio
+        self.num_windows = window_ratio**2 if dim == '2d' else window_ratio**3
         self.num_rect = num_rect
         self.rect_momentum = rect_momentum
         self.data_range = data_range
@@ -230,7 +233,8 @@ class ParalleledMultiWindowProcessing(BaseModule):
             setattr(self, f"window_extractor_{i}", 
                 WindowExtractor(
                     value_range=self.data_range,
-                    log_interval=self.log_interval))
+                    log_interval=self.log_interval,
+                    dim=self.dim))
             setattr(self, f"value_wise_projector_{i}", 
                 ValueWiseProjector(
                     in_channels=self.in_channels,
@@ -239,6 +243,10 @@ class ParalleledMultiWindowProcessing(BaseModule):
                     valid_range=self.data_range,
                     dim=self.dim))
         
+        shuffle = PixelShuffle3D if self.dim == '3d' else torch.nn.PixelShuffle
+        unshuffle = PixelUnshuffle3D if self.dim == '3d' else torch.nn.PixelUnshuffle
+        self.pixel_shuffle = shuffle(self.window_ratio)
+        self.pixel_unshuffle = unshuffle(self.window_ratio)
         # TODO Maybe Point-Wise Attention?
         self.cross_window_fusion = BatchCrossWindowFusion(self.num_windows)
 
@@ -247,28 +255,32 @@ class ParalleledMultiWindowProcessing(BaseModule):
         Args:
             inputs (Tensor): (N, C, ...)
         """
+        C = inputs.size(1)
         x = []
         projector_aux_losses = []
+        sub_inputs = self.pixel_unshuffle(inputs) # [N, Win*C, ...]
         
         for i in range(self.num_windows):
-            proj = getattr(self, f"window_extractor_{i}")(inputs)
+            sub_input = sub_inputs[:, C*i : C*(i+1), ...]
+            proj = getattr(self, f"window_extractor_{i}")(sub_input)
             proj = getattr(self, f"value_wise_projector_{i}").forward(proj)
             x.append(proj)
             
             if regulation_weight != 0:
                 projector_aux_loss = regulation_weight * getattr(
-                    self, f"value_wise_projector_{i}").regulation(extracted)
+                    self, f"value_wise_projector_{i}").regulation(proj)
                 projector_aux_losses.append(projector_aux_loss)
         
-        x = torch.stack(x, dim=0) # [W, N, C, ...]
+        x = torch.stack(x) # [Win, N, C, ...]
         x = self.cross_window_fusion(x) # [N, Win*C, ...]
+        x = self.pixel_shuffle(x) # [N, C, ...]
         
         if regulation_weight != 0:
             projector_aux_losses = torch.stack(projector_aux_losses, dim=0).mean()
         else:
             projector_aux_losses = None
             
-        return x, projector_aux_losses # [N, Win*C, ...]
+        return x, projector_aux_losses # [N, C, ...]
 
 
 class AutoWindowSetting(EncoderDecoder_3D):
