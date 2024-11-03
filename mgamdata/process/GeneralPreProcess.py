@@ -227,11 +227,17 @@ class InstanceNorm(BaseTransform):
 
 
 class ExpandOneHot(BaseTransform):
-    def __init__(self, num_classes:int):
+    def __init__(self,
+                 num_classes:int,
+                 ignore_index:int=255,
+                 ignore_index_proj:int=0):
         self.num_classes = num_classes
+        self.ignore_index = ignore_index
+        self.ignore_index_proj = ignore_index_proj
     
     def transform(self, results):
         mask = results['gt_seg_map'] # [...]
+        mask[mask==self.ignore_index] = self.ignore_index_proj
         # # eye: Identity Matrix [num_classes, num_classes]
         mask_channel = np.eye(self.num_classes)[mask]
         mask_channel = np.moveaxis(mask_channel, -1, 0).astype(np.uint8)

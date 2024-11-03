@@ -3,12 +3,11 @@ import warnings
 from abc import abstractmethod
 from collections.abc import Sequence
 from typing import Any
-from tqdm import tqdm
 
 import cv2
 import numpy as np
 import torch
-from torch import Tensor, Type
+from torch import Tensor
 from torch.nn import functional as F
 
 from mmcv.transforms import to_tensor, Resize, BaseTransform
@@ -149,7 +148,6 @@ class VolumeData(BaseDataElement):
             return None
 
 
-
 class Seg3DDataSample(BaseDataElement):
     """A data structure interface of MMSegmentation for 3D data. They are used as
     interfaces between different components.
@@ -250,7 +248,6 @@ class Seg3DDataSample(BaseDataElement):
     @seg_logits.deleter
     def seg_logits(self) -> None:
         del self._seg_logits
-
 
 
 class EncoderDecoder_3D(EncoderDecoder):
@@ -399,7 +396,6 @@ class EncoderDecoder_3D(EncoderDecoder):
         return data_samples
 
 
-
 class BaseDecodeHead_3D(BaseDecodeHead):
     def __init__(self, loss_gt_key:str='gt_sem_seg', *args, **kwargs):
         assert loss_gt_key in ['gt_sem_seg', 'gt_sem_seg_one_hot'], \
@@ -425,7 +421,7 @@ class BaseDecodeHead_3D(BaseDecodeHead):
                       ) -> dict:
         seg_label = F.interpolate(
             input=seg_label,
-            size=seg_logit.shape[2:],
+            size=seg_logit.shape[2:],   # Skip batch and channel dimension.
             mode='nearest')
         
         if self.sampler is not None:
@@ -476,20 +472,20 @@ class BaseDecodeHead_3D(BaseDecodeHead):
         Returns:
             dict[str, Tensor]: a dictionary of loss components
         """
-        # list of Tensor: [B, C, Z, Y, X]
-        seg_logits = self.forward(inputs)
-        # [B, 1, Z, Y, X]
-        seg_label = self._stack_batch_gt(
-            batch_data_samples, 'gt_sem_seg') # type: ignore
-        # [B, Class, Z, Y, X]
-        if self.loss_gt_key == 'gt_sem_seg_one_hot':
-            seg_label_loss = self._stack_batch_gt(
-                batch_data_samples, 'gt_sem_seg_one_hot') # type: ignore
-        else:
-            seg_label_loss = seg_label
         losses = dict()
         
-        # NOTE Deep Supervision Loss Calculation.
+        # list of Tensor: [B, C, Z, Y, X]
+        seg_logits = self.forward(inputs)
+        
+        # [B, 1, Z, Y, X]
+        seg_label = self._stack_batch_gt(batch_data_samples, 'gt_sem_seg')
+        # [B, Class, Z, Y, X]
+        if self.loss_gt_key == 'gt_sem_seg_one_hot':
+            seg_label_loss = self._stack_batch_gt(batch_data_samples, 'gt_sem_seg_one_hot')
+        else:
+            seg_label_loss = seg_label
+        
+        # HACK Deep Supervision Loss Calculation
         for i, seg_logit in enumerate(seg_logits):
             losses = self.loss_per_layer(
                 seg_logit, seg_label_loss, losses, weight=1/(2**i))
@@ -545,7 +541,6 @@ class BaseDecodeHead_3D(BaseDecodeHead):
         return torch.stack(gt_semantic_segs, dim=0)
 
 
-
 class DiceLoss_3D(DiceLoss):
     def _expand_onehot_labels_dice_3D(
         self, pred: Tensor, target: Tensor) -> Tensor:
@@ -568,17 +563,16 @@ class DiceLoss_3D(DiceLoss):
         one_hot_target = one_hot_target[..., :num_classes].permute(0, 4, 1, 2, 3)
         return one_hot_target
 
-
     def forward(self, pred, target, *args, **kwargs):
         assert pred.shape == target.shape, (
-            "The one hot expansion has been done in the preprocess function."
-            "Multiple framework modifications are introduced as well.")
+            "The one hot expansion has been done in the preprocess function. "
+            "Multiple framework modifications are introduced as well. "
+            f"The target shape ({target.shape}) should be equal to pred shape ({pred.shape})")
         if (pred.shape != target.shape):
             target = self._expand_onehot_labels_dice_3D(
                 pred, target)
             assert pred.shape == target.shape
         return super().forward(pred, target, *args, **kwargs)
-
 
 
 class Seg3DVisualizationHook(SegVisualizationHook):
@@ -644,7 +638,6 @@ class Seg3DVisualizationHook(SegVisualizationHook):
                 step=self._test_index)
 
 
-
 class Seg3DLocalVisualizer(SegLocalVisualizer):
     def __init__(self,
                  name,
@@ -708,7 +701,6 @@ class Seg3DLocalVisualizer(SegLocalVisualizer):
         return super().add_datasample(name, image, data_sample_2D, *args, **kwargs)
 
 
-
 class PackSeg3DInputs(PackSegInputs):
     def transform(self, results: dict) -> dict:
         """Method to pack the input data for 3D segmentation.
@@ -761,7 +753,6 @@ class PackSeg3DInputs(PackSegInputs):
         packed_results['data_samples'] = data_sample
 
         return packed_results
-
 
 
 class Seg3DDataPreProcessor(SegDataPreProcessor):
@@ -962,7 +953,6 @@ class Seg3DDataPreProcessor(SegDataPreProcessor):
         return dict(inputs=inputs, data_samples=data_samples)
 
 
-
 class Resize3D(Resize):
     @staticmethod
     def scale_2D_or_3D(original_shape:list[int], target_shape:list[int]):
@@ -1005,7 +995,6 @@ class Resize3D(Resize):
             results['scale_factor'] = [
                 new / ori for new, ori in zip(
                     results['img_shape'], results['ori_shape'])]
-
 
 
 class RandomCrop3D(BaseTransform):

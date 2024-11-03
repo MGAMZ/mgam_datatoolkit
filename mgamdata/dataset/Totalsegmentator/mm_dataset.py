@@ -60,7 +60,6 @@ class TotalsegmentatorIndexer:
         ]
 
 
-
 class TotalsegmentatorSegDataset(BaseSegDataset):
     METAINFO = dict(classes=list(CLASS_INDEX_MAP.keys()))
 
@@ -83,12 +82,10 @@ class TotalsegmentatorSegDataset(BaseSegDataset):
                          metainfo={'classes':new_classes}, 
                          **kwargs)
 
-
     def _update_palette(self) -> list[list[int]]:
         '''确保background为RGB全零'''
         new_palette = super()._update_palette()
         return [[0,0,0]] + new_palette[1:]
-
 
     def load_data_list(self):
         """
@@ -119,7 +116,6 @@ class TotalsegmentatorSegDataset(BaseSegDataset):
             return sorted_samples
 
 
-
 class TotalsegmentatorSeg3DDataset(BaseSegDataset):
     METAINFO = dict(classes=list(CLASS_INDEX_MAP.keys()))
 
@@ -139,12 +135,10 @@ class TotalsegmentatorSeg3DDataset(BaseSegDataset):
         
         super().__init__(metainfo={'classes':new_classes}, **kwargs)
 
-
     def _update_palette(self) -> list[list[int]]:
         '''确保background为RGB全零'''
         new_palette = super()._update_palette()
         return [[0,0,0]] + new_palette[1:]
-
 
     def iter_series(self):
         activate_series = self.meta_table[self.meta_table['split'] == self.split]
@@ -153,7 +147,6 @@ class TotalsegmentatorSeg3DDataset(BaseSegDataset):
         for series in activate_series_id:
             yield (os.path.join(self.data_root, series, 'ct.mha'),
                    os.path.join(self.data_root, series, 'segmentations.mha'))
-
 
     def load_data_list(self):
         """
@@ -170,7 +163,7 @@ class TotalsegmentatorSeg3DDataset(BaseSegDataset):
             data_list.append(dict(
                 img_path=image_path,
                 seg_map_path=anno_path,
-                label_map=None,
+                label_map=self.label_map,
                 reduce_zero_label=False,
                 seg_fields=[]
             ))
@@ -185,7 +178,6 @@ class TotalsegmentatorSeg3DDataset(BaseSegDataset):
             return sorted_samples
 
 
-
 class Tsd3D_PreCrop_Npz(TotalsegmentatorSeg3DDataset):
     def iter_series(self):
         activate_series = self.meta_table[self.meta_table['split'] == self.split]
@@ -197,7 +189,6 @@ class Tsd3D_PreCrop_Npz(TotalsegmentatorSeg3DDataset):
                 if cropped_sample.endswith('.npz'):
                     yield (os.path.join(samples, cropped_sample),
                            os.path.join(samples, cropped_sample))
-
 
 
 class ParseID(BaseTransform):

@@ -132,6 +132,7 @@ CLASS_INDEX_MAP = {
 
 CLASS_SUBSET_MAP = {
     'organ': [
+        'background',
         'adrenal_gland_left',
         'adrenal_gland_right',
         'aorta',
@@ -176,8 +177,7 @@ CLASS_SUBSET_MAP = {
 
 def get_subset_and_rectify_map(subset_name:str):
     subset_classes = CLASS_SUBSET_MAP[subset_name]
-    subset_map = {'background': 0}
-    subset_map.update({name: i+1 for i, name in enumerate(subset_classes)})
+    subset_map = {name: i+1 for i, name in enumerate(subset_classes)}
     
     remap = [(original_index, subset_map[name])
              for name, original_index in subset_map.items()]

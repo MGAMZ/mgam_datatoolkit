@@ -1,3 +1,4 @@
+import pdb
 from typing import Sequence
 
 import cv2
@@ -54,6 +55,11 @@ class LoadAnnoFromOpenCV(BaseTransform):
         if 'seg_map_path' in results:
             mask_path = results['seg_map_path']
             mask = cv2.imread(mask_path, cv2.IMREAD_UNCHANGED)
+            if results.get('label_map', None) is not None:
+                mask_copy = mask.copy()
+                for old_id, new_id in results['label_map'].items():
+                    mask[mask_copy == old_id] = new_id
+            
             results['gt_seg_map'] = mask
             results['seg_fields'].append('gt_seg_map')
         return results
@@ -116,8 +122,11 @@ class LoadMaskFromMHA(LoadFromMHA):
         mask_path = results['seg_map_path']
         mask_mha = sitk.ReadImage(mask_path)
         mask = self._process_mha(mask_mha, 'mask')
-        
-        results['gt_seg_map'] = mask # output: [H, W, D]
+        if results.get('label_map', None) is not None:
+            mask_copy = mask.copy()
+            for old_id, new_id in results['label_map'].items():
+                mask[mask_copy == old_id] = new_id
+        results['gt_seg_map'] = mask # output: [X, Y, Z]
         results['seg_fields'].append('gt_seg_map')
         return results
 
@@ -149,7 +158,12 @@ class LoadSampleFromNpz(BaseTransform):
         if 'img' in self.load_type:
             results['img'] = sample['img']
         if 'anno' in self.load_type:
-            results['gt_seg_map'] = sample['gt_seg_map']
+            mask = sample['gt_seg_map']
+            if results.get('label_map', None) is not None:
+                mask_copy = mask.copy()
+                for old_id, new_id in results['label_map'].items():
+                    mask[mask_copy == old_id] = new_id
+            
+            results['gt_seg_map'] = mask
             results['seg_fields'].append('gt_seg_map')
-        
         return results

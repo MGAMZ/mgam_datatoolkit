@@ -1,5 +1,4 @@
 import pdb
-from typing_extensions import deprecated
 
 import torch
 from torch import Tensor
@@ -41,11 +40,10 @@ class WindowExtractor(BaseModule):
         # Range Rectification Coefficient - h
         self.rrc = value_range[1] - value_range[0]
     
-    @property
     @torch.inference_mode()
     def current_response(self):
-        self.window_sample = self.window_sample.to(device=self.dynamic_range.device)
-        response = self.forward(self.window_sample).cpu().numpy()
+        self.window_sample = self.window_sample.to(device=self.d_wr.device)
+        response = self.forward(self.window_sample, log_override=False).cpu().numpy()
         return response
     
     def log(self):
@@ -53,22 +51,22 @@ class WindowExtractor(BaseModule):
             self.log_count = (self.log_count + 1) % self.log_interval
             if self.log_count == 0:
                 sample_response = self.current_response()
-                print_log(f"WinExt: d_wr: {self.d_wr.item():.4f}, "
-                          f"d_ir: {self.d_ir.item():.4f}, "
-                          f"d_pf: {self.d_pf.item():.4f}, "
-                          f"d_r: {self.d_r.item():.4f}, "
-                          f"g_r: {self.g_r.item():.4f}, "
-                          f"rrc: {self.rrc}. "
-                          f"std {sample_response.std():.2f}, "
-                          f"max {sample_response.max():.2f}, "
-                          f"min {sample_response.min():.2f}.")
+                print_log(msg=f"WinExt: d_wr: {self.d_wr.item():.4f}, "
+                              f"d_ir: {self.d_ir.item():.4f}, "
+                              f"d_pf: {self.d_pf.item():.4f}, "
+                              f"d_r: {self.d_r.item():.4f}, "
+                              f"g_r: {self.g_r.item():.4f}, "
+                              f"rrc: {self.rrc}. "
+                              f"std {sample_response.std():.2f}, "
+                              f"max {sample_response.max():.2f}, "
+                              f"min {sample_response.min():.2f}.",
+                          logger=MMLogger.get_current_instance())
     
-    def forward(self, x:Tensor):
+    def forward(self, x:Tensor, log_override:bool=True):
         """
         Args:
             inputs (Tensor): (...)
         """
-        
         exp = (x / self.rrc + self.d_pf) \
             / (self.g_r * self.d_r)
         
@@ -80,8 +78,8 @@ class WindowExtractor(BaseModule):
                   self.d_wr * torch.exp( exp) \
                 + self.d_ir * torch.exp(-exp)
             )
-        
-        self.log()
+        if log_override:
+            self.log()
         return response
 
 
@@ -204,10 +202,11 @@ class ParalleledMultiWindowProcessing(BaseModule):
                  window_width:int=200,
                  num_windows:int=4,
                  num_rect:int=8,
-                 rect_momentum:float=0.1,
+                 rect_momentum:float=0.99,
                  data_range:list[int]=[-1024, 3072],
                  dim='3d',
                  log_interval:int|None=None,
+                 enable_VWP:bool=True,
                  *args, **kwargs
                 ):
         assert dim.lower() in ['2d', '3d']
@@ -223,6 +222,7 @@ class ParalleledMultiWindowProcessing(BaseModule):
         self.data_range = data_range
         self.dim = dim
         self.log_interval = log_interval
+        self.enable_VWP = enable_VWP
         self._init_PMWP()
     
     def _init_PMWP(self):
@@ -251,9 +251,9 @@ class ParalleledMultiWindowProcessing(BaseModule):
         projector_aux_losses = []
         
         for i in range(self.num_windows):
-            extracted = getattr(self, f"window_extractor_{i}")(inputs)
-            # projected = getattr(self, f"value_wise_projector_{i}").forward(extracted)
-            x.append(extracted)
+            proj = getattr(self, f"window_extractor_{i}")(inputs)
+            proj = getattr(self, f"value_wise_projector_{i}").forward(proj)
+            x.append(proj)
             
             if regulation_weight != 0:
                 projector_aux_loss = regulation_weight * getattr(
