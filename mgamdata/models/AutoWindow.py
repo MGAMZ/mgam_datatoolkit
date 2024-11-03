@@ -67,6 +67,7 @@ class WindowExtractor(BaseModule):
         response = self.forward(self.window_sample, log_override=False).cpu().numpy()
         return response
     
+    @torch.inference_mode()
     def log(self) -> str|None:
         if self.log_interval is not None:
             self.log_count = (self.log_count + 1) % self.log_interval

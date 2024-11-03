@@ -542,6 +542,10 @@ class BaseDecodeHead_3D(BaseDecodeHead):
 
 
 class DiceLoss_3D(DiceLoss):
+    def __init__(self, ignore_1st_index:bool=False, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.ignore_1st_index = ignore_1st_index
+        
     def _expand_onehot_labels_dice_3D(
         self, pred: Tensor, target: Tensor) -> Tensor:
         
@@ -563,15 +567,18 @@ class DiceLoss_3D(DiceLoss):
         one_hot_target = one_hot_target[..., :num_classes].permute(0, 4, 1, 2, 3)
         return one_hot_target
 
-    def forward(self, pred, target, *args, **kwargs):
+    def forward(self, pred:Tensor, target:Tensor, *args, **kwargs):
         assert pred.shape == target.shape, (
             "The one hot expansion has been done in the preprocess function. "
             "Multiple framework modifications are introduced as well. "
             f"The target shape ({target.shape}) should be equal to pred shape ({pred.shape})")
         if (pred.shape != target.shape):
-            target = self._expand_onehot_labels_dice_3D(
-                pred, target)
+            target = self._expand_onehot_labels_dice_3D(pred, target)
             assert pred.shape == target.shape
+        if self.ignore_1st_index:
+            pred = pred[:, 1:, ...].contiguous()
+            target = target[:, 1:, ...].contiguous()
+            
         return super().forward(pred, target, *args, **kwargs)
 
 
