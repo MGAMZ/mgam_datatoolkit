@@ -57,7 +57,6 @@ def load_ct_info(file_path, sort_by_distance=True, do_raw=False):
     return res
 
 
-
 def load_ct_as_sitk_image(file_path, get_raw_value=False):
     sitk_image = None
     
