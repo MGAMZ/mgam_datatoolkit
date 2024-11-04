@@ -1,15 +1,16 @@
 import logging
 import os
 import pickle
+from collections.abc import Callable
 from io import BytesIO
 from multiprocessing import Pool, cpu_count
 from multiprocessing.managers import BaseManager
-from typing import Any, Dict, Tuple, Union, Callable
 from tqdm import tqdm
 from pprint import pprint
 from lzma import compress
 from lzma import decompress
 from lzma import FORMAT_XZ
+from typing import Any
 
 import lmdb
 import pydicom
@@ -65,17 +66,17 @@ class LMDB_DataBackend:
 
 
 	@classmethod
-	def _check_one_item(cls, key, value) -> Dict[str, Any] | None:
+	def _check_one_item(cls, key, value) -> dict[str, Any] | None:
 		try:
 			if key.decode().startswith('METADATA'):
 				decompressed_meta = cls._decompress_meta(value)
-				if not isinstance(decompressed_meta, Dict):
+				if not isinstance(decompressed_meta, dict):
 					return {'Error Type':'Invalid Decompressed Meta',
 							'key': key.decode(),
 							'decompressed': decompressed_meta}
 			elif key.decode().startswith('PIXEL_ARRAY'):
 				decompressed_pixel = cls._decompress_meta(value)
-				if not isinstance(decompressed_pixel, Dict):
+				if not isinstance(decompressed_pixel, dict):
 					return {'Error Type':'Invalid Decompressed Pixel',
 							'key': key.decode(),
 							'decompressed': decompressed_pixel}
@@ -116,7 +117,7 @@ class LMDB_DataBackend:
 		logger.info(f"{failed_count} failed")
 
 	@classmethod
-	def _init_lmdb_process_one_file(cls, params) -> Dict[Union[str,bytes], Union[bytes,float]]:
+	def _init_lmdb_process_one_file(cls, params) -> dict[str|bytes, bytes|float]:
 		dataset_root, file_root, file = params
 		source_type = file.split(".")[-1]
 		source_path = os.path.join(file_root, file)
@@ -134,7 +135,7 @@ class LMDB_DataBackend:
 			pixel, meta = nrrd.read(source_path)
 		else:
 			raise NotImplementedError(f"source_type only support ['dcm', 'nrrd'], but got {source_type}")
-		meta:Dict
+		meta:dict
 		pickle.dump(meta, meta_buffer)
 
 		# Pixel from npy
@@ -189,7 +190,7 @@ class LMDB_DataBackend:
 						txn.put(key, value)
 	
 	@staticmethod
-	def _map_path_key(dataset_root, path:str)->Tuple[bytes, bytes]:
+	def _map_path_key(dataset_root, path:str)->tuple[bytes, bytes]:
 		path = path.split(os.path.basename(dataset_root))[-1]
 		path = os.path.join(*path.replace("/","\\").split(".")[:-1])
 		metadata_key_name = ("METADATA_" + path).encode()
@@ -220,7 +221,7 @@ class LMDB_DataBackend:
 			return decompressed
 
 
-	def meta_data_dict(self, meta_path:str) -> Dict:
+	def meta_data_dict(self, meta_path:str) -> dict:
 		with self.lmdb_env.begin(write=False) as txn:
 			meta_dict_key = 'REGISTRY_'+os.path.basename(meta_path)
 			meta_buffer = txn.get(meta_dict_key.encode(), None)
@@ -246,7 +247,7 @@ class LMDB_DataBackend:
 
 
 	@classmethod
-	def _decompress_meta(cls, meta_buffer:bytes|None) -> Dict | None:
+	def _decompress_meta(cls, meta_buffer:bytes|None) -> dict | None:
 		if meta_buffer is not None:
 			meta_buffer = decompress(meta_buffer, format=cls.COMPRESS_FORMAT)
 			return pickle.load(BytesIO(meta_buffer))
@@ -263,14 +264,14 @@ class LMDB_DataBackend:
 
 	@classmethod
 	def decompress(cls, meta_buffer:bytes|None=None, pixel_buffer:bytes|None=None
-                ) -> Tuple[Union[Dict,None], Union[np.ndarray, None]]:
+                ) -> tuple[dict|None, np.ndarray|None]:
 		meta = cls._decompress_meta(meta_buffer)
 		pixel = cls._decompress_pixel(pixel_buffer)
 		return (meta, pixel)
 
 
 	def fetch_data(self, path:str, meta:bool=True, pixel:bool=True
-                ) -> Tuple[str, Any, Any]:
+                ) -> tuple[str, Any, Any]:
 		meta_key, pixel_key = self._map_path_key(self.dataset_root, path)
 		meta_buffer, pixel_buffer = None, None
 		with self.lmdb_env.begin(write=False) as txn:
