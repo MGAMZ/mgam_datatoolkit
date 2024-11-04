@@ -10,8 +10,9 @@ import SimpleITK as sitk
 
 
 def convert_nii_sitk(nii_path:str, 
+                     nii_fdata_order:str,
                      dtype=np.float32, 
-                     nii_fdata_order:str='zyx') -> sitk.Image:
+                     ) -> sitk.Image:
     """保证itk mha格式维度顺序为zyx"""
     
     nib_img = nib.load(nii_path)

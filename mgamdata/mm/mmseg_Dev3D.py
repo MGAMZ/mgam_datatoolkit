@@ -610,7 +610,6 @@ class Seg3DVisualizationHook(SegVisualizationHook):
                 wait_time=self.wait_time,
                 step=total_curr_iter)
 
-
     def after_test_iter(self, runner: Runner, batch_idx: int, data_batch: dict,
                         outputs: Sequence[Seg3DDataSample]) -> None:
         """Run after every testing iterations.
