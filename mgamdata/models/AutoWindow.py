@@ -172,12 +172,10 @@ class ValueWiseProjector(BaseModule):
         Args:
             inputs (Tensor): (...)
         """
+        # TODO Tanh? Maybe improper here!
         rectified = torch.tanh(
             self.rectify_location   # [num_rect]
-            + inputs.expand(
-                self.num_rect, 
-                *inputs.shape
-            ).moveaxis(0,-1) # [..., num_rect]
+            + inputs.expand(self.num_rect, *inputs.shape).moveaxis(0,-1) # [..., num_rect]
         ) * self.rectify_intense # rectified: [..., num_rect]
         
         return torch.sum(rectified, dim=-1) # [...]

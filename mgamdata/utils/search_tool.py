@@ -1,10 +1,9 @@
 import os
-from typing import List, Union
 
 
 
 # NOTE 输入的所有gt文件夹是有优先级顺序的，只会返回最先找到的gt路径
-def search_mha_file(source_folders:Union[List[str], str], seriesUID:str, target_type:str):
+def search_mha_file(source_folders:list[str]|str, seriesUID:str, target_type:str):
     if isinstance(source_folders, str):
         source_folders = [source_folders]
     assert target_type in ['image', 'label']
