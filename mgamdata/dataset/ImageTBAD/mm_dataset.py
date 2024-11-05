@@ -51,8 +51,8 @@ class ImageTBAD_Seg3DDataset(BaseSegDataset):
 
     def iter_series(self):
         for series in self._split():
-            yield (os.path.join(self.data_root, 'image', series),
-                   os.path.join(self.data_root, 'label', series),)
+            yield (os.path.join(self.data_root, 'image', series+'.mha'),
+                   os.path.join(self.data_root, 'label', series+'.mha'))
 
     def load_data_list(self):
         """

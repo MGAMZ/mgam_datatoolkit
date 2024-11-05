@@ -219,9 +219,10 @@ class InstanceNorm(BaseTransform):
     
     def transform(self, results):
         ori_dtype = results['img'].dtype
-        results['img'] = (results['img'] - results['img'].mean())
-        results['img'] = results['img'] / (results['img'].std() + self.eps)
-        results['img'] = results['img'].astype(ori_dtype)
+        img = results['img']
+        img = img - img.min()
+        img = img / (img.std() + self.eps)
+        results['img'] = img.astype(ori_dtype)
         return results
 
 
@@ -236,7 +237,8 @@ class ExpandOneHot(BaseTransform):
     def transform(self, results):
         mask = results['gt_seg_map'] # [...]
         # NOTE The ignored index is remapped to the last class.
-        mask[mask==self.ignore_index] = self.num_classes
+        if self.ignore_index is not None:
+            mask[mask==self.ignore_index] = self.num_classes
         # # eye: Identity Matrix [num_classes+1, num_classes+1]
         mask_channel = np.eye(self.num_classes+1)[mask]
         mask_channel = np.moveaxis(mask_channel, -1, 0).astype(np.uint8)

@@ -314,7 +314,7 @@ class EncoderDecoder_3D(EncoderDecoder):
                         crop_vol, batch_img_metas).to(accu_device, non_blocking=True)
                     preds[:, :, z1:z2, y1:y2, x1:x2] += crop_seg_logit
                     count_mat[:, :, z1:z2, y1:y2, x1:x2] += 1
-        assert (count_mat == 0).sum() == 0
+        assert torch.all(count_mat != 0), 'The count_mat should not be zero'
         seg_logits = preds / count_mat
 
         return seg_logits
@@ -397,12 +397,16 @@ class EncoderDecoder_3D(EncoderDecoder):
 
 
 class BaseDecodeHead_3D(BaseDecodeHead):
-    def __init__(self, loss_gt_key:str='gt_sem_seg', *args, **kwargs):
+    def __init__(self, 
+                 loss_gt_key:str='gt_sem_seg', 
+                 deep_supervision_weight_truth:int=2,
+                 *args, **kwargs):
         assert loss_gt_key in ['gt_sem_seg', 'gt_sem_seg_one_hot'], \
             f"loss_gt_key currently supports ['gt_sem_seg', 'gt_sem_seg_one_hot'], \
               but got {loss_gt_key}"
         super().__init__(*args, **kwargs)
         self.loss_gt_key = loss_gt_key
+        self.deep_supervision_weight_truth = deep_supervision_weight_truth
         self.conv_seg = torch.nn.Conv3d(
             self.channels, self.out_channels, kernel_size=1)
         if self.dropout_ratio > 0:
@@ -488,7 +492,8 @@ class BaseDecodeHead_3D(BaseDecodeHead):
         # HACK Deep Supervision Loss Calculation
         for i, seg_logit in enumerate(seg_logits):
             losses = self.loss_per_layer(
-                seg_logit, seg_label_loss, losses, weight=1/(2**i))
+                seg_logit, seg_label_loss, losses, 
+                weight=1/(self.deep_supervision_weight_truth**i))
         
         losses['acc_seg'] = accuracy(
             seg_logits[0],
@@ -675,7 +680,7 @@ class Seg3DLocalVisualizer(SegLocalVisualizer):
         Z, Y, X, C = image.shape
         name += f'_z{Z}'
         random_selected_z = np.random.randint(0, Z)
-        image = np.take(image, random_selected_z, axis=0)
+        image = image[random_selected_z].copy()
         image = (image/image.max()*255).astype(np.uint8) # (Y, X, C)
         if self.resize is not None:
             image = cv2.resize(image, self.resize, interpolation=cv2.INTER_LINEAR)
