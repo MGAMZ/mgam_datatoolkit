@@ -229,6 +229,11 @@ class RemasteredDDP(MMDistributedDataParallel):
     def test_step(self, *args, **kwargs):
         return self.module.test_step(*args, **kwargs)
 
+    def __getattr__(self, name):
+        try:
+            return super().__getattr__(name)
+        except:
+            return getattr(self.module, name)
 
 # customized FSDP training for our task.
 class RemasteredFSDP(MMFullyShardedDataParallel):
@@ -246,6 +251,11 @@ class RemasteredFSDP(MMFullyShardedDataParallel):
     def test_step(self, *args, **kwargs):
         return self.module.test_step(*args, **kwargs)
 
+    def __getattr__(self, name):
+        try:
+            return super().__getattr__(name)
+        except:
+            return getattr(self.module, name)
 
 
 class RatioSampler(DefaultSampler):

@@ -1,28 +1,54 @@
-from curses import window
+from collections.abc import Callable
 import pdb
+from io import BytesIO
+from PIL import Image
+from functools import partial
 
+import seaborn
+import numpy as np
 import torch
 from torch import Tensor
+from matplotlib import pyplot as plt
 
+from mmengine.runner.runner import Runner
+from mmengine.hooks.hook import Hook
 from mmengine.logging import print_log, MMLogger
 from mmengine.model.base_module import BaseModule
 from mmseg.registry import MODELS
 
-from mgamdata.mm.mmseg_Dev3D import EncoderDecoder_3D, PixelShuffle3D, PixelUnshuffle3D
+from mgamdata.mm.mmseg_Dev3D import EncoderDecoder_3D
 
 
 
 class DynamicParam(BaseModule):
-    def __init__(self, in_channels:int, mid_channels:int, dim:str, *args, **kwargs):
+    def __init__(self, init_method:Callable, ensure_sign:str|None=None, eps:float=1e-2):
         super().__init__()
+        if ensure_sign is not None:
+            assert ensure_sign in ['pos', 'neg']
+        self.ensure_sign = ensure_sign
         self.param = torch.nn.Parameter(torch.empty(1))
-        torch.nn.init.normal_(self.param, mean=1, std=0.5)
+        init_method(self.param)
+        self.eps = eps
     
     def forward(self, *args, **kwargs) -> Tensor:
-        return self.param
+        if self.ensure_sign == 'pos':
+            return torch.relu(self.param) + self.eps
+        elif self.ensure_sign == 'neg':
+            return -torch.relu(self.param) - self.eps
+        else:
+            return self.param
+    
+    def status(self):
+        return self.param.detach().cpu().numpy()
     
     def __repr__(self):
         return "{:.3f}".format(self.param.item())
+
+    def __getattr__(self, name):
+        if name == 'device':
+            return self.param.device
+        else:
+            return super().__getattr__(name)
 
 
 class WindowExtractor(BaseModule):
@@ -31,9 +57,8 @@ class WindowExtractor(BaseModule):
     def __init__(self,
                  in_channels:int,
                  embed_dims:int,
-                 value_range:list[int],
+                 value_range:list|tuple,
                  eps:float=1.0,
-                 log_interval:int|None=None,
                  dim='3d',
                  *args, **kwargs):
         assert len(value_range) == 2 and value_range[1] > value_range[0]
@@ -42,52 +67,57 @@ class WindowExtractor(BaseModule):
         self.value_range = value_range
         self.eps = eps
         self.dim = dim
-        self.log_interval = log_interval
         self.log_count = 0
         self.window_sample = torch.arange(*self.value_range)
         
         # Dynamic Weak Response - a
-        self.d_wr = DynamicParam(in_channels, embed_dims, dim)
+        self.d_wr = DynamicParam(partial(torch.nn.init.normal_, mean=1, std=0.5), 
+                                 ensure_sign='pos')
         # Dynamic Intense Response - b
-        self.d_ir = DynamicParam(in_channels, embed_dims, dim)
+        self.d_ir = DynamicParam(partial(torch.nn.init.normal_, mean=1, std=0.5), 
+                                 ensure_sign='pos')
         # Dynamic Perception Field - d
-        self.d_pf = DynamicParam(in_channels, embed_dims, dim)
+        self.d_pf = DynamicParam(partial(torch.nn.init.normal_, mean=1, std=0.5), 
+                                 ensure_sign=None)
         # Dynamic Range - g
-        self.d_r = DynamicParam(in_channels, embed_dims, dim)
+        self.d_r = DynamicParam(partial(torch.nn.init.normal_, mean=1, std=0.5), 
+                                ensure_sign='pos')
         # Global Response - c
-        self.g_r = DynamicParam(in_channels, embed_dims, dim)
+        self.g_r = DynamicParam(partial(torch.nn.init.normal_, mean=1, std=0.5), 
+                                ensure_sign='pos')
         # Global Offset - k
-        self.g_o = torch.nn.Parameter(torch.zeros(1))
+        self.g_o = DynamicParam(partial(torch.nn.init.zeros_), 
+                                ensure_sign=None)
         # Range Rectification Coefficient - h
         self.rrc = value_range[1] - value_range[0]
+        # Major dynamic range for this window to handle.
+        self.major_handle = (value_range[1] + value_range[0]) / 2
+        assert self.rrc > 0
     
     @torch.inference_mode()
     def current_response(self):
         self.window_sample = self.window_sample.to(device=self.g_o.device, non_blocking=True)
-        response = self.forward(self.window_sample, log_override=False).cpu().numpy()
+        response = self.forward(self.window_sample).cpu().numpy()
         return response
     
     @torch.inference_mode()
-    def log(self) -> str|None:
-        if self.log_interval is not None:
-            self.log_count = (self.log_count + 1) % self.log_interval
-            if self.log_count == 0:
-                sample_response = self.current_response()
-                msg = (
-                    f"d_wr: {repr(self.d_wr)}, "
-                    f"d_ir: {repr(self.d_ir)}, "
-                    f"d_pf: {repr(self.d_pf)}, "
-                    f"d_r: {repr(self.d_r)}, "
-                    f"g_r: {repr(self.g_r)}, "
-                    f"g_o: {self.g_o.item():.3f}, "
-                    f"rrc: {repr(self.rrc)}. "
-                    f"std {sample_response.std():.2f}, "
-                    f"max {sample_response.max():.2f}, "
-                    f"min {sample_response.min():.2f}.")
-                print_log(msg, MMLogger.get_current_instance())
-                return msg
+    def status(self) -> dict:
+        sample_response = self.current_response()
+        return {
+            "d_wr": self.d_wr.status(),
+            "d_ir": self.d_ir.status(),
+            "d_pf": self.d_pf.status(),
+            "d_r": self.d_r.status(),
+            "g_r": self.g_r.status(),
+            "g_o": self.g_o.status(),
+            "rrc": self.rrc,
+            "RespStd": sample_response.std(),
+            "RespMax": sample_response.max(),
+            "RespMin": sample_response.min(),
+            "RespMat": (self.window_sample.cpu().numpy(), sample_response)
+        }
     
-    def forward(self, x:Tensor, log_override:bool=True):
+    def forward(self, x:Tensor):
         """
         Args:
             inputs (Tensor): (...)
@@ -95,12 +125,19 @@ class WindowExtractor(BaseModule):
         d_pf = self.d_pf(x)
         g_r = self.g_r(x)
         d_r = self.d_r(x)
-        d_wr = self.d_wr(x)
-        d_ir = self.d_ir(x)
+        d_wr = self.d_wr(x) + 1
+        d_ir = self.d_ir(x) + 1
+        g_o = self.g_o(x)
         
-        exp = (x / self.rrc + d_pf) \
-            / (g_r * d_r)
-        
+        exp = (
+                (
+                    x - self.major_handle
+                ) / self.rrc 
+                + d_pf
+            ) / (
+                g_r * d_r
+            )
+            
         response = \
             d_r * (
                   d_wr * torch.exp( exp) \
@@ -109,12 +146,9 @@ class WindowExtractor(BaseModule):
                   d_wr * torch.exp( exp) \
                 + d_ir * torch.exp(-exp)
             ) + (
-            d_r * self.g_o
+            d_r * g_o
         )
         
-        # HACK Avoid infinite recursion during current_response calculation.
-        if log_override:
-            self.log()
         return response
 
 
@@ -128,29 +162,28 @@ class ValueWiseProjector(BaseModule):
                  in_channels: int,
                  num_rect: int,
                  momentum: float=0.1,
-                 valid_range:list[int] = [-1024, 3072],
+                 sample_nbins:int=256,
                  dim:str='3d',
                  *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.in_channels = in_channels
         self.num_rect = num_rect
-        self.valid_range = valid_range
+        self.sample = torch.arange(sample_nbins) / sample_nbins * 10 - 5
         self.dim = dim
 
         self.rectify_intense = torch.nn.Parameter(
-            torch.ones(num_rect))
+            torch.randn(num_rect) * 0.1)
         self.rectify_location = torch.nn.Parameter(
-            torch.zeros(num_rect))
+            torch.randn(num_rect))
         
         self.regulation_memory = []
         self.regulation_memory_limit = int(1 / (1 - momentum))
 
-    @property
     @torch.inference_mode()
     def current_projection(self):
-        sample_data = torch.arange(self.regulation_nbins).to(
-            device=self.projection_coefficient.device)
-        return self.forward(sample_data).cpu().numpy()
+        self.sample = self.sample.to(device=self.rectify_intense.device)
+        proj = self.forward(self.sample)
+        return (self.sample.detach().cpu().numpy(), proj.cpu().numpy())
 
     def regulation(self, inputs:Tensor) -> Tensor:
         """
@@ -167,24 +200,24 @@ class ValueWiseProjector(BaseModule):
         regulation_loss = torch.abs(self.rectify_location.std() - target_std)
         return regulation_loss * len(self.regulation_memory) / self.regulation_memory_limit
 
-    def forward(self, inputs:Tensor) -> Tensor|tuple[Tensor, Tensor]:
+    def forward(self, inputs:Tensor) -> Tensor:
         """
         Args:
             inputs (Tensor): (...)
         """
-        # TODO Tanh? Maybe improper here!
-        rectified = torch.tanh(
+        # NOTE The accumulation operation is equivalent to the X-axis translation operation.
+        rectification = torch.tanh(
             self.rectify_location   # [num_rect]
             + inputs.expand(self.num_rect, *inputs.shape).moveaxis(0,-1) # [..., num_rect]
-        ) * self.rectify_intense # rectified: [..., num_rect]
-        return torch.sum(rectified, dim=-1) # [...]
+        ) * self.rectify_intense # rectification: [..., num_rect]
+        return inputs + torch.sum(rectification, dim=-1) # [...]
 
 
 class BatchCrossWindowFusion(BaseModule):
     def __init__(self, num_windows:int, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.window_fusion_weight = torch.nn.Parameter(
-            torch.ones(num_windows, num_windows))
+            torch.eye(num_windows, num_windows))
     
     @property
     def current_fusion(self):
@@ -200,7 +233,7 @@ class BatchCrossWindowFusion(BaseModule):
         """
         ori_shape = inputs.shape
         fused = torch.matmul(
-            self.window_fusion_weight, 
+            torch.softmax(self.window_fusion_weight, dim=1), 
             inputs.flatten(1)
         ).reshape(ori_shape)
         return fused.transpose(0,1).flatten(1,2) # [N, Win*C, ...]
@@ -218,7 +251,6 @@ class ParalleledMultiWindowProcessing(BaseModule):
                  rect_momentum:float=0.99,
                  data_range:list[int]=[-1024, 3072],
                  dim='3d',
-                 log_interval:int|None=None,
                  enable_VWP:bool=True,
                  *args, **kwargs
                 ):
@@ -235,29 +267,54 @@ class ParalleledMultiWindowProcessing(BaseModule):
         self.rect_momentum = rect_momentum
         self.data_range = data_range
         self.dim = dim
-        self.log_interval = log_interval
         self.enable_VWP = enable_VWP
         self._init_PMWP()
     
     def _init_PMWP(self):
+        sub_window_ranges = self._split_range_into_milestones()
+        
         for i in range(self.num_windows):
             setattr(self, f"window_extractor_{i}", 
                 WindowExtractor(
                     in_channels=self.in_channels,
                     embed_dims=self.embed_dims,
-                    value_range=self.data_range,
-                    log_interval=self.log_interval,
+                    value_range=sub_window_ranges[i],
                     dim=self.dim))
             setattr(self, f"value_wise_projector_{i}", 
                 ValueWiseProjector(
                     in_channels=self.in_channels,
                     num_rect=self.num_rect,
                     momentum=self.rect_momentum,
-                    valid_range=self.data_range,
                     dim=self.dim))
         
         # TODO Maybe Point-Wise Attention?
         self.cross_window_fusion = BatchCrossWindowFusion(self.num_windows)
+
+    def _split_range_into_milestones(self):
+        if self.num_windows <= 0:
+            raise ValueError("n must be a positive integer")
+        start, end = self.data_range
+        n = self.num_windows
+        
+        step = (end - start) / n
+        milestones = np.arange(start, end + step, step)
+        sub_ranges = [(milestones[i], milestones[i+1]) for i in range(n)]
+        return sub_ranges
+
+    def status(self):
+        WinE = dict()
+        for i in range(self.num_windows):
+            for k, v in getattr(self, f"window_extractor_{i}").status().items():
+                WinE[f"WinE/W{i}_{k}"] = v
+
+        VluP = {
+            f"VluP/P{i}": getattr(self, f"value_wise_projector_{i}").current_projection()
+            for i in range(self.num_windows)
+        }
+        
+        CrsF = self.cross_window_fusion.current_fusion
+        
+        return WinE, VluP, CrsF
 
     def forward(self, inputs:Tensor, regulation_weight:float=0.):
         """
@@ -324,3 +381,52 @@ class AutoWindowSetting(EncoderDecoder_3D):
             losses.update(loss_aux)
 
         return losses
+
+
+class AutoWindowStatusLoggerHook(Hook):
+    def __init__(self, dpi:int=100):
+        self.dpi = dpi
+
+    def before_val_epoch(self, runner:Runner) -> None:
+        model:ParalleledMultiWindowProcessing = runner.model.pmwp
+        WinE, VluP, CrsF = model.status() # Class `AutoWindowSetting`
+        
+        if (isinstance(runner._train_loop, dict)
+                or runner._train_loop is None):
+            current_iter = 0
+        else:
+            current_iter = runner.iter
+        
+        plt.figure(figsize=(4,3))
+        
+        for k in list(WinE.keys()):
+            if "RespMat" in k:
+                signal, response = WinE.pop(k)
+                buf = BytesIO()
+                plt.clf()
+                plt.plot(signal, response)
+                plt.tight_layout()
+                plt.savefig(buf, format='png', dpi=self.dpi)
+                image = np.array(Image.open(buf).convert('RGB'))
+                runner.visualizer.add_image(k, image, current_iter)
+        
+        runner.visualizer.add_scalars(
+            WinE, 
+            step=current_iter,
+            file_path=f"{runner.timestamp}-AutoWindowStatus.json")
+        
+        for name, proj in VluP.items():
+            plt.clf()
+            buf = BytesIO()
+            plt.plot(proj[0], proj[1])
+            plt.tight_layout()
+            plt.savefig(buf, format='png', dpi=self.dpi)
+            image = np.array(Image.open(buf).convert('RGB'))
+            runner.visualizer.add_image(name, image, current_iter)
+        
+        plt.clf()
+        buf = BytesIO()
+        seaborn.heatmap(CrsF, cmap='rainbow')
+        plt.savefig(buf, format='png')
+        image = np.array(Image.open(buf).convert('RGB'))
+        runner.visualizer.add_image("CrsF", image, current_iter)
