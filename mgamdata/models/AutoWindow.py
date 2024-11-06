@@ -112,7 +112,7 @@ class WindowExtractor(BaseModule):
             d_r * self.g_o
         )
         
-        # Avoid infinite recursion during current_response calculation.
+        # HACK Avoid infinite recursion during current_response calculation.
         if log_override:
             self.log()
         return response
@@ -177,7 +177,6 @@ class ValueWiseProjector(BaseModule):
             self.rectify_location   # [num_rect]
             + inputs.expand(self.num_rect, *inputs.shape).moveaxis(0,-1) # [..., num_rect]
         ) * self.rectify_intense # rectified: [..., num_rect]
-        
         return torch.sum(rectified, dim=-1) # [...]
 
 
@@ -202,14 +201,9 @@ class BatchCrossWindowFusion(BaseModule):
         ori_shape = inputs.shape
         fused = torch.matmul(
             self.window_fusion_weight, 
-            inputs.reshape(ori_shape[0], -1)
+            inputs.flatten(1)
         ).reshape(ori_shape)
-        
-        # Window Concatenate
-        window_concat_on_channel = fused.transpose(0,1).reshape(
-            ori_shape[1], ori_shape[0]*ori_shape[2], *ori_shape[3:])
-        
-        return window_concat_on_channel # [N, Win*C, ...]
+        return fused.transpose(0,1).flatten(1,2) # [N, Win*C, ...]
 
 
 class ParalleledMultiWindowProcessing(BaseModule):
@@ -284,7 +278,7 @@ class ParalleledMultiWindowProcessing(BaseModule):
                     self, f"value_wise_projector_{i}").regulation(proj)
                 projector_aux_losses.append(projector_aux_loss)
         
-        x = torch.stack(x) # [Win, N, C, ...]
+        x = torch.stack(x, dim=0) # [N, Window, C, ...]
         x = self.cross_window_fusion(x) # [N, Win*C, ...]
         
         if regulation_weight != 0:

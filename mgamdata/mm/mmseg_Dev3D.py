@@ -547,9 +547,13 @@ class BaseDecodeHead_3D(BaseDecodeHead):
 
 
 class DiceLoss_3D(DiceLoss):
-    def __init__(self, ignore_1st_index:bool=False, *args, **kwargs):
+    def __init__(self, 
+                 ignore_1st_index:bool=False, 
+                 batch_z:int=4, 
+                 *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.ignore_1st_index = ignore_1st_index
+        self.batch_z = batch_z
         
     def _expand_onehot_labels_dice_3D(
         self, pred: Tensor, target: Tensor) -> Tensor:
@@ -572,19 +576,26 @@ class DiceLoss_3D(DiceLoss):
         one_hot_target = one_hot_target[..., :num_classes].permute(0, 4, 1, 2, 3)
         return one_hot_target
 
-    def forward(self, pred:Tensor, target:Tensor, *args, **kwargs):
-        assert pred.shape == target.shape, (
-            "The one hot expansion has been done in the preprocess function. "
-            "Multiple framework modifications are introduced as well. "
-            f"The target shape ({target.shape}) should be equal to pred shape ({pred.shape})")
+    def forward_one_patch(self, pred:Tensor, target:Tensor, *args, **kwargs):
         if (pred.shape != target.shape):
             target = self._expand_onehot_labels_dice_3D(pred, target)
             assert pred.shape == target.shape
+        # pred, target: [N, C, Z, Y, X]
         if self.ignore_1st_index:
-            pred = pred[:, 1:, ...].contiguous()
+            pred   = pred  [:, 1:, ...].contiguous()
             target = target[:, 1:, ...].contiguous()
-            
         return super().forward(pred, target, *args, **kwargs)
+    
+    def forward(self, pred:Tensor, target:Tensor, *args, **kwargs):
+        # pred: [N, C, Z, Y, X]
+        assert pred.shape[-3:] == target.shape[-3:], \
+            f"The [Z, Y, X] of pred {pred.shape} and target {target.shape} must be the same."
+        batch_loss = []
+        for z in range(0, pred.shape[-3], self.batch_z):
+            pred_z   = pred  [..., z:z+self.batch_z, :, :]
+            target_z = target[..., z:z+self.batch_z, :, :]
+            batch_loss.append(self.forward_one_patch(pred_z, target_z, *args, **kwargs))
+        return torch.stack(batch_loss).mean()
 
 
 class Seg3DVisualizationHook(SegVisualizationHook):
