@@ -24,7 +24,7 @@ class PreCropper3D:
         argparser.add_argument('--num-cropped',     type=int,   default=None,   help='The number of cropped volumes per series.')
         argparser.add_argument('--ensure-index',    type=int,   default=None,   nargs='+', 
                                help='The index to ensure in segmentation.')
-        argparser.add_argument('--ensure-ratio',    type=float, default=0.5,    help='The chance for an ensurance to perform.')
+        argparser.add_argument('--ensure-ratio',    type=float, default=None,    help='The chance for an ensurance to perform.')
         argparser.add_argument('--ignore-index',    type=int,   default=255, 
                                help='The index to ignore in segmentation. '
                                     'It will not taken into consideration during '

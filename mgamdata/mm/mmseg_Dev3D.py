@@ -314,9 +314,9 @@ class EncoderDecoder_3D(EncoderDecoder):
                         crop_vol, batch_img_metas).to(accu_device, non_blocking=True)
                     preds[:, :, z1:z2, y1:y2, x1:x2] += crop_seg_logit
                     count_mat[:, :, z1:z2, y1:y2, x1:x2] += 1
+        
         assert torch.all(count_mat != 0), 'The count_mat should not be zero'
         seg_logits = preds / count_mat
-
         return seg_logits
 
 
