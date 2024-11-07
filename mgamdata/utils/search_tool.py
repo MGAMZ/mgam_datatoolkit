@@ -3,17 +3,18 @@ import os
 
 
 # NOTE 输入的所有gt文件夹是有优先级顺序的，只会返回最先找到的gt路径
-def search_mha_file(source_folders:list[str]|str, seriesUID:str, target_type:str):
+def search_mha_file(source_folders:list[str]|str, seriesUID:str, target_type:str|None):
     if isinstance(source_folders, str):
         source_folders = [source_folders]
-    assert target_type in ['image', 'label']
+    assert target_type in ['image', 'label', None]
     for source_folder in source_folders:
         for roots, dirs, files in os.walk(source_folder):
             for file in files:
-                if file.rstrip('.mha')==seriesUID and target_type in os.path.split(roots):
-                    return os.path.join(roots, file)
+                if file.rstrip('.mha')==seriesUID:
+                    if target_type is None or target_type in os.path.split(roots):
+                        return os.path.join(roots, file)
     else:
-        print(f"Can't find {target_type} file, UID {seriesUID}.")
+        print(f"Can't find {target_type} file, UID {seriesUID}, type: {target_type}.")
 
 
 

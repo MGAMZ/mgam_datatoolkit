@@ -71,19 +71,19 @@ class WindowExtractor(BaseModule):
         self.window_sample = torch.arange(*self.value_range)
         
         # Dynamic Weak Response - a
-        self.d_wr = DynamicParam(partial(torch.nn.init.normal_, mean=1, std=0.5), 
+        self.d_wr = DynamicParam(partial(torch.nn.init.normal_, mean=1, std=0.1), 
                                  ensure_sign='pos')
         # Dynamic Intense Response - b
-        self.d_ir = DynamicParam(partial(torch.nn.init.normal_, mean=1, std=0.5), 
+        self.d_ir = DynamicParam(partial(torch.nn.init.normal_, mean=1, std=0.1), 
                                  ensure_sign='pos')
         # Dynamic Perception Field - d
-        self.d_pf = DynamicParam(partial(torch.nn.init.normal_, mean=1, std=0.5), 
+        self.d_pf = DynamicParam(partial(torch.nn.init.normal_, mean=1, std=0.1), 
                                  ensure_sign=None)
         # Dynamic Range - g
-        self.d_r = DynamicParam(partial(torch.nn.init.normal_, mean=1, std=0.5), 
+        self.d_r = DynamicParam(partial(torch.nn.init.normal_, mean=1, std=0.1), 
                                 ensure_sign='pos')
         # Global Response - c
-        self.g_r = DynamicParam(partial(torch.nn.init.normal_, mean=1, std=0.5), 
+        self.g_r = DynamicParam(partial(torch.nn.init.ones_), 
                                 ensure_sign='pos')
         # Global Offset - k
         self.g_o = DynamicParam(partial(torch.nn.init.zeros_), 
@@ -176,8 +176,8 @@ class ValueWiseProjector(BaseModule):
         self.rectify_location = torch.nn.Parameter(
             torch.randn(num_rect))
         
-        self.regulation_memory = []
-        self.regulation_memory_limit = int(1 / (1 - momentum))
+        self.momentum = momentum
+        self.std_memory = torch.ones(1)
 
     @torch.inference_mode()
     def current_projection(self):
@@ -185,7 +185,7 @@ class ValueWiseProjector(BaseModule):
         proj = self.forward(self.sample)
         return (self.sample.detach().cpu().numpy(), proj.cpu().numpy())
 
-    def regulation(self, inputs:Tensor) -> Tensor:
+    def loss(self, inputs:Tensor) -> Tensor:
         """
         Limit the projector ability to ensure it's behavior,
         which aligns with the physical meaning.
@@ -193,12 +193,11 @@ class ValueWiseProjector(BaseModule):
         with torch.no_grad():
             iter_std = inputs.std()
             if not torch.isnan(iter_std):
-                self.regulation_memory.append(inputs.std())
-            self.regulation_memory = self.regulation_memory[-self.regulation_memory_limit:]
-            target_std = torch.stack(self.regulation_memory).mean()
+                self.std_memory = self.std_memory * self.momentum \
+                                + iter_std * (1 - self.momentum)
         
-        regulation_loss = torch.abs(self.rectify_location.std() - target_std)
-        return regulation_loss * len(self.regulation_memory) / self.regulation_memory_limit
+        loss = torch.abs(self.rectify_location.std() - self.std_memory)
+        return loss * len(self.std_memory) / self.std_memory_limit
 
     def forward(self, inputs:Tensor) -> Tensor:
         """
@@ -252,6 +251,7 @@ class ParalleledMultiWindowProcessing(BaseModule):
                  data_range:list[int]=[-1024, 3072],
                  dim='3d',
                  enable_VWP:bool=True,
+                 enable_CWF:bool=True,
                  *args, **kwargs
                 ):
         assert dim.lower() in ['2d', '3d']
@@ -268,6 +268,7 @@ class ParalleledMultiWindowProcessing(BaseModule):
         self.data_range = data_range
         self.dim = dim
         self.enable_VWP = enable_VWP
+        self.enable_CWF = enable_CWF
         self._init_PMWP()
     
     def _init_PMWP(self):
@@ -280,15 +281,17 @@ class ParalleledMultiWindowProcessing(BaseModule):
                     embed_dims=self.embed_dims,
                     value_range=sub_window_ranges[i],
                     dim=self.dim))
-            setattr(self, f"value_wise_projector_{i}", 
-                ValueWiseProjector(
-                    in_channels=self.in_channels,
-                    num_rect=self.num_rect,
-                    momentum=self.rect_momentum,
-                    dim=self.dim))
+            if self.enable_VWP:
+                setattr(self, f"value_wise_projector_{i}", 
+                    ValueWiseProjector(
+                        in_channels=self.in_channels,
+                        num_rect=self.num_rect,
+                        momentum=self.rect_momentum,
+                        dim=self.dim))
         
         # TODO Maybe Point-Wise Attention?
-        self.cross_window_fusion = BatchCrossWindowFusion(self.num_windows)
+        if self.enable_CWF:
+            self.cross_window_fusion = BatchCrossWindowFusion(self.num_windows)
 
     def _split_range_into_milestones(self):
         if self.num_windows <= 0:
@@ -306,69 +309,79 @@ class ParalleledMultiWindowProcessing(BaseModule):
         for i in range(self.num_windows):
             for k, v in getattr(self, f"window_extractor_{i}").status().items():
                 WinE[f"WinE/W{i}_{k}"] = v
-
-        VluP = {
-            f"VluP/P{i}": getattr(self, f"value_wise_projector_{i}").current_projection()
-            for i in range(self.num_windows)
-        }
+        if self.enable_VWP:
+            VluP = {
+                f"VluP/P{i}": getattr(self, f"value_wise_projector_{i}").current_projection()
+                for i in range(self.num_windows)
+            }
+        else: 
+            VluP = None
         
-        CrsF = self.cross_window_fusion.current_fusion
+        if self.enable_CWF:
+            CrsF = self.cross_window_fusion.current_fusion
+        else: 
+            CrsF = None
         
         return WinE, VluP, CrsF
 
-    def forward(self, inputs:Tensor, regulation_weight:float=0.):
+    def forward(self, inputs:Tensor, enable_pmwp_loss:bool=False):
         """
         Args:
             inputs (Tensor): (N, C, ...)
         """
-        C = inputs.size(1)
         x = []
         projector_aux_losses = []
         
         for i in range(self.num_windows):
             proj = getattr(self, f"window_extractor_{i}")(inputs)
-            proj = getattr(self, f"value_wise_projector_{i}").forward(proj)
+            if self.enable_VWP:
+                proj = getattr(self, f"value_wise_projector_{i}").forward(proj)
             x.append(proj)
             
-            if regulation_weight != 0:
-                projector_aux_loss = regulation_weight * getattr(
-                    self, f"value_wise_projector_{i}").regulation(proj)
-                projector_aux_losses.append(projector_aux_loss)
+            if enable_pmwp_loss and self.enable_VWP:
+                projector_aux_losses.append(getattr(
+                    self, f"value_wise_projector_{i}").loss(proj))
         
-        x = torch.stack(x, dim=0) # [N, Window, C, ...]
-        x = self.cross_window_fusion(x) # [N, Win*C, ...]
-        
-        if regulation_weight != 0:
-            projector_aux_losses = torch.stack(projector_aux_losses, dim=0).mean()
+        x = torch.stack(x) # [Window, N, C, ...]
+        if self.enable_CWF:
+            x = self.cross_window_fusion(x) # [N, Win*C, ...]
         else:
-            projector_aux_losses = None
-            
-        return x, projector_aux_losses # [N, C, ...]
+            x = x.transpose(0,1).flatten(1,2)
+        
+        pmwp_loss = {}
+        if enable_pmwp_loss:
+            projector_aux_losses = torch.stack(projector_aux_losses, dim=0).mean()
+            pmwp_loss["loss_VluP"] = projector_aux_losses
+        
+        return x, pmwp_loss # [N, C, ...]
 
 
 class AutoWindowSetting(EncoderDecoder_3D):
     "Compatible Plugin for Auto Window Setting."
     
-    def __init__(self, pmwp:dict, regulation_weight:float=0., *args, **kwargs):
+    def __init__(self, 
+                 pmwp:dict, 
+                 enable_pmwp_loss:bool=False, 
+                 *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.pmwp:ParalleledMultiWindowProcessing = MODELS.build(pmwp)
-        self.regulation_weight = regulation_weight
+        self.enable_pmwp_loss = enable_pmwp_loss
     
-    def extract_feat(self, inputs:Tensor, regulation_weight:float=0.):
+    def extract_feat(self, inputs:Tensor, enable_pmwp_loss:bool=False):
         # inputs: [N, C, ...]
         # pmwp_out: [N, num_window * C, ...]
         # TODO Downsampling Channel?
-        pmwp_out, projector_aux_loss = self.pmwp(inputs, regulation_weight)
+        pmwp_out, pmwp_loss = self.pmwp(inputs, enable_pmwp_loss)
         
-        if regulation_weight != 0:
-            return super().extract_feat(pmwp_out), projector_aux_loss
+        if enable_pmwp_loss:
+            return super().extract_feat(pmwp_out), pmwp_loss
         else:
             return super().extract_feat(pmwp_out)
     
     def loss(self, inputs: Tensor, data_samples):
-        if self.regulation_weight != 0:
-            x, projector_loss = self.extract_feat(inputs, self.regulation_weight)
-            losses = dict(loss_aux_projector=projector_loss)
+        if self.enable_pmwp_loss:
+            x, pmwp_loss = self.extract_feat(inputs, self.enable_pmwp_loss)
+            losses:dict = pmwp_loss
         else:
             x = self.extract_feat(inputs)
             losses = dict()
@@ -389,6 +402,7 @@ class AutoWindowStatusLoggerHook(Hook):
 
     def before_val_epoch(self, runner:Runner) -> None:
         model:ParalleledMultiWindowProcessing = runner.model.pmwp
+        plt.figure(figsize=(4,3))
         WinE, VluP, CrsF = model.status() # Class `AutoWindowSetting`
         
         if (isinstance(runner._train_loop, dict)
@@ -396,8 +410,6 @@ class AutoWindowStatusLoggerHook(Hook):
             current_iter = 0
         else:
             current_iter = runner.iter
-        
-        plt.figure(figsize=(4,3))
         
         for k in list(WinE.keys()):
             if "RespMat" in k:
@@ -415,18 +427,21 @@ class AutoWindowStatusLoggerHook(Hook):
             step=current_iter,
             file_path=f"{runner.timestamp}-AutoWindowStatus.json")
         
-        for name, proj in VluP.items():
+        if VluP is not None:
+            for name, proj in VluP.items():
+                plt.clf()
+                buf = BytesIO()
+                plt.plot(proj[0], proj[1])
+                plt.plot([0, 1], [0, 1], transform=plt.gca().transAxes)
+                plt.tight_layout()
+                plt.savefig(buf, format='png', dpi=self.dpi)
+                image = np.array(Image.open(buf).convert('RGB'))
+                runner.visualizer.add_image(name, image, current_iter)
+        
+        if CrsF is not None:
             plt.clf()
             buf = BytesIO()
-            plt.plot(proj[0], proj[1])
-            plt.tight_layout()
-            plt.savefig(buf, format='png', dpi=self.dpi)
+            seaborn.heatmap(CrsF, cmap='rainbow')
+            plt.savefig(buf, format='png')
             image = np.array(Image.open(buf).convert('RGB'))
-            runner.visualizer.add_image(name, image, current_iter)
-        
-        plt.clf()
-        buf = BytesIO()
-        seaborn.heatmap(CrsF, cmap='rainbow')
-        plt.savefig(buf, format='png')
-        image = np.array(Image.open(buf).convert('RGB'))
-        runner.visualizer.add_image("CrsF", image, current_iter)
+            runner.visualizer.add_image("CrsF", image, current_iter)
