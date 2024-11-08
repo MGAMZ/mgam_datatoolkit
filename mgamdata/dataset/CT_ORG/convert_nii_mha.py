@@ -15,13 +15,16 @@ from mgamdata.dataset.Totalsegmentator.meta import CLASS_INDEX_MAP
 
 def convert_one_case(args):
     series_nii_image_path, series_output_folder, spacing, size = args
+    output_image_folder = os.path.join(series_output_folder, 'image')
+    output_label_folder = os.path.join(series_output_folder, 'label')
     series_nii_label_path = series_nii_image_path.replace('volume', 'labels')
     # 构建路径，保持文件存储结构不变
     series_id = re.search(r'volume-(\d+).nii.gz',
-                          os.path.basename(series_nii_image_path)) 
-    output_image_mha_path = os.path.join(series_output_folder, f"{series_id}.mha")
-    output_label_mha_path = os.path.join(series_output_folder, f"{series_id}.mha")
-    os.makedirs(series_output_folder, exist_ok=True)
+                          os.path.basename(series_nii_image_path)).group(1)
+    output_image_mha_path = os.path.join(output_image_folder, f"{series_id}.mha")
+    output_label_mha_path = os.path.join(output_label_folder, f"{series_id}.mha")
+    os.makedirs(output_image_folder, exist_ok=True)
+    os.makedirs(output_label_folder, exist_ok=True)
     if os.path.exists(output_image_mha_path) and os.path.exists(output_label_mha_path):
         return
     
