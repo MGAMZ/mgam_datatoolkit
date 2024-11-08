@@ -48,7 +48,6 @@ class Totalsegmentator_PreCrop(PreCropper3D):
                 RandomCrop3D(self.args.crop_size, self.args.crop_cat_max, self.args.ignore_index),
                 os.path.join(self.args.source_mha_folder, series, 'ct.mha'),
                 os.path.join(self.args.source_mha_folder, series, 'segmentations.mha'),
-                self.args.num_cropped,
                 os.path.join(self.args.dest_npz_folder, series)))
         return task_list
 
