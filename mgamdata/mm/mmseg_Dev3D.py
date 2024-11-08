@@ -669,10 +669,72 @@ class Seg3DLocalVisualizer(SegLocalVisualizer):
     def __init__(self,
                  name,
                  resize:Sequence[int]|None=None,
+                 label_text_scale:float=0.05,
+                 label_text_thick:float=1,
                  *args, **kwargs):
         super().__init__(name=name, *args, **kwargs)
         self.resize = resize
+        self.label_text_scale = label_text_scale
+        self.label_text_thick = label_text_thick
     
+    def _draw_sem_seg(self,
+                      image: np.ndarray,
+                      sem_seg: PixelData,
+                      classes: list,
+                      palette: list,
+                      with_labels: bool = True) -> np.ndarray:
+        "NOTE MGAM improve: configurable font size"
+        
+        num_classes = len(classes)
+
+        sem_seg = sem_seg.cpu().data
+        ids = np.unique(sem_seg)[::-1]
+        legal_indices = ids < num_classes
+        ids = ids[legal_indices]
+        labels = np.array(ids, dtype=np.int64)
+
+        colors = [palette[label] for label in labels]
+
+        mask = np.zeros_like(image, dtype=np.uint8)
+        for label, color in zip(labels, colors):
+            mask[sem_seg[0] == label, :] = color
+
+        if with_labels:
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            # (0,1] to change the size of the text relative to the image
+            scale = self.label_text_scale
+            fontScale = min(image.shape[0], image.shape[1]) / (25 / scale)
+            fontColor = (255, 255, 255)
+            rectangleThickness = thickness = self.label_text_thick
+            lineType = 2
+
+            if isinstance(sem_seg[0], torch.Tensor):
+                masks = sem_seg[0].numpy() == labels[:, None, None]
+            else:
+                masks = sem_seg[0] == labels[:, None, None]
+            masks = masks.astype(np.uint8)
+            for mask_num in range(len(labels)):
+                classes_id = labels[mask_num]
+                classes_color = colors[mask_num]
+                loc = self._get_center_loc(masks[mask_num])
+                text = classes[classes_id]
+                (label_width, label_height), baseline = cv2.getTextSize(
+                    text, font, fontScale, thickness)
+                mask = cv2.rectangle(mask, loc,
+                                     (loc[0] + label_width + baseline,
+                                      loc[1] + label_height + baseline),
+                                     classes_color, -1)
+                mask = cv2.rectangle(mask, loc,
+                                     (loc[0] + label_width + baseline,
+                                      loc[1] + label_height + baseline),
+                                     (0, 0, 0), rectangleThickness)
+                mask = cv2.putText(mask, text, (loc[0], loc[1] + label_height),
+                                   font, fontScale, fontColor, thickness,
+                                   lineType)
+        color_seg = (image * (1 - self.alpha) + mask * self.alpha).astype(
+            np.uint8)
+        self.set_image(color_seg)
+        return color_seg
     
     def add_datasample(
         self,
