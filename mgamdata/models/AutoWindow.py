@@ -20,6 +20,13 @@ from mgamdata.mm.mmseg_Dev3D import EncoderDecoder_3D
 
 
 
+def scale_gradients(module, grad_input, grad_output):
+    return tuple(g * module.lr_mult 
+                 if g is not None else g
+                 for g in grad_input)
+                 
+
+
 class DynamicParam(BaseModule):
     def __init__(self, init_method:Callable, ensure_sign:str|None=None, eps:float=1e-2):
         super().__init__()
@@ -51,13 +58,22 @@ class DynamicParam(BaseModule):
             return super().__getattr__(name)
 
 
-class WindowExtractor(BaseModule):
+class SupportLrMultModule(BaseModule):
+    def __init__(self, lr_mult:float|None=None, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.lr_mult = lr_mult
+        if lr_mult is not None:
+            self.register_full_backward_hook(scale_gradients)
+
+
+class WindowExtractor(SupportLrMultModule):
     "Extract values from raw array using a learnable window."
     
     def __init__(self,
                  in_channels:int,
                  embed_dims:int,
                  value_range:list|tuple,
+                 lr_scale:float|None=None,
                  eps:float=1.0,
                  dim='3d',
                  *args, **kwargs):
@@ -65,6 +81,7 @@ class WindowExtractor(BaseModule):
         super().__init__(*args, **kwargs)
         self.in_channels = in_channels
         self.value_range = value_range
+        self.lr_scale = lr_scale
         self.eps = eps
         self.dim = dim
         self.log_count = 0
@@ -152,7 +169,7 @@ class WindowExtractor(BaseModule):
         return response
 
 
-class ValueWiseProjector(BaseModule):
+class ValueWiseProjector(SupportLrMultModule):
     """
     Value-Wise Projector for one window remapping operation.
     The extracted value are fine-tuned by this projector.
@@ -212,7 +229,7 @@ class ValueWiseProjector(BaseModule):
         return inputs + torch.sum(rectification, dim=-1) # [...]
 
 
-class BatchCrossWindowFusion(BaseModule):
+class BatchCrossWindowFusion(SupportLrMultModule):
     def __init__(self, num_windows:int, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.window_fusion_weight = torch.nn.Parameter(
@@ -252,6 +269,7 @@ class ParalleledMultiWindowProcessing(BaseModule):
                  dim='3d',
                  enable_VWP:bool=True,
                  enable_CWF:bool=True,
+                 lr_mult:float|None=None,
                  *args, **kwargs
                 ):
         assert dim.lower() in ['2d', '3d']
@@ -269,6 +287,7 @@ class ParalleledMultiWindowProcessing(BaseModule):
         self.dim = dim
         self.enable_VWP = enable_VWP
         self.enable_CWF = enable_CWF
+        self.lr_mult = lr_mult
         self._init_PMWP()
     
     def _init_PMWP(self):
@@ -280,18 +299,21 @@ class ParalleledMultiWindowProcessing(BaseModule):
                     in_channels=self.in_channels,
                     embed_dims=self.embed_dims,
                     value_range=sub_window_ranges[i],
-                    dim=self.dim))
+                    dim=self.dim,
+                    lr_mult=self.lr_mult))
             if self.enable_VWP:
                 setattr(self, f"value_wise_projector_{i}", 
                     ValueWiseProjector(
                         in_channels=self.in_channels,
                         num_rect=self.num_rect,
                         momentum=self.rect_momentum,
-                        dim=self.dim))
+                        dim=self.dim,
+                        lr_mult=self.lr_mult))
         
         # TODO Maybe Point-Wise Attention?
         if self.enable_CWF:
-            self.cross_window_fusion = BatchCrossWindowFusion(self.num_windows)
+            self.cross_window_fusion = BatchCrossWindowFusion(self.num_windows, 
+                                                              lr_mult=self.lr_mult)
 
     def _split_range_into_milestones(self):
         if self.num_windows <= 0:

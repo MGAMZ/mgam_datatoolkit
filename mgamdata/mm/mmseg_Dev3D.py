@@ -612,6 +612,11 @@ class Seg3DVisualizationHook(SegVisualizationHook):
         # NOTE Override original implementation.
         # data batch inputs [N, C, Z, Y, X], but requires RGB at last dimension.
         img = data_batch['inputs'][0].permute(1,2,3,0).numpy()
+        img -= img.min()
+        img /= img.max()
+        img *= 255
+        img = img.astype(np.uint8).copy()
+        
         # img: [Z, Y, X, 1] -> [Z, Y, X, 3]
         img = np.repeat(img, 3, axis=-1)
         series_id = outputs[0].metainfo['series_id']
