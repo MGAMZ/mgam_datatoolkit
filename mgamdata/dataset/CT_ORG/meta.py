@@ -5,5 +5,5 @@ CLASS_INDEX_MAP = {
     'lungs': 3,
     'kidneys': 4,
     'bone': 5,
-    'brain': 6,
+    # 'brain': 6,
 }

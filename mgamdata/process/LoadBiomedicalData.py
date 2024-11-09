@@ -16,7 +16,6 @@ NOTE
 [Z,Y,X]或[D,H,W]的维度定义
 '''
 
-
 class LoadImgFromOpenCV(BaseTransform):
     '''
     Required Keys:
@@ -37,7 +36,6 @@ class LoadImgFromOpenCV(BaseTransform):
         results['img_shape'] = img.shape[-2:]
         results['ori_shape'] = img.shape[-2:]
         return results
-
 
 
 class LoadAnnoFromOpenCV(BaseTransform):
@@ -65,7 +63,6 @@ class LoadAnnoFromOpenCV(BaseTransform):
         return results
 
 
-
 class LoadFromMHA(BaseTransform):
     def __init__(self, resample_spacing=None, resample_size=None):
         assert not ((resample_spacing is not None) and (resample_size is not None))
@@ -81,7 +78,6 @@ class LoadFromMHA(BaseTransform):
         # mha.GetSize(): [X, Y, Z]
         mha_array = sitk.GetArrayFromImage(mha) # [Z, Y, X]
         return mha_array
-
 
 
 class LoadImageFromMHA(LoadFromMHA):
@@ -104,7 +100,6 @@ class LoadImageFromMHA(LoadFromMHA):
         results['img_shape'] = img.shape
         results['ori_shape'] = img.shape
         return results
-
 
 
 class LoadMaskFromMHA(LoadFromMHA):
@@ -131,7 +126,6 @@ class LoadMaskFromMHA(LoadFromMHA):
         return results
 
 
-
 class LoadSampleFromNpz(BaseTransform):
     '''
     Required Keys:
@@ -149,7 +143,6 @@ class LoadSampleFromNpz(BaseTransform):
         self.load_type = load_type if isinstance(load_type, Sequence) else [load_type]
         assert all([load_type in ['img', 'anno'] for load_type in self.load_type])
     
-    
     def transform(self, results):
         assert results['img_path'] == results['seg_map_path']
         sample_path = results['img_path']
@@ -157,13 +150,15 @@ class LoadSampleFromNpz(BaseTransform):
         
         if 'img' in self.load_type:
             results['img'] = sample['img']
+        
         if 'anno' in self.load_type:
             mask = sample['gt_seg_map']
+            # Support mmseg dataset rule
             if results.get('label_map', None) is not None:
                 mask_copy = mask.copy()
                 for old_id, new_id in results['label_map'].items():
                     mask[mask_copy == old_id] = new_id
-            
             results['gt_seg_map'] = mask
             results['seg_fields'].append('gt_seg_map')
+        
         return results
