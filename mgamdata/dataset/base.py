@@ -82,7 +82,7 @@ class mgam_BaseSegDataset(BaseSegDataset):
                 seg_fields=[],
             ))
         
-        print_log(f"{self.__qualname__} dataset {self.split} split loaded {len(data_list)} samples.",
+        print_log(f"{self.__class__.__name__} dataset {self.split} split loaded {len(data_list)} samples.",
                   MMLogger.get_current_instance())
         
         if self.debug:
