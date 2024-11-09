@@ -24,7 +24,6 @@ def scale_gradients(module, grad_input, grad_output):
     return tuple(g * module.lr_mult 
                  if g is not None else g
                  for g in grad_input)
-                 
 
 
 class DynamicParam(BaseModule):

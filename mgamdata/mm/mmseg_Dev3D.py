@@ -259,11 +259,11 @@ class EncoderDecoder_3D(EncoderDecoder):
         ) -> Tensor:
         """Inference by sliding-window with overlap.
 
-        If d_crop > d_img or h_crop > h_img or w_crop > w_img, the small patch will be used to
+        If z_crop > z_img or y_crop > y_img or x_crop > x_img, the small patch will be used to
         decode without padding.
 
         Args:
-            inputs (tensor): the tensor should have a shape NxCxDxHxW,
+            inputs (tensor): the tensor should have a shape NxCxZxYxX,
                 which contains all volumes in the batch.
             batch_img_metas (list[dict]): list of volume metainfo where each may
                 also contain: 'img_shape', 'scale_factor', 'flip', 'img_path',
@@ -277,41 +277,46 @@ class EncoderDecoder_3D(EncoderDecoder):
         """
 
         accu_device:str = self.test_cfg.slide_accumulate_device
-        d_stride, h_stride, w_stride = self.test_cfg.stride # type: ignore
-        d_crop, h_crop, w_crop = self.test_cfg.crop_size # type: ignore
-        batch_size, _, d_img, h_img, w_img = inputs.size()
+        z_stride, y_stride, x_stride = self.test_cfg.stride # type: ignore
+        z_crop, y_crop, x_crop = self.test_cfg.crop_size # type: ignore
+        batch_size, _, z_img, y_img, x_img = inputs.size()
         out_channels = self.out_channels
-        d_grids = max(d_img - d_crop + d_stride - 1, 0) // d_stride + 1
-        h_grids = max(h_img - h_crop + h_stride - 1, 0) // h_stride + 1
-        w_grids = max(w_img - w_crop + w_stride - 1, 0) // w_stride + 1
+        z_grids = max(z_img - z_crop + z_stride - 1, 0) // z_stride + 1
+        y_grids = max(y_img - y_crop + y_stride - 1, 0) // y_stride + 1
+        x_grids = max(x_img - x_crop + x_stride - 1, 0) // x_stride + 1
         preds = torch.zeros(
-            size=(batch_size, out_channels, d_img, h_img, w_img),
-            dtype=torch.float16,
-            device=accu_device)
+            size=(batch_size, out_channels, z_img, y_img, x_img),
+            dtype=torch.float32,
+            device=accu_device,
+            pin_memory=True)
         count_mat = torch.zeros(
-            size=(batch_size, 1, d_img, h_img, w_img),
+            size=(batch_size, 1, z_img, y_img, x_img),
             dtype=torch.uint8,
-            device=accu_device)
+            device=accu_device,
+            pin_memory=True)
         
-        for d_idx in range(d_grids):
-            for h_idx in range(h_grids):
-                for w_idx in range(w_grids):
-                    z1 = d_idx * d_stride
-                    y1 = h_idx * h_stride
-                    x1 = w_idx * w_stride
-                    z2 = min(z1 + d_crop, d_img)
-                    y2 = min(y1 + h_crop, h_img)
-                    x2 = min(x1 + w_crop, w_img)
-                    z1 = max(z2 - d_crop, 0)
-                    y1 = max(y2 - h_crop, 0)
-                    x1 = max(x2 - w_crop, 0)
+        for z_idx in range(z_grids):
+            for y_idx in range(y_grids):
+                for x_idx in range(x_grids):
+                    z1 = z_idx * z_stride
+                    y1 = y_idx * y_stride
+                    x1 = x_idx * x_stride
+                    z2 = min(z1 + z_crop, z_img)
+                    y2 = min(y1 + y_crop, y_img)
+                    x2 = min(x1 + x_crop, x_img)
+                    z1 = max(z2 - z_crop, 0)
+                    y1 = max(y2 - y_crop, 0)
+                    x1 = max(x2 - x_crop, 0)
                     crop_vol = inputs[:, :, z1:z2, y1:y2, x1:x2]
                     # change the volume shape to patch shape
                     batch_img_metas[0]['img_shape'] = crop_vol.shape[2:]
                     # the output of encode_decode is seg logits tensor map
-                    # with shape [N, C, D, H, W]
-                    crop_seg_logit = self.encode_decode(
-                        crop_vol, batch_img_metas).to(accu_device, non_blocking=True)
+                    # with shape [N, C, Z, Y, X]
+                    # NOTE WARNING:
+                    # Setting `non_blocking=True` WILL CAUSE:
+                    # Invalid pred_seg_logit accumulation on X axis.
+                    crop_seg_logit = self.encode_decode( 
+                        crop_vol, batch_img_metas).to(accu_device, non_blocking=False)
                     preds[:, :, z1:z2, y1:y2, x1:x2] += crop_seg_logit
                     count_mat[:, :, z1:z2, y1:y2, x1:x2] += 1
         
