@@ -8,7 +8,9 @@ from tqdm import tqdm
 import numpy as np
 import SimpleITK as sitk
 
-from mgamdata.mm.mmseg_Dev3D import RandomCrop3D
+from ..mm.mmseg_Dev3D import RandomCrop3D
+from .NDArray import unsafe_astype
+
 
 
 class PreCropper3D:
@@ -88,7 +90,6 @@ class PreCropper3D:
                 file=save_path,
                 img=img_array,
                 gt_seg_map=anno_array)
-            
 
     def Crop3D(self,
                cropper, # type: ignore
@@ -115,12 +116,32 @@ class PreCropper3D:
         for i in range(num_cropped):
             crop_bbox = cropper.crop_bbox(data)
             cropped_anno_array:np.ndarray = cropper.crop(
-                anno_array, crop_bbox).astype(np.uint8)
+                anno_array, crop_bbox)
+            cropped_anno_array = unsafe_astype(cropped_anno_array, np.uint8)
             
             if self.all_index_ensured(cropped_anno_array):
-                cropped_image_array:np.ndarray = cropper.crop(
-                    image_array, crop_bbox).astype(np.int16)
+                cropped_image_array:np.ndarray = cropper.crop(image_array, crop_bbox)
+                cropped_image_array = unsafe_astype(cropped_image_array, np.int16)
                 yield cropped_image_array, cropped_anno_array
             
             else:
                 tqdm.write(f"deprecated due to failing to ensure index: {anno_itk_path} | crop_idx: {i}")
+
+
+class StandardMhaCropper3D(PreCropper3D):
+    def parse_task(self):
+        task_list = []
+        image_mha_folder = os.path.join(self.args.source_mha_folder, 'image')
+        label_mha_folder = os.path.join(self.args.source_mha_folder, 'label')
+        
+        for series in os.listdir(image_mha_folder):
+            if series.endswith('.mha'):
+                task_list.append((
+                    RandomCrop3D(self.args.crop_size, 
+                                 self.args.crop_cat_max, 
+                                 self.args.ignore_index),
+                    os.path.join(image_mha_folder, series),
+                    os.path.join(label_mha_folder, series),
+                    os.path.join(self.args.dest_npz_folder, series.replace('.mha', ''))))
+                
+        return task_list

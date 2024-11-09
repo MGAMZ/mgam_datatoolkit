@@ -6,6 +6,8 @@ import numpy as np
 import nibabel as nib
 import SimpleITK as sitk
 
+from ..process.NDArray import unsafe_astype
+
 
 
 
@@ -31,7 +33,8 @@ def convert_nii_sitk(nii_path:str,
     else:
         raise ValueError(f"Invalid nii_fdata_order: {nii_fdata_order}")
     
-    sitk_img = sitk.GetImageFromArray(nib_array.astype(dtype))
+    converted_array = unsafe_astype(nib_array, dtype)
+    sitk_img = sitk.GetImageFromArray(converted_array)
     sitk_img.SetSpacing(nib_spacing)
     sitk_img.SetOrigin(nib_origin)
     sitk_img.SetDirection(nib_direction)

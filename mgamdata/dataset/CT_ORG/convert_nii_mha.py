@@ -1,6 +1,7 @@
 import os
 import argparse
 import re
+import pdb
 import multiprocessing
 from tqdm import tqdm
 from collections.abc import Sequence
@@ -36,10 +37,10 @@ def convert_one_case(args):
     if spacing is not None:
         assert size is None, "Cannot set both spacing and size."
         input_image_mha = sitk_resample_to_spacing_v2(input_image_mha, spacing, 'image')
-        input_label_mha = sitk_resample_to_spacing_v2(input_label_mha, spacing, 'image')
+        input_label_mha = sitk_resample_to_spacing_v2(input_label_mha, spacing, 'label')
     if size is not None:
         assert spacing is None, "Cannot set both spacing and size."
-        input_image_mha = sitk_resample_to_size(input_image_mha, size, 'label')
+        input_image_mha = sitk_resample_to_size(input_image_mha, size, 'image')
         input_label_mha = sitk_resample_to_size(input_label_mha, size, 'label')
     
     sitk.WriteImage(input_image_mha, output_image_mha_path, useCompression=True)

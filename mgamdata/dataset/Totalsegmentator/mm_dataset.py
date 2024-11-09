@@ -5,7 +5,7 @@ from tqdm import tqdm
 import orjson
 import pandas as pd
 
-from ..dataset import mgam_BaseSegDataset
+from ..base import mgam_BaseSegDataset
 from .meta import (
     CLASS_INDEX_MAP, DATA_ROOT_SLICE2D_TIFF, 
     get_subset_and_rectify_map, META_CSV_PATH)
