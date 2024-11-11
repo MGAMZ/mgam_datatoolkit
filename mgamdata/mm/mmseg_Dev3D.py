@@ -554,7 +554,7 @@ class BaseDecodeHead_3D(BaseDecodeHead):
 class DiceLoss_3D(DiceLoss):
     def __init__(self, 
                  ignore_1st_index:bool=False, 
-                 batch_z:int=4, 
+                 batch_z:int|None=None, 
                  *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.ignore_1st_index = ignore_1st_index
@@ -595,12 +595,17 @@ class DiceLoss_3D(DiceLoss):
         # pred: [N, C, Z, Y, X]
         assert pred.shape[-3:] == target.shape[-3:], \
             f"The [Z, Y, X] of pred {pred.shape} and target {target.shape} must be the same."
-        batch_loss = []
-        for z in range(0, pred.shape[-3], self.batch_z):
-            pred_z   = pred  [..., z:z+self.batch_z, :, :]
-            target_z = target[..., z:z+self.batch_z, :, :]
-            batch_loss.append(self.forward_one_patch(pred_z, target_z, *args, **kwargs))
-        return torch.stack(batch_loss).mean()
+        
+        if self.batch_z is not None:
+            batch_loss = []
+            for z in range(0, pred.shape[-3], self.batch_z):
+                pred_z   = pred  [..., z:z+self.batch_z, :, :]
+                target_z = target[..., z:z+self.batch_z, :, :]
+                batch_loss.append(self.forward_one_patch(pred_z, target_z, *args, **kwargs))
+            return torch.stack(batch_loss).mean()
+        
+        else:
+            return self.forward_one_patch(pred, target, *args, **kwargs)
 
 
 class Seg3DVisualizationHook(SegVisualizationHook):
