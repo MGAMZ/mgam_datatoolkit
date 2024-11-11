@@ -14,12 +14,20 @@ from torch import Tensor
 from torch.distributed.fsdp.wrap import size_based_auto_wrap_policy
 
 from mmengine.dataset.sampler import DefaultSampler
-from mmengine.runner import Runner, IterBasedTrainLoop, FlexibleRunner
+from mmengine.runner import (
+    Runner,
+    IterBasedTrainLoop,
+    FlexibleRunner,
+    find_latest_checkpoint,
+)
 from mmengine.runner.runner import ConfigType
 from mmengine.hooks import LoggerHook
 from mmengine.logging import print_log, MMLogger
 from mmengine.optim.optimizer import AmpOptimWrapper
-from mmengine.model.wrappers import MMDistributedDataParallel, MMFullyShardedDataParallel
+from mmengine.model.wrappers import (
+    MMDistributedDataParallel,
+    MMFullyShardedDataParallel,
+)
 
 from ..utils.DevelopUtils import measure_time, InjectVisualize
 
@@ -32,18 +40,26 @@ def DynamicRunnerSelection(cfg: ConfigType) -> Runner:
         RunnerChoice = Runner
 
     class mgam_Runner(RunnerChoice):  # type: ignore
+        """MGAM Customized MMEngine Runner"""
 
         def __init__(self, **kwargs):
-            self.custom_env(kwargs.get('env_cfg', {}))
-            strategy = kwargs.get('cfg', {}).pop('strategy', None)
+            self.resume_optimizer = kwargs.get("cfg", {}).pop("resume_optimizer", True)
+            self.resume_param_scheduler = kwargs.get("cfg", {}).pop(
+                "resume_param_scheduler", True
+            )
+
+            self.custom_env(kwargs.get("env_cfg", {}))
+            strategy = kwargs.get("cfg", {}).pop("strategy", None)
 
             if issubclass(self.__class__, FlexibleRunner):
-                auto_strategy = partial(size_based_auto_wrap_policy,
-                                        min_num_params=int(1e7))
+                auto_strategy = partial(
+                    size_based_auto_wrap_policy, min_num_params=int(1e7)
+                )
                 strategy.update(
-                    dict(model_wrapper=dict(auto_wrap_policy=auto_strategy)))
+                    dict(model_wrapper=dict(auto_wrap_policy=auto_strategy))
+                )
 
-                kwargs['strategy'] = strategy
+                kwargs["strategy"] = strategy
                 super().__init__(**kwargs)
 
             else:
@@ -59,43 +75,76 @@ def DynamicRunnerSelection(cfg: ConfigType) -> Runner:
 
         def custom_env(self, cfg):
             # Avoid device clash with OpenCV
-            torch.cuda.set_device(cfg.pop('torch_cuda_id', 0))
+            torch.cuda.set_device(cfg.pop("torch_cuda_id", 0))
             # Torch Compile
-            cfg.get('torch_logging_level', logging.WARN)
-            torch._logging.set_logs(all=self.str_to_log_level(
-                cfg.pop('torch_logging_level', 'WARN')))
-            torch._logging.set_logs(dynamo=self.str_to_log_level(
-                cfg.pop('dynamo_logging_level', 'WARN')))
+            cfg.get("torch_logging_level", logging.WARN)
+            torch._logging.set_logs(
+                all=self.str_to_log_level(cfg.pop("torch_logging_level", "WARN"))
+            )
+            torch._logging.set_logs(
+                dynamo=self.str_to_log_level(cfg.pop("dynamo_logging_level", "WARN"))
+            )
             torch._dynamo.config.cache_size_limit = cfg.pop(
-                'dynamo_cache_size', 1)  # type:ignore
+                "dynamo_cache_size", 1
+            )  # type:ignore
             torch._dynamo.config.suppress_errors = cfg.pop(
-                'dynamo_supress_errors', False)  # type:ignore
+                "dynamo_supress_errors", False
+            )  # type:ignore
             # cuBLAS matmul
-            torch.backends.cuda.matmul.allow_tf32 = cfg.get(
-                'allow_tf32', False)
-            torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = \
-                cfg.pop('allow_fp16_reduced_precision_reduction', False)
-            torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = \
-                cfg.pop('allow_bf16_reduced_precision_reduction', True)
+            torch.backends.cuda.matmul.allow_tf32 = cfg.get("allow_tf32", False)
+            torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = cfg.pop(
+                "allow_fp16_reduced_precision_reduction", False
+            )
+            torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = cfg.pop(
+                "allow_bf16_reduced_precision_reduction", True
+            )
             # CUDNN
-            torch.backends.cudnn.allow_tf32 = cfg.pop('allow_tf32', False)
-            torch.backends.cudnn.benchmark = cfg.pop('benchmark', False)
-            torch.backends.cudnn.deterministic = cfg.pop(
-                'deterministic', False)
+            torch.backends.cudnn.allow_tf32 = cfg.pop("allow_tf32", False)
+            torch.backends.cudnn.benchmark = cfg.pop("benchmark", False)
+            torch.backends.cudnn.deterministic = cfg.pop("deterministic", False)
 
         @staticmethod
-        def auto_configure_num_classes_from_Databackend(
-                cfg: ConfigType, num_classes):
+        def auto_configure_num_classes_from_Databackend(cfg: ConfigType, num_classes):
             for key, value in cfg.items():
-                if key == 'num_classes' or key == 'out_channels':
+                if key == "num_classes" or key == "out_channels":
                     print_log(
                         f"NumClasses Auto Override {cfg.get('type', 'Unknown')}: {cfg['num_classes']} -> {num_classes}",
-                        'current')
+                        "current",
+                    )
                     cfg[key] = num_classes
                 elif isinstance(value, ConfigType):
                     cfg[key] = mgam_Runner.auto_configure_num_classes_from_Databackend(
-                        value, num_classes)
+                        value, num_classes
+                    )
             return cfg
+
+        def load_or_resume(self) -> None:
+            """Load or resume checkpoint."""
+            if self._has_loaded:
+                return None
+
+            # decide to load from checkpoint or resume from checkpoint
+            resume_from = None
+            if self._resume and self._load_from is None:
+                # auto resume from the latest checkpoint
+                resume_from = find_latest_checkpoint(self.work_dir)
+                self.logger.info(
+                    f"Auto resumed from the latest checkpoint {resume_from}."
+                )
+            elif self._resume and self._load_from is not None:
+                # resume from the specified checkpoint
+                resume_from = self._load_from
+
+            if resume_from is not None:
+                self.resume(
+                    filename=resume_from,
+                    resume_optimizer=self.resume_optimizer,
+                    resume_param_scheduler=self.resume_param_scheduler,
+                )
+                self._has_loaded = True
+            elif self._load_from is not None:
+                self.load_checkpoint(self._load_from)
+                self._has_loaded = True
 
     return mgam_Runner.from_cfg(cfg)
 
@@ -108,8 +157,13 @@ class IterBasedTrainLoop_SupportProfiler(IterBasedTrainLoop):
         self.profiler_step_count = 0
         super().__init__(*args, **kwargs)
 
-        if profiler == 'PyTorchProfiler':
-            from torch.profiler import profile, ProfilerActivity, tensorboard_trace_handler
+        if profiler == "PyTorchProfiler":
+            from torch.profiler import (
+                profile,
+                ProfilerActivity,
+                tensorboard_trace_handler,
+            )
+
             self.prof = profile(
                 activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
                 schedule=torch.profiler.schedule(wait=50, warmup=1, active=2),
@@ -118,12 +172,12 @@ class IterBasedTrainLoop_SupportProfiler(IterBasedTrainLoop):
                 with_stack=False,
                 with_flops=True,
                 with_modules=True,
-                on_trace_ready=tensorboard_trace_handler(
-                    './work_dirs/profiler/'))
+                on_trace_ready=tensorboard_trace_handler("./work_dirs/profiler/"),
+            )
             self.prof.start()
 
     def run_iter(self, data_batch) -> None:
-        if hasattr(self, 'prof'):
+        if hasattr(self, "prof"):
             super().run_iter(data_batch)
             self.prof.step()
             self.profiler_step_count += 1
@@ -137,15 +191,15 @@ class IterBasedTrainLoop_SupportProfiler(IterBasedTrainLoop):
 class mgam_PerClassMetricLogger_OnTest(LoggerHook):
 
     def after_test_epoch(self, runner, metrics: dict) -> None:
-        PerClassResult_FromIoUMetric = metrics.pop('Perf/PerClass')
-        data_df = pd.DataFrame(
-            PerClassResult_FromIoUMetric)  # [Class, metrics...]
+        PerClassResult_FromIoUMetric = metrics.pop("Perf/PerClass")
+        data_df = pd.DataFrame(PerClassResult_FromIoUMetric)  # [Class, metrics...]
         # calculate average for each column except the first column
-        data_df.loc['mean'] = data_df.iloc[:, 1:].mean(axis=0)
+        data_df.loc["mean"] = data_df.iloc[:, 1:].mean(axis=0)
         data_df = data_df.round(decimals=2)
-        csv_path_suffix = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-        csv_save_path = osp.join(runner.log_dir,
-                                 f'PerClassResult_{csv_path_suffix}.csv')
+        csv_path_suffix = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        csv_save_path = osp.join(
+            runner.log_dir, f"PerClassResult_{csv_path_suffix}.csv"
+        )
         data_df.to_csv(csv_save_path, index=False)
 
         super().after_test_epoch(runner, metrics)
@@ -176,10 +230,10 @@ class LoggerJSON(LoggerHook):
         self._itemize_metric_(metrics)
         json_save_path = osp.join(
             runner.work_dir,
-            f"test_result_epoch{runner.cfg.get('epochs', 0)}_iter{runner.cfg.get('iters', 0)}.json"
+            f"test_result_epoch{runner.cfg.get('epochs', 0)}_iter{runner.cfg.get('iters', 0)}.json",
         )
 
-        with open(json_save_path, 'w') as f:
+        with open(json_save_path, "w") as f:
             json.dump(metrics, f, indent=4)
 
         super().after_test_epoch(runner, metrics)
@@ -189,11 +243,12 @@ class LoggerJSON(LoggerHook):
 class AmpPatchAccumulateOptimWarpper(AmpOptimWrapper):
 
     def update_params(  # type: ignore
-            self,
-            loss: torch.Tensor,
-            step_kwargs: dict | None = None,
-            zero_kwargs: dict | None = None,
-            should_update: bool = True) -> None:
+        self,
+        loss: torch.Tensor,
+        step_kwargs: dict | None = None,
+        zero_kwargs: dict | None = None,
+        should_update: bool = True,
+    ) -> None:
         """Update parameters in :attr:`optimizer`.
 
         Args:
@@ -222,9 +277,9 @@ class AmpPatchAccumulateOptimWarpper(AmpOptimWrapper):
 # customized DDP training for our task.
 class RemasteredDDP(MMDistributedDataParallel):
     """
-        The official MMEngine's Distributed Model Wrapper makes none sense to me.
-        So I override the following three methods, avoiding the warpper to influence
-        the model's data flow design.
+    The official MMEngine's Distributed Model Wrapper makes none sense to me.
+    So I override the following three methods, avoiding the warpper to influence
+    the model's data flow design.
     """
 
     def train_step(self, *args, **kwargs):
@@ -246,9 +301,9 @@ class RemasteredDDP(MMDistributedDataParallel):
 # customized FSDP training for our task.
 class RemasteredFSDP(MMFullyShardedDataParallel):
     """
-        The official MMEngine's Distributed Model Wrapper makes none sense to me.
-        So I override the following three methods, avoiding the warpper to influence
-        the model's data flow design.
+    The official MMEngine's Distributed Model Wrapper makes none sense to me.
+    So I override the following three methods, avoiding the warpper to influence
+    the model's data flow design.
     """
 
     def train_step(self, *args, **kwargs):
@@ -275,7 +330,8 @@ class RatioSampler(DefaultSampler):
         self.use_sample_ratio = use_sample_ratio
         print_log(
             f"RatioSampler used, original num of sample {super().__len__()} -> used {len(self)}",
-            MMLogger.get_current_instance())
+            MMLogger.get_current_instance(),
+        )
 
     def __iter__(self):
         indices = np.array(list(super().__iter__()))
