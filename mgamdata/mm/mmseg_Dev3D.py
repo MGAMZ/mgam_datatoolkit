@@ -288,12 +288,12 @@ class EncoderDecoder_3D(EncoderDecoder):
             size=(batch_size, out_channels, z_img, y_img, x_img),
             dtype=torch.float16,
             device=accu_device,
-            pin_memory=True)
+            pin_memory=False)
         count_mat = torch.zeros(
             size=(batch_size, 1, z_img, y_img, x_img),
             dtype=torch.uint8,
             device=accu_device,
-            pin_memory=True)
+            pin_memory=False)
         
         for z_idx in range(z_grids):
             for y_idx in range(y_grids):
