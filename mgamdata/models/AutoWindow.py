@@ -1,3 +1,4 @@
+from collections import OrderedDict
 from collections.abc import Callable
 import pdb
 from io import BytesIO
@@ -10,13 +11,168 @@ import torch
 from torch import Tensor
 from matplotlib import pyplot as plt
 
+from mmcv.transforms import BaseTransform
 from mmengine.runner.runner import Runner
 from mmengine.hooks.hook import Hook
 from mmengine.logging import print_log, MMLogger
 from mmengine.model.base_module import BaseModule
+from mmengine.structures.base_data_element import BaseDataElement
 from mmseg.registry import MODELS
 
-from mgamdata.mm.mmseg_Dev3D import EncoderDecoder_3D
+from mgamdata.mm.mmseg_Dev3D import (
+    EncoderDecoder_3D,
+    Seg3DDataSample,
+    PackSeg3DInputs,
+    to_tensor,
+    VolumeData,
+    warnings,
+)
+
+
+class StatisticsData(BaseDataElement):
+    """用于存储统计值（mean, std, min, max）的数据结构。"""
+
+    def __init__(self, mean: float, std: float, min: float, max: float):
+        super().__init__(stats=torch.tensor([mean, std, min, max]))
+
+    @property
+    def stats(self) -> Tensor:
+        return self._stats
+
+    @stats.setter
+    def stats(self, value: torch.Tensor):
+        assert isinstance(value, torch.Tensor), "stats 必须是一个 Tensor"
+        assert value.shape == (4,), "stats Tensor 的长度必须为4"
+        self.set_field(value, "_stats")
+
+    @property
+    def mean(self) -> float:
+        return self._stats[0].item()
+
+    @property
+    def std(self) -> float:
+        return self._stats[1].item()
+
+    @property
+    def min(self) -> float:
+        return self._stats[2].item()
+
+    @property
+    def max(self) -> float:
+        return self._stats[3].item()
+
+
+class Seg3DDataSample_WithStat(Seg3DDataSample):
+    """A class that stores a mapping between label indices and StatisticsData objects."""
+
+    @property
+    def stat(self) -> dict[str, StatisticsData]:
+        return self._stat
+
+    @stat.setter
+    def stat(self, value: dict[str, StatisticsData]) -> None:
+        self.set_field(value, "_stat")
+
+    @stat.deleter
+    def stat(self) -> None:
+        del self._stat
+
+
+class ParseLabelDistribution(BaseTransform):
+    """Support window extractor, will add a label pixel value distribution of one sample.
+
+    Required keys:
+
+    - img
+    - gt_seg_map
+
+    added Keys:
+
+    - label_distr
+
+    """
+
+    def transform(self, results: dict):
+        distr = {}
+        img = results["img"]
+        label = results["gt_seg_map"]
+        label_idxs = np.unique(label)
+
+        # calculate the distribution of each label
+        for idx in label_idxs:
+            v: np.ndarray = img[label == idx]
+            distr[idx] = StatisticsData(
+                mean=v.mean(), std=v.std(), min=v.min(), max=v.max()
+            )
+        # sort according to mean
+        results["label_distr"] = OrderedDict(
+            sorted(distr.items(), key=lambda x: x[1].mean)
+        )
+
+        return results
+
+
+class PackSeg3DInputs_AutoWindow(PackSeg3DInputs):
+    def transform(self, results: dict) -> dict:
+        """Method to pack the input data for 3D segmentation.
+
+        Args:
+            results (dict): Result dict from the data pipeline.
+
+        Returns:
+            dict:
+
+            - 'inputs' (obj:`torch.Tensor`): The forward data of models.
+            - 'data_sample' (obj:`Seg3DDataSample`): The annotation info of the
+                sample.
+        """
+        packed_results = dict()
+        if "img" in results:
+            img = results["img"]
+            if len(img.shape) < 4:
+                img = np.expand_dims(img, -1)
+            if not img.flags.c_contiguous:
+                img = to_tensor(np.ascontiguousarray(img.transpose(3, 0, 1, 2)))
+            else:
+                img = img.transpose(3, 0, 1, 2)
+                img = to_tensor(img).contiguous()
+            packed_results["inputs"] = img
+
+        data_sample = Seg3DDataSample_WithStat()
+
+        if "gt_seg_map" in results:
+            if len(results["gt_seg_map"].shape) == 3:
+                data = to_tensor(results["gt_seg_map"][None].astype(np.uint8))
+            else:
+                warnings.warn(
+                    "Please pay attention your ground truth "
+                    "segmentation map, usually the segmentation "
+                    "map is 3D, but got "
+                    f'{results["gt_seg_map"].shape}'
+                )
+                data = to_tensor(results["gt_seg_map"].astype(np.uint8))
+            data_sample.gt_sem_seg = VolumeData(data=data)  # type: ignore
+
+        if "gt_seg_map_one_hot" in results:
+            assert len(results["gt_seg_map_one_hot"].shape) == 4, (
+                f"The shape of gt_seg_map_one_hot should be `[X, Y, Z, Classes]`, "
+                f'but got {results["gt_seg_map_one_hot"].shape}'
+            )
+            data = to_tensor(results["gt_seg_map_one_hot"].astype(np.uint8))
+            data_sample.gt_sem_seg_one_hot = VolumeData(data=data)
+
+        # NOTE AutoWindow Requires
+        if "label_distr" in results:
+            data_sample.stat = results["label_distr"]
+
+        img_meta = {}
+        for key in self.meta_keys:
+            if key in results:
+                img_meta[key] = results[key]
+        data_sample.set_metainfo(img_meta)
+        packed_results["data_samples"] = data_sample
+
+        return packed_results
 
 
 def scale_gradients(module, grad_input, grad_output):
@@ -25,13 +181,17 @@ def scale_gradients(module, grad_input, grad_output):
 
 class DynamicParam(BaseModule):
     def __init__(
-        self, init_method: Callable, ensure_sign: str | None = None, eps: float = 1e-2
+        self,
+        init_method: Callable,
+        num_param: int = 1,
+        ensure_sign: str | None = None,
+        eps: float = 1e-2,
     ):
         super().__init__()
         if ensure_sign is not None:
             assert ensure_sign in ["pos", "neg"]
         self.ensure_sign = ensure_sign
-        self.param = torch.nn.Parameter(torch.empty(1))
+        self.param = torch.nn.Parameter(torch.empty(num_param))
         init_method(self.param)
         self.eps = eps
 
@@ -70,7 +230,7 @@ class WindowExtractor(SupportLrMultModule):
     def __init__(
         self,
         in_channels: int,
-        embed_dims: int,
+        focus_range: list | tuple,
         value_range: list | tuple,
         lr_scale: float | None = None,
         eps: float = 1.0,
@@ -78,15 +238,20 @@ class WindowExtractor(SupportLrMultModule):
         *args,
         **kwargs,
     ):
-        assert len(value_range) == 2 and value_range[1] > value_range[0]
         super().__init__(*args, **kwargs)
         self.in_channels = in_channels
+        self.focus_range = focus_range
         self.value_range = value_range
         self.lr_scale = lr_scale
         self.eps = eps
         self.dim = dim
         self.log_count = 0
-        self.window_sample = torch.arange(*self.value_range)
+
+        self.window_sample = torch.arange(*self.focus_range)
+        self.relative_focus_range = [
+            (i - value_range[0]) / (value_range[1] - value_range[0])
+            for i in focus_range
+        ]
 
         # Dynamic Weak Response - a
         self.d_wr = DynamicParam(
@@ -109,9 +274,9 @@ class WindowExtractor(SupportLrMultModule):
         # Global Offset - k
         self.g_o = DynamicParam(partial(torch.nn.init.zeros_), ensure_sign=None)
         # Range Rectification Coefficient - h
-        self.rrc = value_range[1] - value_range[0]
+        self.rrc = focus_range[1] - focus_range[0]
         # Major dynamic range for this window to handle.
-        self.major_handle = (value_range[1] + value_range[0]) / 2
+        self.major_handle = (focus_range[1] + focus_range[0]) / 2
         assert self.rrc > 0
 
     @torch.inference_mode()
@@ -139,6 +304,35 @@ class WindowExtractor(SupportLrMultModule):
             "RespMat": (self.window_sample.cpu().numpy(), sample_response),
         }
 
+    def _focus_range(self, data_samples: list[Seg3DDataSample]):
+        distrs = [
+            [(class_idx, stat) for class_idx, stat in s.stat.items()]
+            for s in data_samples
+        ]
+        intrs_means = []
+        intrs_stds = []
+        # locate interested classes' distributions according to `relative_focus_range`
+        for distr in distrs:
+            # len(distr) = num of classes of this sample
+            intrs_classes_start = int(len(distr) * self.relative_focus_range[0])
+            intrs_classes_end = int(len(distr) * self.relative_focus_range[1])
+            if intrs_classes_start == intrs_classes_end:
+                intrs_classes_end += 1
+
+            intrs_classes = distr[intrs_classes_start:intrs_classes_end]
+            intrs_means.append([stat.mean for _, stat in intrs_classes])
+            intrs_stds.append([stat.std for _, stat in intrs_classes])
+
+        focus_target_mean = torch.tensor(intrs_means).mean()
+        focus_target_std = torch.tensor(intrs_stds).mean()
+        return focus_target_mean, focus_target_std
+
+    def loss(self, WinE_proj: Tensor, data_samples: list[Seg3DDataSample]):
+        focus_target_mean, focus_target_std = self._focus_range(data_samples)
+        mean_loss = torch.abs(focus_target_mean / self.rrc - WinE_proj.mean())
+        std_loss = torch.abs(focus_target_std / self.rrc - WinE_proj.std())
+        return mean_loss + std_loss
+
     def forward(self, x: Tensor):
         """
         Args:
@@ -160,7 +354,7 @@ class WindowExtractor(SupportLrMultModule):
         return response
 
 
-class ValueWiseProjector(SupportLrMultModule):
+class TanhRectifier(SupportLrMultModule):
     """
     Value-Wise Projector for one window remapping operation.
     The extracted value are fine-tuned by this projector.
@@ -182,8 +376,10 @@ class ValueWiseProjector(SupportLrMultModule):
         self.sample = torch.arange(sample_nbins) / sample_nbins * 10 - 5
         self.dim = dim
 
-        self.rectify_intense = torch.nn.Parameter(torch.randn(num_rect) * 0.1)
-        self.rectify_location = torch.nn.Parameter(torch.randn(num_rect))
+        self.rectify_intense = DynamicParam(
+            partial(torch.nn.init.normal_, std=0.1), num_param=num_rect
+        )
+        self.rectify_location = DynamicParam(torch.nn.init.normal_, num_param=num_rect)
 
         self.momentum = momentum
         self.std_memory = torch.ones(1)
@@ -194,7 +390,7 @@ class ValueWiseProjector(SupportLrMultModule):
         proj = self.forward(self.sample)
         return (self.sample.detach().cpu().numpy(), proj.cpu().numpy())
 
-    def loss(self, inputs: Tensor) -> Tensor:
+    def loss(self, inputs: Tensor, data_samples: list[Seg3DDataSample]) -> Tensor:
         """
         Limit the projector ability to ensure it's behavior,
         which aligns with the physical meaning.
@@ -207,7 +403,7 @@ class ValueWiseProjector(SupportLrMultModule):
                     1 - self.momentum
                 )
 
-        return torch.abs(self.rectify_location.std() - self.std_memory)
+        return torch.abs(self.rectify_location().std() - self.std_memory)
 
     def forward(self, inputs: Tensor) -> Tensor:
         """
@@ -220,13 +416,14 @@ class ValueWiseProjector(SupportLrMultModule):
         # is equivalent to the X-axis translation operation.
         rectification = (
             torch.tanh(
-                self.rectify_location  # [num_rect]
+                self.rectify_location()  # [num_rect]
                 + inputs.expand(self.num_rect, *inputs.shape).moveaxis(
                     0, -1
                 )  # [..., num_rect]
             )
-            * self.rectify_intense
+            * self.rectify_intense()
         )  # rectification: [..., num_rect]
+
         return inputs + torch.sum(rectification, dim=-1)  # [...]
 
 
@@ -266,10 +463,12 @@ class ParalleledMultiWindowProcessing(BaseModule):
         window_embed_dims: int | None = None,
         num_windows: int = 4,
         num_rect: int = 8,
-        VluP_rect_momentum: float = 0.99,
+        TRec_rect_momentum: float = 0.99,
         data_range: list[int] = [-1024, 3072],
         dim="3d",
-        enable_VWP: bool = True,
+        enable_WinE_loss: bool = False,
+        enable_TRec: bool = True,
+        enable_TRec_loss: bool = False,
         enable_CWF: bool = True,
         lr_mult: float | None = None,
         *args,
@@ -287,10 +486,12 @@ class ParalleledMultiWindowProcessing(BaseModule):
             else embed_dims // self.num_windows
         )
         self.num_rect = num_rect
-        self.VluP_rect_momentum = VluP_rect_momentum
+        self.TRec_rect_momentum = TRec_rect_momentum
         self.data_range = data_range
         self.dim = dim
-        self.enable_VWP = enable_VWP
+        self.enable_WinE_loss = enable_WinE_loss
+        self.enable_TRec = enable_TRec
+        self.enable_TRec_loss = enable_TRec_loss
         self.enable_CWF = enable_CWF
         self.lr_mult = lr_mult
         self._init_PMWP()
@@ -304,20 +505,20 @@ class ParalleledMultiWindowProcessing(BaseModule):
                 f"window_extractor_{i}",
                 WindowExtractor(
                     in_channels=self.in_channels,
-                    embed_dims=self.embed_dims,
-                    value_range=sub_window_ranges[i],
+                    focus_range=sub_window_ranges[i],
+                    value_range=self.data_range,
                     dim=self.dim,
                     lr_mult=self.lr_mult,
                 ),
             )
-            if self.enable_VWP:
+            if self.enable_TRec:
                 setattr(
                     self,
-                    f"value_wise_projector_{i}",
-                    ValueWiseProjector(
+                    f"tanh_rectifier_{i}",
+                    TanhRectifier(
                         in_channels=self.in_channels,
                         num_rect=self.num_rect,
-                        momentum=self.VluP_rect_momentum,
+                        momentum=self.TRec_rect_momentum,
                         dim=self.dim,
                         lr_mult=self.lr_mult,
                     ),
@@ -345,28 +546,34 @@ class ParalleledMultiWindowProcessing(BaseModule):
         for i in range(self.num_windows):
             for k, v in getattr(self, f"window_extractor_{i}").status().items():
                 WinE[f"WinE/W{i}_{k}"] = v
-        if self.enable_VWP:
-            VluP = {
-                f"VluP/P{i}": getattr(
-                    self, f"value_wise_projector_{i}"
-                ).current_projection()
+        if self.enable_TRec:
+            TRec = {
+                f"TRec/P{i}": getattr(self, f"tanh_rectifier_{i}").current_projection()
                 for i in range(self.num_windows)
             }
         else:
-            VluP = None
+            TRec = None
 
         if self.enable_CWF:
             CrsF = self.cross_window_fusion.current_fusion
         else:
             CrsF = None
 
-        return WinE, VluP, CrsF
+        return WinE, TRec, CrsF
+
+    def feedback_losses(
+        self,
+        inputs: Tensor,
+        features: list[Tensor],
+        losses: dict,
+        data_samples: list[Seg3DDataSample],
+    ) -> dict:
+        return losses
 
     def forward(
         self,
         inputs: Tensor,
-        enable_pmwp_loss: bool = False,
-        enable_WinE_loss: bool = False,
+        data_samples_for_pmwp_loss=None,
     ):
         """
         Args:
@@ -382,14 +589,18 @@ class ParalleledMultiWindowProcessing(BaseModule):
         for i in range(self.num_windows):
             WinE = getattr(self, f"window_extractor_{i}")
             proj = WinE(inputs)
-            if enable_WinE_loss:
-                pmwp_losses[f"loss/WinE_{i}"] = WinE.loss(proj) / self.num_windows
+            if self.enable_WinE_loss and data_samples_for_pmwp_loss is not None:
+                pmwp_losses[f"loss/WinE_{i}"] = (
+                    WinE.loss(proj, data_samples_for_pmwp_loss) / self.num_windows
+                )
 
-            if self.enable_VWP:
-                VluP = getattr(self, f"value_wise_projector_{i}")
-                proj = VluP.forward(proj)
-                if enable_pmwp_loss:
-                    pmwp_losses[f"loss/VluP_{i}"] = VluP.loss(proj) / self.num_windows
+            if self.enable_TRec:
+                TRec = getattr(self, f"tanh_rectifier_{i}")
+                proj = TRec.forward(proj)
+                if self.enable_TRec_loss and data_samples_for_pmwp_loss is not None:
+                    pmwp_losses[f"loss/TRec_{i}"] = (
+                        TRec.loss(proj, data_samples_for_pmwp_loss) / self.num_windows
+                    )
 
             x.append(proj)  # [N, C, ...]
 
@@ -406,29 +617,27 @@ class ParalleledMultiWindowProcessing(BaseModule):
 class AutoWindowSetting(EncoderDecoder_3D):
     "Compatible Plugin for Auto Window Setting."
 
-    def __init__(self, pmwp: dict, enable_pmwp_loss: bool = False, *args, **kwargs):
+    def __init__(self, pmwp: dict, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.pmwp: ParalleledMultiWindowProcessing = MODELS.build(pmwp)
-        self.enable_pmwp_loss = enable_pmwp_loss
 
-    def extract_feat(self, inputs: Tensor, enable_pmwp_loss: bool = False):
+    def extract_feat(self, inputs: Tensor, data_samples_for_pmwp_loss=None):
         # inputs: [N, C, ...]
         # pmwp_out: [N, num_window * C, ...]
         # TODO Downsampling Channel?
-        pmwp_out, pmwp_loss = self.pmwp(inputs, enable_pmwp_loss)
+        pmwp_out, pmwp_loss = self.pmwp(inputs, data_samples_for_pmwp_loss)
 
-        if enable_pmwp_loss:
+        # when `data_samples_for_pmwp_loss` is not None,
+        # `pmwp_loss` should not be None.
+        if data_samples_for_pmwp_loss is not None:
             return super().extract_feat(pmwp_out), pmwp_loss
         else:
             return super().extract_feat(pmwp_out)
 
-    def loss(self, inputs: Tensor, data_samples):
-        if self.enable_pmwp_loss:
-            x, pmwp_loss = self.extract_feat(inputs, self.enable_pmwp_loss)
-            losses: dict = pmwp_loss
-        else:
-            x = self.extract_feat(inputs)
-            losses = dict()
+    def loss(self, inputs: Tensor, data_samples: list[Seg3DDataSample]):
+        x, pmwp_loss = self.extract_feat(inputs, data_samples)
+        x: list[Tensor]
+        losses: dict = pmwp_loss
 
         loss_decode = self._decode_head_forward_train(x, data_samples)
         losses.update(loss_decode)
@@ -436,6 +645,8 @@ class AutoWindowSetting(EncoderDecoder_3D):
         if self.with_auxiliary_head:
             loss_aux = self._auxiliary_head_forward_train(x, data_samples)
             losses.update(loss_aux)
+
+        losses = self.pmwp.feedback_losses(inputs, x, losses, data_samples)
 
         return losses
 
@@ -447,7 +658,7 @@ class AutoWindowStatusLoggerHook(Hook):
     def before_val_epoch(self, runner: Runner) -> None:
         model: ParalleledMultiWindowProcessing = runner.model.pmwp
         plt.figure(figsize=(4, 3))
-        WinE, VluP, CrsF = model.status()  # Class `AutoWindowSetting`
+        WinE, TRec, CrsF = model.status()  # Class `AutoWindowSetting`
 
         if isinstance(runner._train_loop, dict) or runner._train_loop is None:
             current_iter = 0
@@ -471,8 +682,8 @@ class AutoWindowStatusLoggerHook(Hook):
             file_path=f"{runner.timestamp}-AutoWindowStatus.json",
         )
 
-        if VluP is not None:
-            for name, proj in VluP.items():
+        if TRec is not None:
+            for name, proj in TRec.items():
                 plt.clf()
                 buf = BytesIO()
                 plt.plot(proj[0], proj[1])
