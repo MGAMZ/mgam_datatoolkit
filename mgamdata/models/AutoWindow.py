@@ -9,6 +9,7 @@ import seaborn
 import numpy as np
 import torch
 from torch import Tensor
+from torch import multiprocessing as torchmp
 from matplotlib import pyplot as plt
 
 from mmcv.transforms import BaseTransform
@@ -222,6 +223,7 @@ class SupportLrMultModule(BaseModule):
     @staticmethod
     def scale_gradients(module, grad_input, grad_output):
         return tuple(g * module.lr_mult if g is not None else g for g in grad_input)
+
 
 class WindowExtractor(SupportLrMultModule):
     "Extract values from raw array using a learnable window."
@@ -522,6 +524,7 @@ class ParalleledMultiWindowProcessing(BaseModule):
                     lr_mult=self.lr_mult,
                 ),
             )
+
             if self.enable_TRec:
                 setattr(
                     self,
@@ -581,6 +584,35 @@ class ParalleledMultiWindowProcessing(BaseModule):
     ) -> dict:
         return losses
 
+    @staticmethod
+    def _forward_one_branch(
+        WinE,
+        TRec,
+        inputs: Tensor,
+        data_samples_for_pmwp_loss: list[Seg3DDataSample_WithStat] | None,
+        num_windows: int,
+        enable_WinE_loss: bool,
+        enable_TRec_loss: bool,
+    ):
+        proj = WinE(inputs)
+        if enable_WinE_loss and data_samples_for_pmwp_loss is not None:
+            WinE_loss = WinE.loss(proj, data_samples_for_pmwp_loss) / num_windows
+        else:
+            WinE_loss = None
+
+        if TRec is not None:
+            proj = TRec.forward(proj)
+        if (
+            enable_TRec_loss
+            and data_samples_for_pmwp_loss is not None
+            and TRec is not None
+        ):
+            TRec_loss = TRec.loss(proj, data_samples_for_pmwp_loss) / num_windows
+        else:
+            TRec_loss = None
+
+        return proj, WinE_loss, TRec_loss
+
     def forward(
         self,
         inputs: Tensor,
@@ -599,20 +631,25 @@ class ParalleledMultiWindowProcessing(BaseModule):
 
         for i in range(self.num_windows):
             WinE = getattr(self, f"window_extractor_{i}")
-            proj = WinE(inputs)
-            if self.enable_WinE_loss and data_samples_for_pmwp_loss is not None:
-                pmwp_losses[f"loss/WinE_{i}"] = (
-                    WinE.loss(proj, data_samples_for_pmwp_loss) / self.num_windows
-                )
-
             if self.enable_TRec:
                 TRec = getattr(self, f"tanh_rectifier_{i}")
-                proj = TRec.forward(proj)
-                if self.enable_TRec_loss and data_samples_for_pmwp_loss is not None:
-                    pmwp_losses[f"loss/TRec_{i}"] = (
-                        TRec.loss(proj, data_samples_for_pmwp_loss) / self.num_windows
-                    )
+            else:
+                TRec = None
 
+            proj, WinE_loss, TRec_loss = self._forward_one_branch(
+                WinE,
+                TRec,
+                inputs,
+                data_samples_for_pmwp_loss,
+                self.num_windows,
+                self.enable_WinE_loss,
+                self.enable_TRec_loss,
+            )
+
+            if WinE_loss is not None:
+                pmwp_losses[f"loss/WinE_{i}"] = WinE_loss
+            if TRec_loss is not None:
+                pmwp_losses[f"loss/TRec_{i}"] = TRec_loss
             x.append(proj)  # [N, C, ...]
 
         x = torch.stack(x)  # [Window, N, C, ...]
