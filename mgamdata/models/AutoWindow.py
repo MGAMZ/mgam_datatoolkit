@@ -185,7 +185,7 @@ class DynamicParam(BaseModule):
         init_method: Callable,
         num_param: int = 1,
         ensure_sign: str | None = None,
-        eps: float = 1e-2,
+        eps: float = 0.1,
     ):
         super().__init__()
         if ensure_sign is not None:
@@ -233,7 +233,7 @@ class WindowExtractor(SupportLrMultModule):
         focus_range: list | tuple,
         value_range: list | tuple,
         lr_scale: float | None = None,
-        eps: float = 1.0,
+        eps: float = 0.1,
         dim="3d",
         *args,
         **kwargs,
@@ -247,7 +247,7 @@ class WindowExtractor(SupportLrMultModule):
         self.dim = dim
         self.log_count = 0
 
-        self.window_sample = torch.arange(*self.focus_range)
+        self.window_sample = torch.arange(*self.value_range)
         self.relative_focus_range = [
             (i - value_range[0]) / (value_range[1] - value_range[0])
             for i in focus_range
@@ -266,11 +266,9 @@ class WindowExtractor(SupportLrMultModule):
             partial(torch.nn.init.normal_, mean=1, std=0.1), ensure_sign=None
         )
         # Dynamic Range - g
-        self.d_r = DynamicParam(
-            partial(torch.nn.init.normal_, mean=1, std=0.1), ensure_sign="pos"
-        )
+        self.d_r = DynamicParam(torch.nn.init.zeros_, ensure_sign=None)
         # Global Response - c
-        self.g_r = DynamicParam(partial(torch.nn.init.ones_), ensure_sign="pos")
+        self.g_r = DynamicParam(partial(torch.nn.init.zeros_), ensure_sign=None)
         # Global Offset - k
         self.g_o = DynamicParam(partial(torch.nn.init.zeros_), ensure_sign=None)
         # Range Rectification Coefficient - h
@@ -339,17 +337,18 @@ class WindowExtractor(SupportLrMultModule):
             inputs (Tensor): (...)
         """
         d_pf = self.d_pf(x)
-        g_r = self.g_r(x)
-        d_r = self.d_r(x)
+        g_r = self.g_r(x).clamp(-0.5, 0.5) + 1
+        # d_r = self.d_r(x) + 0.1 # Avoid zero division
+        d_r = 0.5
         d_wr = self.d_wr(x) + 1
         d_ir = self.d_ir(x) + 1
         g_o = self.g_o(x)
 
         exp = ((x - self.major_handle) / self.rrc + d_pf) / (g_r * d_r)
 
-        response = d_r * (d_wr * torch.exp(exp) - d_ir * torch.exp(-exp)) / (
+        response = g_r * (d_wr * torch.exp(exp) - d_ir * torch.exp(-exp)) / (
             d_wr * torch.exp(exp) + d_ir * torch.exp(-exp)
-        ) + (d_r * g_o)
+        ) + (g_r * g_o)
 
         return response
 
