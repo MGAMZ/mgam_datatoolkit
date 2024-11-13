@@ -175,10 +175,6 @@ class PackSeg3DInputs_AutoWindow(PackSeg3DInputs):
         return packed_results
 
 
-def scale_gradients(module, grad_input, grad_output):
-    return tuple(g * module.lr_mult if g is not None else g for g in grad_input)
-
-
 class DynamicParam(BaseModule):
     def __init__(
         self,
@@ -221,8 +217,11 @@ class SupportLrMultModule(BaseModule):
         super().__init__(*args, **kwargs)
         self.lr_mult = lr_mult
         if lr_mult is not None:
-            self.register_full_backward_hook(scale_gradients)
+            self.register_full_backward_hook(self.scale_gradients)
 
+    @staticmethod
+    def scale_gradients(module, grad_input, grad_output):
+        return tuple(g * module.lr_mult if g is not None else g for g in grad_input)
 
 class WindowExtractor(SupportLrMultModule):
     "Extract values from raw array using a learnable window."
@@ -233,6 +232,7 @@ class WindowExtractor(SupportLrMultModule):
         focus_range: list | tuple,
         value_range: list | tuple,
         lr_scale: float | None = None,
+        momentum: float = 0.99,
         eps: float = 0.1,
         dim="3d",
         *args,
@@ -243,6 +243,7 @@ class WindowExtractor(SupportLrMultModule):
         self.focus_range = focus_range
         self.value_range = value_range
         self.lr_scale = lr_scale
+        self.momentum = momentum
         self.eps = eps
         self.dim = dim
         self.log_count = 0
@@ -267,8 +268,8 @@ class WindowExtractor(SupportLrMultModule):
         )
         # Dynamic Range - g
         self.d_r = DynamicParam(torch.nn.init.zeros_, ensure_sign=None)
-        # Global Response - c
-        self.g_r = DynamicParam(partial(torch.nn.init.zeros_), ensure_sign=None)
+        # Dynamic Range Auxiliary Parameter
+        self.d_r_a = DynamicParam(torch.nn.init.zeros_, ensure_sign="pos")
         # Global Offset - k
         self.g_o = DynamicParam(partial(torch.nn.init.zeros_), ensure_sign=None)
         # Range Rectification Coefficient - h
@@ -293,7 +294,7 @@ class WindowExtractor(SupportLrMultModule):
             "d_ir": self.d_ir.status(),
             "d_pf": self.d_pf.status(),
             "d_r": self.d_r.status(),
-            "g_r": self.g_r.status(),
+            "d_r_a": self.d_r_a.status(),
             "g_o": self.g_o.status(),
             "rrc": self.rrc,
             "RespStd": sample_response.std(),
@@ -302,15 +303,19 @@ class WindowExtractor(SupportLrMultModule):
             "RespMat": (self.window_sample.cpu().numpy(), sample_response),
         }
 
-    def _focus_range(self, data_samples: list[Seg3DDataSample]):
-        distrs = [
-            [(class_idx, stat) for class_idx, stat in s.stat.items()]
-            for s in data_samples
-        ]
+    def _focus_range_momentum(self, v1: np.ndarray, v2: np.ndarray):
+        if not hasattr(self, "_focus_range_momentum_memory"):
+            self._momentum_memory = []
+        self._momentum_memory.append([v1, v2])
+        self._momentum_memory = self._momentum_memory[: int(1 / (1 - self.momentum))]
+        return torch.tensor(self._momentum_memory).mean(dim=0)
+
+    def _focus_range_of_this_sample(self, data_samples: list[Seg3DDataSample]):
         intrs_means = []
         intrs_stds = []
         # locate interested classes' distributions according to `relative_focus_range`
-        for distr in distrs:
+        for s in data_samples:
+            distr = [(class_idx, stat) for class_idx, stat in s.stat.items()]
             # len(distr) = num of classes of this sample
             intrs_classes_start = int(len(distr) * self.relative_focus_range[0])
             intrs_classes_end = int(len(distr) * self.relative_focus_range[1])
@@ -318,15 +323,18 @@ class WindowExtractor(SupportLrMultModule):
                 intrs_classes_end += 1
 
             intrs_classes = distr[intrs_classes_start:intrs_classes_end]
-            intrs_means.append([stat.mean for _, stat in intrs_classes])
-            intrs_stds.append([stat.std for _, stat in intrs_classes])
+            intrs_means.extend([stat.mean for _, stat in intrs_classes])
+            intrs_stds.extend([stat.std for _, stat in intrs_classes])
 
-        focus_target_mean = torch.tensor(intrs_means).mean()
-        focus_target_std = torch.tensor(intrs_stds).mean()
-        return focus_target_mean, focus_target_std
+        batch_mean = np.array(intrs_means).mean()
+        batch_std = np.array(intrs_stds).mean()
+
+        return self._focus_range_momentum(batch_mean, batch_std)
 
     def loss(self, WinE_proj: Tensor, data_samples: list[Seg3DDataSample]):
-        focus_target_mean, focus_target_std = self._focus_range(data_samples)
+        focus_target_mean, focus_target_std = self._focus_range_of_this_sample(
+            data_samples
+        ).to(WinE_proj.device)
         mean_loss = torch.abs(focus_target_mean / self.rrc - WinE_proj.mean())
         std_loss = torch.abs(focus_target_std / self.rrc - WinE_proj.std())
         return mean_loss + std_loss
@@ -336,19 +344,23 @@ class WindowExtractor(SupportLrMultModule):
         Args:
             inputs (Tensor): (...)
         """
+        # Dynamic Perception Field - d
         d_pf = self.d_pf(x)
-        g_r = self.g_r(x).clamp(-0.5, 0.5) + 1
-        # d_r = self.d_r(x) + 0.1 # Avoid zero division
-        d_r = 0.5
+        # NOTE Dynamic Range - g
+        d_r_a = self.d_r_a(x)
+        d_r = torch.tanh(self.d_r(x)) + 1 + d_r_a
+        # Dynamic Weak Response - a
         d_wr = self.d_wr(x) + 1
+        # Dynamic Intense Response - b
         d_ir = self.d_ir(x) + 1
+        # Global Offset - k
         g_o = self.g_o(x)
 
-        exp = ((x - self.major_handle) / self.rrc + d_pf) / (g_r * d_r)
+        exp = ((x - self.major_handle) / self.rrc + d_pf) / d_r
 
-        response = g_r * (d_wr * torch.exp(exp) - d_ir * torch.exp(-exp)) / (
+        response = (d_wr * torch.exp(exp) - d_ir * torch.exp(-exp)) / (
             d_wr * torch.exp(exp) + d_ir * torch.exp(-exp)
-        ) + (g_r * g_o)
+        ) + g_o
 
         return response
 
