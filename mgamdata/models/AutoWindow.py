@@ -305,7 +305,6 @@ class WindowExtractor(SupportLrMultModule):
 
     @torch.inference_mode()
     def status(self) -> dict:
-        sample_response = self.current_response()
         return {
             "d_wr": self.d_wr.status(),
             "d_ir": self.d_ir.status(),
@@ -314,10 +313,6 @@ class WindowExtractor(SupportLrMultModule):
             "d_r_a": self.d_r_a.status(),
             "g_o": self.g_o.status(),
             "rrc": self.rrc,
-            "RespStd": sample_response.std(),
-            "RespMax": sample_response.max(),
-            "RespMin": sample_response.min(),
-            "RespMat": (self.window_sample.cpu().numpy(), sample_response),
         }
 
     def _focus_range_momentum(self, v1: np.ndarray, v2: np.ndarray):
@@ -569,11 +564,20 @@ class ParalleledMultiWindowProcessing(BaseModule):
         sub_ranges = [(milestones[i], milestones[i + 1]) for i in range(n)]
         return sub_ranges
 
-    def status(self):
+    def train_iter_info_hook(self):
         WinE = dict()
         for i in range(self.num_windows):
             for k, v in getattr(self, f"window_extractor_{i}").status().items():
                 WinE[f"WinE/W{i}_{k}"] = v
+        
+        if self.enable_CWF:
+            CrsF = self.cross_window_fusion.current_fusion
+        else:
+            CrsF = None
+
+        return WinE, CrsF
+
+    def val_epoch_info_hook(self):
         if self.enable_TRec:
             TRec = {
                 f"TRec/P{i}": getattr(self, f"tanh_rectifier_{i}").current_projection()
@@ -581,13 +585,8 @@ class ParalleledMultiWindowProcessing(BaseModule):
             }
         else:
             TRec = None
-
-        if self.enable_CWF:
-            CrsF = self.cross_window_fusion.current_fusion
-        else:
-            CrsF = None
-
-        return WinE, TRec, CrsF
+        
+        return TRec
 
     def feedback_losses(
         self,
@@ -714,19 +713,30 @@ class AutoWindowSetting(EncoderDecoder_3D):
 
 
 class AutoWindowStatusLoggerHook(Hook):
-    def __init__(self, dpi: int = 100):
+    def __init__(self, dpi: int = 100, interval:int = 100):
         self.dpi = dpi
+        self.interval = interval
 
-    def before_val_epoch(self, runner: Runner) -> None:
-        model: ParalleledMultiWindowProcessing = runner.model.pmwp
-        plt.figure(figsize=(4, 3))
-        WinE, TRec, CrsF = model.status()  # Class `AutoWindowSetting`
-
+    @staticmethod
+    def iter(runner):
         if isinstance(runner._train_loop, dict) or runner._train_loop is None:
-            current_iter = 0
+            return 0
         else:
-            current_iter = runner.iter
+            return runner.iter
 
+    def after_train_iter(self,
+                         runner,
+                         batch_idx: int,
+                         data_batch = None,
+                         outputs = None) -> None:
+        current_iter = self.iter(runner)
+        if current_iter % self.interval != 0:
+            return
+        
+        model: ParalleledMultiWindowProcessing = runner.model.pmwp
+        WinE, CrsF = model.train_iter_info_hook()
+        plt.figure(figsize=(4, 3))
+        
         for k in list(WinE.keys()):
             if "RespMat" in k:
                 signal, response = WinE.pop(k)
@@ -744,7 +754,23 @@ class AutoWindowStatusLoggerHook(Hook):
             file_path=f"{runner.timestamp}-AutoWindowStatus.json",
         )
 
+        if CrsF is not None:
+            plt.clf()
+            buf = BytesIO()
+            seaborn.heatmap(CrsF, cmap="rainbow")
+            plt.savefig(buf, format="png")
+            image = np.array(Image.open(buf).convert("RGB"))
+            runner.visualizer.add_image("CrsF", image, current_iter)
+
+
+    def before_val_epoch(self, runner: Runner) -> None:
+        model: ParalleledMultiWindowProcessing = runner.model.pmwp
+        TRec = model.val_epoch_info_hook()
+        
         if TRec is not None:
+            current_iter = self.iter(runner)
+            plt.figure(figsize=(4, 3))
+            
             for name, proj in TRec.items():
                 plt.clf()
                 buf = BytesIO()
@@ -754,11 +780,3 @@ class AutoWindowStatusLoggerHook(Hook):
                 plt.savefig(buf, format="png", dpi=self.dpi)
                 image = np.array(Image.open(buf).convert("RGB"))
                 runner.visualizer.add_image(name, image, current_iter)
-
-        if CrsF is not None:
-            plt.clf()
-            buf = BytesIO()
-            seaborn.heatmap(CrsF, cmap="rainbow")
-            plt.savefig(buf, format="png")
-            image = np.array(Image.open(buf).convert("RGB"))
-            runner.visualizer.add_image("CrsF", image, current_iter)
