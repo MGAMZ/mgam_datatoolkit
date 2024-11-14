@@ -33,8 +33,8 @@ from mgamdata.mm.mmseg_Dev3D import (
 class StatisticsData(BaseDataElement):
     """用于存储统计值（mean, std, min, max）的数据结构。"""
 
-    def __init__(self, mean: float, std: float, min: float, max: float):
-        super().__init__(stats=torch.tensor([mean, std, min, max]))
+    def __init__(self, mean: float, std: float, min: float, max: float, count: int):
+        super().__init__(stats=torch.tensor([mean, std, min, max, count]))
 
     @property
     def stats(self) -> Tensor:
@@ -43,24 +43,28 @@ class StatisticsData(BaseDataElement):
     @stats.setter
     def stats(self, value: torch.Tensor):
         assert isinstance(value, torch.Tensor), "stats 必须是一个 Tensor"
-        assert value.shape == (4,), "stats Tensor 的长度必须为4"
+        assert value.shape == (5,), "stats Tensor 的长度必须为4"
         self.set_field(value, "_stats")
 
     @property
     def mean(self) -> float:
-        return self._stats[0].item()
+        return self._stats[0]
 
     @property
     def std(self) -> float:
-        return self._stats[1].item()
+        return self._stats[1]
 
     @property
     def min(self) -> float:
-        return self._stats[2].item()
+        return self._stats[2]
 
     @property
     def max(self) -> float:
-        return self._stats[3].item()
+        return self._stats[3]
+
+    @property
+    def count(self) -> int:
+        return self._stats[4]
 
 
 class Seg3DDataSample_WithStat(Seg3DDataSample):
@@ -77,6 +81,18 @@ class Seg3DDataSample_WithStat(Seg3DDataSample):
     @stat.deleter
     def stat(self) -> None:
         del self._stat
+
+    @property
+    def unique(self) -> dict[str, StatisticsData]:
+        return self._unique
+
+    @unique.setter
+    def unique(self, value: dict[str, StatisticsData]) -> None:
+        self.set_field(value, "_unique")
+
+    @unique.deleter
+    def unique(self) -> None:
+        del self._unique
 
 
 class ParseLabelDistribution(BaseTransform):
@@ -97,13 +113,12 @@ class ParseLabelDistribution(BaseTransform):
         distr = {}
         img = results["img"]
         label = results["gt_seg_map"]
-        label_idxs = np.unique(label)
 
         # calculate the distribution of each label
-        for idx in label_idxs:
+        for idx, count in zip(*np.unique(label, return_counts=True)):
             v: np.ndarray = img[label == idx]
             distr[idx] = StatisticsData(
-                mean=v.mean(), std=v.std(), min=v.min(), max=v.max()
+                mean=v.mean(), std=v.std(), min=v.min(), max=v.max(), count=count
             )
         # sort according to mean
         results["label_distr"] = OrderedDict(
@@ -349,8 +364,7 @@ class WindowExtractor(SupportLrMultModule):
         # Dynamic Perception Field - d
         d_pf = self.d_pf(x)
         # NOTE Dynamic Range - g
-        d_r_a = self.d_r_a(x)
-        d_r = torch.tanh(self.d_r(x)) + 1 + d_r_a
+        d_r = torch.tanh(self.d_r(x)) + 1 + self.d_r_a(x)
         # Dynamic Weak Response - a
         d_wr = self.d_wr(x) + 1
         # Dynamic Intense Response - b
