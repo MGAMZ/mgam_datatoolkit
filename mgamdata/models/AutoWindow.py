@@ -320,6 +320,11 @@ class WindowExtractor(SupportLrMultModule):
             self._momentum_memory = []
         self._momentum_memory.append([v1, v2])
         self._momentum_memory = self._momentum_memory[: int(1 / (1 - self.momentum))]
+        # register to save in checkpoint
+        self.register_buffer(
+            "_focus_range_momentum_memory",
+            torch.tensor(self._momentum_memory, device=self.g_o.device),
+        )
         return torch.tensor(self._momentum_memory).mean(dim=0)
 
     def _focus_range_of_this_sample(self, data_samples: list[Seg3DDataSample]):
@@ -761,7 +766,8 @@ class AutoWindowStatusLoggerHook(Hook):
             plt.savefig(buf, format="png")
             image = np.array(Image.open(buf).convert("RGB"))
             runner.visualizer.add_image("CrsF", image, current_iter)
-
+        
+        plt.close()
 
     def before_val_epoch(self, runner: Runner) -> None:
         model: ParalleledMultiWindowProcessing = runner.model.pmwp
@@ -780,3 +786,5 @@ class AutoWindowStatusLoggerHook(Hook):
                 plt.savefig(buf, format="png", dpi=self.dpi)
                 image = np.array(Image.open(buf).convert("RGB"))
                 runner.visualizer.add_image(name, image, current_iter)
+        
+            plt.close()
