@@ -150,6 +150,8 @@ class LoadSampleFromNpz(BaseTransform):
         
         if 'img' in self.load_type:
             results['img'] = sample['img']
+            results['img_shape'] = results['img'].shape[:-1]
+            results['ori_shape'] = results['img'].shape[:-1]
         
         if 'anno' in self.load_type:
             mask = sample['gt_seg_map']
@@ -161,4 +163,17 @@ class LoadSampleFromNpz(BaseTransform):
             results['gt_seg_map'] = mask
             results['seg_fields'].append('gt_seg_map')
         
+        return results
+
+
+class EnsureChannelDim(BaseTransform):
+    def transform(self, results):
+        # preprocessing on image requires [..., C]
+        # the C will be move to the head in `PackSegInputs` transformation.
+        if 'img' in results:
+            if len(results['img'].shape) == 2:
+                results['img'] = results['img'][..., None]
+        if 'gt_seg_map' in results:
+            if len(results['gt_seg_map'].shape) == 2:
+                results['gt_seg_map'] = results['gt_seg_map'][None, ...]
         return results

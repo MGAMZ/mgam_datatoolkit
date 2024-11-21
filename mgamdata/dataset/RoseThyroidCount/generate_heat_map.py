@@ -31,7 +31,7 @@ def __reference_implementation__():
             str = file.read()
             label_name = label.split("/")[-1].split(".")[0]
 
-            ori_path = matchingdf[matchingdf["序列号"] == label_name]["原始路径"].iloc[
+            ori_path = matchingdf[matchingdf["序列号"] == label_name]["原始路径"].iloc[ # type:ignore
                 0
             ]
             real_uid = ori_path.split("/")[0].split("_")[0]
@@ -112,7 +112,7 @@ def convert_one_patch_to_heatmap(patch_path: str, anno, save_path: str):
         heatmap[x, y] += 1
 
     heatmap = cv2.GaussianBlur(heatmap, (7, 7), 1.5).round(5).astype(np.float32)
-    np.savez_compressed(save_path, data=heatmap)
+    np.savez_compressed(save_path, img=patch_img, gt_seg_map=heatmap)
     tqdm.write(f"Saved Heatmap to {save_path}")
 
     return heatmap, heatmap.sum(), save_path

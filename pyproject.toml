@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mgamdata"
-version = "1.4.1.241112"
+version = "1.5.0.241121"
 requires-python = ">= 3.12"
 authors = [
   {name = "Yiqin Zhang", email = "312065559@qq.com"},

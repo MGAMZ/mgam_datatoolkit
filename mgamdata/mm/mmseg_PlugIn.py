@@ -1,21 +1,26 @@
+from abc import abstractmethod
 import os.path as osp
 from prettytable import PrettyTable
-from typing import Tuple, List, Dict, OrderedDict
+from collections import OrderedDict
 
 import cv2
 import torch
 import numpy as np
 from skimage.exposure import equalize_hist
 
+import mmcv
+import mmengine
 from mmengine.logging import print_log, MMLogger
+from mmengine.runner import Runner
 from mmseg.evaluation.metrics import IoUMetric
+from mmseg.engine.hooks import SegVisualizationHook
+from mmseg.structures import SegDataSample
 from mmcv.transforms import BaseTransform
 
 
 
-
 class HistogramEqualization(BaseTransform):
-    def __init__(self, image_size:Tuple, ratio:float):
+    def __init__(self, image_size:tuple, ratio:float):
         assert image_size[0] == image_size[1], 'Only support square shape for now.'
         assert ratio<1, 'RoI out of bounds'
         self.RoI = self.create_circle_in_square(image_size[0], image_size[0]*ratio)
@@ -42,23 +47,22 @@ class HistogramEqualization(BaseTransform):
         return normed_image
     
     
-    def transform(self, results:Dict) -> Dict:
-        assert isinstance(results['img'], List) 
+    def transform(self, results:dict) -> dict:
+        assert isinstance(results['img'], list) 
         for i, image in enumerate(results['img']):
             results['img'][i] = self.RoI_HistEqual(image)
         return results
 
 
-
 class IoUMetric_PerClass(IoUMetric):
-    def compute_metrics(self, results: list) -> Dict[str, float]:
+    def compute_metrics(self, results: list) -> dict[str, float]:
         """Compute the metrics from processed results.
 
         Args:
             results (list): The processed results of each batch.
 
         Returns:
-            Dict[str, float]: The computed metrics. The keys are the names of
+            dict[str, float]: The computed metrics. The keys are the names of
                 the metrics, and the values are corresponding results. The key
                 mainly includes aAcc, mIoU, mAcc, mDice, mFscore, mPrecision,
                 mRecall.
@@ -115,3 +119,79 @@ class IoUMetric_PerClass(IoUMetric):
 
         return metrics
 
+
+class SegVisualizationHook_Base(SegVisualizationHook):
+    @abstractmethod
+    def _get_source_image(self, data_sample: SegDataSample) -> np.ndarray:
+        ...
+    
+    def after_val_iter(self, runner: Runner, batch_idx: int, data_batch: dict,
+                       outputs: list[SegDataSample]) -> None:
+        """Run after every ``self.interval`` validation iterations.
+
+        Args:
+            runner (:obj:`Runner`): The runner of the validation process.
+            batch_idx (int): The index of the current batch in the val loop.
+            data_batch (dict): Data from dataloader.
+            outputs (Sequence[:obj:`SegDataSample`]]): A batch of data samples
+                that contain annotations and predictions.
+        """
+        if self.draw is False:
+            return
+
+        # There is no guarantee that the same batch of images
+        # is visualized for each evaluation.
+        total_curr_iter = runner.iter + batch_idx
+        
+        # Visualize only the first data
+        window_name = f'val_{osp.basename(outputs[0].img_path)}'
+        img = self._get_source_image(outputs[0])
+        if total_curr_iter % self.interval == 0:
+            self._visualizer.add_datasample(
+                window_name,
+                img,
+                data_sample=outputs[0],
+                show=self.show,
+                wait_time=self.wait_time,
+                step=total_curr_iter)
+
+    def after_test_iter(self, runner: Runner, batch_idx: int, data_batch: dict,
+                        outputs: list[SegDataSample]) -> None:
+        """Run after every testing iterations.
+
+        Args:
+            runner (:obj:`Runner`): The runner of the testing process.
+            batch_idx (int): The index of the current batch in the val loop.
+            data_batch (dict): Data from dataloader.
+            outputs (Sequence[:obj:`SegDataSample`]): A batch of data samples
+                that contain annotations and predictions.
+        """
+        if self.draw is False:
+            return
+
+        for data_sample in outputs:
+            self._test_index += 1
+            window_name = f'test_{osp.basename(data_sample.img_path)}'
+
+            img = self._get_source_image(data_sample)
+            self._visualizer.add_datasample(
+                window_name,
+                img,
+                data_sample=data_sample,
+                show=self.show,
+                wait_time=self.wait_time,
+                step=self._test_index)
+
+
+class SegVisHook_Vanilla(SegVisualizationHook_Base):
+    def _get_source_image(self, data_sample: SegDataSample) -> np.ndarray:
+        img_path = data_sample.img_path
+        img_bytes = mmengine.fileio.get(img_path, backend_args=self.backend_args)
+        img = mmcv.imfrombytes(img_bytes, channel_order='rgb')
+        return img
+
+
+class SegVisHook_Npz(SegVisualizationHook_Base):
+    def _get_source_image(self, data_sample: SegDataSample) -> np.ndarray:
+        img = np.load(data_sample.img_path)['img']
+        return img

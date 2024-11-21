@@ -1,5 +1,6 @@
 import os
 import re
+import pdb
 from abc import abstractmethod
 from collections.abc import Generator, Iterable
 
@@ -23,11 +24,9 @@ class mgam_BaseSegDataset(BaseSegDataset):
     SPLIT_RATIO = [0.7, 0.15, 0.15]
     
     def __init__(self,
-                 data_root_mha:str,
                  split:str,
                  debug:bool=False,
                  **kwargs) -> None:
-        self.data_root_mha = data_root_mha
         self.split = split
         self.debug = debug
         super().__init__(**kwargs)
@@ -36,26 +35,11 @@ class mgam_BaseSegDataset(BaseSegDataset):
     def _update_palette(self) -> list[list[int]]:
         '''确保background为RGB全零'''
         new_palette = super()._update_palette()
-        return [[0,0,0]] + new_palette[1:]
-
-    def _split(self):
-        all_series = [file.replace('.mha', '') 
-                      for file in os.listdir(os.path.join(self.data_root_mha, 'label'))
-                      if file.endswith('.mha')]
-        all_series = sorted(all_series, key=lambda x: abs(int(re.search(r'\d+', x).group())))
-        np.random.shuffle(all_series)
-        total = len(all_series)
-        train_end = int(total * self.SPLIT_RATIO[0])
-        val_end = train_end + int(total * self.SPLIT_RATIO[1])
         
-        if self.split == 'train':
-            return all_series[:train_end]
-        elif self.split == 'val':
-            return all_series[train_end:val_end]
-        elif self.split == 'test':
-            return all_series[val_end:]
+        if len(self.METAINFO) > 1:
+            return [[0,0,0]] + new_palette[1:]
         else:
-            raise RuntimeError(f"Unsupported split: {self.split}")
+            return new_palette
 
     @abstractmethod
     def sample_iterator(self
@@ -92,13 +76,39 @@ class mgam_BaseSegDataset(BaseSegDataset):
 
 
 class mgam_Standard_3D_Mha(mgam_BaseSegDataset):
+    def __init__(self,
+                 data_root_mha:str,
+                 **kwargs) -> None:
+        self.data_root_mha = data_root_mha
+        super().__init__(**kwargs)
+        self.data_root: str
+
+    def _split(self):
+        all_series = [file.replace('.mha', '') 
+                      for file in os.listdir(os.path.join(self.data_root_mha, 'label'))
+                      if file.endswith('mha')]
+        all_series = sorted(all_series, key=lambda x: abs(int(re.search(r'\d+', x).group())))
+        np.random.shuffle(all_series)
+        total = len(all_series)
+        train_end = int(total * self.SPLIT_RATIO[0])
+        val_end = train_end + int(total * self.SPLIT_RATIO[1])
+        
+        if self.split == 'train':
+            return all_series[:train_end]
+        elif self.split == 'val':
+            return all_series[train_end:val_end]
+        elif self.split == 'test':
+            return all_series[val_end:]
+        else:
+            raise RuntimeError(f"Unsupported split: {self.split}")
+
     def sample_iterator(self) -> Generator[tuple[str, str], None, None]:
         for series in self._split():
             yield (os.path.join(self.data_root, 'image', series+'.mha'),
                    os.path.join(self.data_root, 'label', series+'.mha'))
 
 
-class mgam_Standard_Precropped_Npz(mgam_BaseSegDataset):
+class mgam_Standard_Npz_Structure:
     def sample_iterator(self) -> Generator[tuple[str, str], None, None]:
         for series in self._split():
             series_folder:str = os.path.join(self.data_root, series)
@@ -106,3 +116,27 @@ class mgam_Standard_Precropped_Npz(mgam_BaseSegDataset):
                 if sample.endswith('.npz'):
                     yield(os.path.join(series_folder, sample),
                           os.path.join(series_folder, sample))
+
+
+class mgam_Standard_Precropped_Npz(mgam_Standard_Npz_Structure, mgam_Standard_3D_Mha):
+    ...
+
+
+class mgam_Standard_Patched_Npz(mgam_Standard_Npz_Structure, mgam_BaseSegDataset):
+    def _split(self):
+        all_series = [file.replace('.mha', '') 
+                      for file in os.listdir(self.data_root)]
+        all_series = sorted(all_series, key=lambda x: abs(int(re.search(r'\d+', x).group())))
+        np.random.shuffle(all_series)
+        total = len(all_series)
+        train_end = int(total * self.SPLIT_RATIO[0])
+        val_end = train_end + int(total * self.SPLIT_RATIO[1])
+
+        if self.split == 'train':
+            return all_series[:train_end]
+        elif self.split == 'val':
+            return all_series[train_end:val_end]
+        elif self.split == 'test':
+            return all_series[val_end:]
+        else:
+            raise RuntimeError(f"Unsupported split: {self.split}")

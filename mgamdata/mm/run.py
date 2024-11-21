@@ -11,7 +11,7 @@ from mmengine.config import DictAction
 
 from mgamdata.mm import MM_WORK_DIR_ROOT, MM_TEST_DIR_ROOT, MM_CONFIG_ROOT
 
-SUPPORTED_MODELS = ['MedNeXt']
+SUPPORTED_MODELS = ['MedNeXt', "mae"]
 
 
 class auto_runner:
@@ -38,12 +38,11 @@ class auto_runner:
                             default="pytorch",
                             help="设置内存分配器")
         parser.add_argument("--local-rank", type=int, default=0, help="节点数量")
-        parser.add_argument(
-            "--models",
-            type=str,
-            default=SUPPORTED_MODELS,
-            help="选择实验",
-            nargs="+",
+        parser.add_argument("--models",
+                            type=str,
+                            default=SUPPORTED_MODELS,
+                            help="选择实验",
+                            nargs="+",
         )
         parser.add_argument("--work-dir-root",
                             type=str,
@@ -105,7 +104,7 @@ class auto_runner:
                     return exp
 
         else:
-            raise RuntimeError(f"未找到与“ {exp_name} ”匹配的实验名")
+            raise RuntimeError(f"在 {MM_CONFIG_ROOT} 中未找到与“ {exp_name} ”匹配的实验名")
 
     def experiment_queue(self):
         print("实验队列启动, 正在import依赖...")

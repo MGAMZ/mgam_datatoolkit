@@ -8,8 +8,8 @@ class ImageTBAD_base:
 
 
 class TBAD_Precrop_Npz(ImageTBAD_base, mgam_Standard_Precropped_Npz):
-    pass
+    ...
 
 
 class TBAD_Mha(ImageTBAD_base, mgam_Standard_3D_Mha):
-    pass
+    ...

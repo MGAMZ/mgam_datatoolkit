@@ -5,7 +5,7 @@ from tqdm import tqdm
 import orjson
 import pandas as pd
 
-from ..base import mgam_BaseSegDataset
+from ..base import mgam_Standard_3D_Mha
 from .meta import (CLASS_INDEX_MAP, DATA_ROOT_SLICE2D_TIFF,
                    get_subset_and_rectify_map, META_CSV_PATH)
 
@@ -49,7 +49,7 @@ class TotalsegmentatorIndexer:
                 for image_path in selected_split_image_paths]
 
 
-class TotalsegmentatorSegDataset(mgam_BaseSegDataset):
+class TotalsegmentatorSegDataset(mgam_Standard_3D_Mha):
     METAINFO = dict(classes=list(CLASS_INDEX_MAP.keys()))
 
     def __init__(self, subset: str | None = None, **kwargs) -> None:
@@ -69,7 +69,7 @@ class TotalsegmentatorSegDataset(mgam_BaseSegDataset):
         return self.indexer.fetcher(self.split)
 
 
-class TotalsegmentatorSeg3DDataset(mgam_BaseSegDataset):
+class TotalsegmentatorSeg3DDataset(mgam_Standard_3D_Mha):
     METAINFO = dict(classes=list(CLASS_INDEX_MAP.keys()))
 
     def __init__(self, subset: str | None = None, **kwargs) -> None:
