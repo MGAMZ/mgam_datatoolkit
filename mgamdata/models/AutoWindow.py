@@ -9,7 +9,6 @@ import seaborn
 import numpy as np
 import torch
 from torch import Tensor
-from torch import multiprocessing as torchmp
 from matplotlib import pyplot as plt
 
 from mmcv.transforms import BaseTransform
@@ -320,6 +319,11 @@ class WindowExtractor(SupportLrMultModule):
             self._momentum_memory = []
         self._momentum_memory.append([v1, v2])
         self._momentum_memory = self._momentum_memory[: int(1 / (1 - self.momentum))]
+        # register to save in checkpoint
+        self.register_buffer(
+            "_focus_range_momentum_memory",
+            torch.tensor(self._momentum_memory, device=self.g_o.device),
+        )
         return torch.tensor(self._momentum_memory).mean(dim=0)
 
     def _focus_range_of_this_sample(self, data_samples: list[Seg3DDataSample]):
@@ -735,16 +739,17 @@ class AutoWindowStatusLoggerHook(Hook):
         
         model: ParalleledMultiWindowProcessing = runner.model.pmwp
         WinE, CrsF = model.train_iter_info_hook()
-        plt.figure(figsize=(4, 3))
         
+        if not hasattr(self, 'WinE_Figure'):
+            self.WinE_Figure = plt.figure(figsize=(4, 3))
         for k in list(WinE.keys()):
             if "RespMat" in k:
                 signal, response = WinE.pop(k)
                 buf = BytesIO()
-                plt.clf()
-                plt.plot(signal, response)
-                plt.tight_layout()
-                plt.savefig(buf, format="png", dpi=self.dpi)
+                self.WinE_Figure.clf()
+                self.WinE_Figure.gca().plot(signal, response)
+                self.WinE_Figure.tight_layout()
+                self.WinE_Figure.savefig(buf, format="png", dpi=self.dpi)
                 image = np.array(Image.open(buf).convert("RGB"))
                 runner.visualizer.add_image(k, image, current_iter)
 
@@ -755,28 +760,30 @@ class AutoWindowStatusLoggerHook(Hook):
         )
 
         if CrsF is not None:
-            plt.clf()
+            if not hasattr(self, 'CrsF_Figure'):
+                self.CrsF_Figure = plt.figure(figsize=(4, 3))
+            self.CrsF_Figure.clf()
             buf = BytesIO()
-            seaborn.heatmap(CrsF, cmap="rainbow")
-            plt.savefig(buf, format="png")
+            seaborn.heatmap(CrsF, cmap="rainbow", ax=self.CrsF_Figure.gca())
+            self.CrsF_Figure.savefig(buf, format="png")
             image = np.array(Image.open(buf).convert("RGB"))
             runner.visualizer.add_image("CrsF", image, current_iter)
-
 
     def before_val_epoch(self, runner: Runner) -> None:
         model: ParalleledMultiWindowProcessing = runner.model.pmwp
         TRec = model.val_epoch_info_hook()
         
         if TRec is not None:
+            if not hasattr(self, 'TRec_Figure'):
+                self.TRec_Figure = plt.figure(figsize=(4, 3))
             current_iter = self.iter(runner)
-            plt.figure(figsize=(4, 3))
             
             for name, proj in TRec.items():
-                plt.clf()
+                self.TRec_Figure.clf()
+                self.TRec_Figure.gca().plot(proj[0], proj[1])
+                self.TRec_Figure.gca().plot([0, 1], [0, 1], transform=plt.gca().transAxes)
+                self.TRec_Figure.tight_layout()
                 buf = BytesIO()
-                plt.plot(proj[0], proj[1])
-                plt.plot([0, 1], [0, 1], transform=plt.gca().transAxes)
-                plt.tight_layout()
-                plt.savefig(buf, format="png", dpi=self.dpi)
+                self.TRec_Figure.savefig(buf, format="png", dpi=self.dpi)
                 image = np.array(Image.open(buf).convert("RGB"))
                 runner.visualizer.add_image(name, image, current_iter)
