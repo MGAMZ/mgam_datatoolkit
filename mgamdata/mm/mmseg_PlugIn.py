@@ -1,5 +1,6 @@
-from abc import abstractmethod
 import os.path as osp
+import pdb
+from abc import abstractmethod
 from prettytable import PrettyTable
 from collections import OrderedDict
 
@@ -7,13 +8,18 @@ import cv2
 import torch
 import numpy as np
 from skimage.exposure import equalize_hist
+from matplotlib import pyplot as plt
+from matplotlib.colors import Normalize
 
 import mmcv
 import mmengine
+from mmengine.dist.utils import master_only
 from mmengine.logging import print_log, MMLogger
 from mmengine.runner import Runner
+import mmengine.structures
 from mmseg.evaluation.metrics import IoUMetric
 from mmseg.engine.hooks import SegVisualizationHook
+from mmseg.visualization import SegLocalVisualizer
 from mmseg.structures import SegDataSample
 from mmcv.transforms import BaseTransform
 
@@ -181,6 +187,57 @@ class SegVisualizationHook_Base(SegVisualizationHook):
                 show=self.show,
                 wait_time=self.wait_time,
                 step=self._test_index)
+
+
+class SegViser(SegLocalVisualizer):
+    def __init__(self, name, draw_heatmap:bool=False, draw_others:bool=True,*args, **kwargs):
+        super().__init__(name=name, *args, **kwargs)
+        self.draw_heatmap = draw_heatmap
+        self.draw_others = draw_others
+        if draw_heatmap:
+            self.fig = plt.subplots(1, 2, figsize=(10, 5))
+
+    def _draw_heatmap(self,
+                      image: np.ndarray,
+                      gt_seg: mmengine.structures.PixelData,
+                      seg_logit: mmengine.structures.PixelData) -> np.ndarray:
+        gt_seg_array = gt_seg.data.squeeze().cpu().numpy()
+        seg_logit_array = seg_logit.data.squeeze().cpu().numpy()
+        assert gt_seg_array.shape == seg_logit_array.shape, f"Shape mismatch: gt_seg_array {gt_seg_array.shape} != sem_seg_array {sem_seg_array.shape}"
+        assert image.shape[:2] == gt_seg_array.shape[:2], f"Shape mismatch: image {image.shape[:2]} != gt_seg_array {gt_seg_array.shape[:2]}"
+        
+        gt_normalized = gt_seg_array / gt_seg_array.max()
+        gt_rgb = plt.get_cmap('rainbow')(gt_normalized)[:, :, :3] * 255
+        gt_heatmap = cv2.addWeighted(image, self.alpha, gt_rgb.astype(np.uint8), 0.5, 0)
+        
+        seg_logit_normalized = Normalize(vmin=0, vmax=1)(seg_logit_array)
+        seg_logit_rgb = plt.get_cmap('rainbow')(seg_logit_normalized)[:, :, :3] * 255
+        seg_logit_heatmap = cv2.addWeighted(image, self.alpha, seg_logit_rgb.astype(np.uint8), 0.5, 0)
+        
+        # concat two heatmap
+        heatmap = np.concatenate([gt_heatmap, seg_logit_heatmap], axis=1)
+        return heatmap
+
+    @master_only
+    def add_datasample(
+            self,
+            name: str,
+            image: np.ndarray,
+            data_sample: SegDataSample|None = None,
+            draw_gt: bool = True,
+            draw_pred: bool = True,
+            show: bool = False,
+            wait_time: float = 0,
+            # TODO: Supported in mmengine's Viusalizer.
+            out_file: str|None = None,
+            step: int = 0,
+            with_labels: bool|None = True) -> None:
+        
+        if self.draw_heatmap:
+            heatmap = self._draw_heatmap(image, data_sample.gt_sem_seg, data_sample.seg_logits)
+            self.add_image("heatmap_" + name, heatmap, step)
+        if self.draw_others:
+            super().add_datasample(name, image, data_sample, draw_gt, draw_pred, show, wait_time, out_file, step, with_labels)
 
 
 class SegVisHook_Vanilla(SegVisualizationHook_Base):

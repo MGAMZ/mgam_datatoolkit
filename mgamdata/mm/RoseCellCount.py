@@ -10,7 +10,10 @@ class AccuCount(BaseMetric):
     Designed for counting the number of cells in a given image.
     The counts is calculated by directly add all pixels together.
     """
-    
+    def __init__(self, amplify, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.amplify = amplify
+
     def process(self, data_batch: dict, data_samples: Sequence[dict]) -> None:
         """Process one batch of data and data_samples.
 
@@ -22,12 +25,9 @@ class AccuCount(BaseMetric):
             data_samples (Sequence[dict]): A batch of outputs from the model.
         """
         for data_sample in data_samples:
-            pred_label = data_sample['pred_sem_seg']['data'].sum()
-            label = data_sample['gt_sem_seg']['data'].sum()
-            self.results.append({
-                'pred_count': pred_label,
-                'gt_count': label
-            })
+            pred_label = data_sample["seg_logits"]["data"].sum() / self.amplify
+            label = data_sample["gt_sem_seg"]["data"].sum()
+            self.results.append({"pred_count": pred_label, "gt_count": label})
 
     def compute_metrics(self, results: list[dict[str, np.ndarray]]) -> dict:
         """Compute the metrics from processed results.
@@ -40,5 +40,14 @@ class AccuCount(BaseMetric):
             and the values are corresponding results.
         """
 
-        return {"mae": np.mean([np.abs(res['pred_count'] - res['gt_count']) for res in results]),
-                "mape": np.mean([np.abs(res['pred_count'] - res['gt_count']) / res['gt_count'] for res in results])}
+        return {
+            "mae": np.mean(
+                [np.abs(res["pred_count"] - res["gt_count"]) for res in results]
+            ),
+            "mape": np.mean(
+                [
+                    np.abs(res["pred_count"] - res["gt_count"]) / res["gt_count"]
+                    for res in results
+                ]
+            ),
+        }

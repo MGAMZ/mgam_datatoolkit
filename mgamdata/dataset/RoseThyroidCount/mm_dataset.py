@@ -9,7 +9,7 @@ from .meta import CLASS_INDEX_MAP
 
 
 class RoseThyroidCount_base:
-    METAINFO = dict(classes=list(CLASS_INDEX_MAP.keys())[1:])
+    METAINFO = dict(classes=list(CLASS_INDEX_MAP.keys()))
 
 
 class RoseThyroidCount_Precrop_Npz(RoseThyroidCount_base, mgam_Standard_Patched_Npz):

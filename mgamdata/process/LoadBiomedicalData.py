@@ -1,5 +1,6 @@
 import pdb
 from typing import Sequence
+from typing_extensions import deprecated
 
 import cv2
 import numpy as np
@@ -166,6 +167,7 @@ class LoadSampleFromNpz(BaseTransform):
         return results
 
 
+@deprecated("`PackSegInputs` will perform the same operation.")
 class EnsureChannelDim(BaseTransform):
     def transform(self, results):
         # preprocessing on image requires [..., C]

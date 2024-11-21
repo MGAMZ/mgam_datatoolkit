@@ -12,6 +12,7 @@ import pandas as pd
 from meta import DATA_ROOT, ANNO_CSV, FILE_ID_MAP_CSV
 
 
+
 def __reference_implementation__():
     import json
     from glob import glob
@@ -109,9 +110,8 @@ def convert_one_patch_to_heatmap(patch_path: str, anno, save_path: str):
         if x >= patch_x or y >= patch_y:
             tqdm.write(f"Point ({x}, {y}) out of bound")
             continue
-        heatmap[x, y] += 1
+        heatmap[y, x] += 1
 
-    heatmap = cv2.GaussianBlur(heatmap, (7, 7), 1.5).round(5).astype(np.float32)
     np.savez_compressed(save_path, img=patch_img, gt_seg_map=heatmap)
     tqdm.write(f"Saved Heatmap to {save_path}")
 
@@ -219,6 +219,7 @@ def parse_args():
     )
     parser.add_argument("--mp", action="store_true", help="Use multiprocessing")
     return parser.parse_args()
+
 
 
 if __name__ == "__main__":
