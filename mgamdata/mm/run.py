@@ -118,8 +118,8 @@ class auto_runner:
                 # 确定配置文件路径和保存路径
                 config_path = os.path.join(self.config_root,
                                            f"{exp}/{model}.py")
-                work_dir_path = osp.join(self.work_dir_root, exp)
-                test_work_dir_path = osp.join(self.test_work_dir_root, exp)
+                work_dir_path = osp.join(self.work_dir_root, exp, model)
+                test_work_dir_path = osp.join(self.test_work_dir_root, exp, model)
 
                 # 设置终端标题
                 if os.name == 'nt':
