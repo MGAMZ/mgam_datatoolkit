@@ -495,7 +495,7 @@ class BaseDecodeHead_3D(BaseDecodeHead):
         self,
         inputs: tuple[Tensor],
         batch_data_samples: list[Seg3DDataSample],
-        train_cfg: dict,
+        train_cfg:dict|None=None,
     ) -> dict:
         """Forward function for training.
 

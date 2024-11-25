@@ -166,38 +166,42 @@ class RandomRoll(BaseTransform):
         """
         if isinstance(axis, int):
             axis = [axis]
-        if isinstance(gap, float):
+        if isinstance(gap, (int, float)):
             gap = [gap]
-        assert len(axis) == len(gap), "所有参数的长度必须相同"
 
-        self.axis = axis
-        self.gap = {k: v for k, v in zip(axis, gap)}
+        assert len(axis) == len(gap), \
+            f"axis ({len(axis)}) and gap ({len(gap)}) should have the same length"
+
+        self.axis: list[int] = axis
+        self.gap: list[float] = gap
         self.erase = erase
         self.pad_val = pad_val
         self.seg_pad_val = seg_pad_val
 
     @staticmethod
     def _roll(results, gap, axis):
-        results["img"] = np.roll(results["img"], shift=gap, axis=axis)
-        results["gt_seg_map"] = np.roll(results["gt_seg_map"], shift=gap, axis=axis)
+        if "img" in results:
+            results["img"] = np.roll(results["img"], shift=gap, axis=axis)
+        if "gt_seg_map" in results:
+            results["gt_seg_map"] = np.roll(results["gt_seg_map"], shift=gap, axis=axis)
         return results
 
     def _erase_part(self, results, gap, axis):
+        slicer = [slice(None)] * results["img"].ndim
         if gap > 0:
-            slicer = [slice(None)] * results["img"].ndim
             slicer[axis] = slice(0, gap)
-            results["img"][tuple(slicer)] = self.pad_val
-            results["gt_seg_map"][tuple(slicer)] = self.seg_pad_val
         else:
-            slicer = [slice(None)] * results["img"].ndim
             slicer[axis] = slice(gap, None)
+        
+        if "img" in results:
             results["img"][tuple(slicer)] = self.pad_val
+        if "gt_seg_map" in results:
             results["gt_seg_map"][tuple(slicer)] = self.seg_pad_val
+        
         return results
 
     def transform(self, results):
-        for axis in self.axis:
-            max_gap = self.gap[axis]
+        for axis, max_gap in zip(self.axis, self.gap):
             gap = random.randint(-max_gap, max_gap)
             results = self._roll(results, gap, axis)
             if self.erase:
@@ -283,12 +287,10 @@ class GaussianBlur3D(BaseTransform):
         sigma: float | list[float],
     ):
         self.kernel_size = kernel_size
-        self.sigma = sigma if isinstance(sigma, list) else [sigma] * 3
+        self.sigma = sigma
 
     def transform(self, results: dict):
-        results["img"] = (
-            gaussian_filter(results["img"], sigma=self.sigma) * self.amplify
-        )
+        results["img"] = gaussian_filter(results["img"], sigma=self.sigma)
         return results
 
 
@@ -299,8 +301,10 @@ class RandomFlip3D(BaseTransform):
 
     def transform(self, results: dict):
         if np.random.rand(1) < self.prob:
-            results["img"] = np.flip(results["img"], axis=self.axis)
-            results["gt_seg_map"] = np.flip(results["gt_seg_map"], axis=self.axis)
+            if "img" in results:
+                results["img"] = np.flip(results["img"], axis=self.axis).copy()
+            if "gt_seg_map" in results:
+                results["gt_seg_map"] = np.flip(results["gt_seg_map"], axis=self.axis).copy()
         return results
 
 
@@ -479,3 +483,12 @@ class RandomCrop3D(BaseTransform):
 
     def __repr__(self):
         return self.__class__.__name__ + f"(crop_size={self.crop_size})"
+
+
+class NewAxis(BaseTransform):
+    def __init__(self, axis:int):
+        self.axis = axis
+    
+    def transform(self, results:dict):
+        results['img'] = np.expand_dims(results['img'], axis=self.axis)
+        return results
