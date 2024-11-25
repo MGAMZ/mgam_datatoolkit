@@ -8,7 +8,7 @@ from tqdm import tqdm
 import numpy as np
 import SimpleITK as sitk
 
-from ..mm.mmseg_Dev3D import RandomCrop3D
+from ..process.GeneralPreProcess import RandomCrop3D
 from .NDArray import unsafe_astype
 
 
