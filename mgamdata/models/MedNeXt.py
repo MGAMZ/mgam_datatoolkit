@@ -11,7 +11,6 @@ from ..mm.mmseg_Dev3D import BaseDecodeHead_3D
 
 
 
-
 class MedNeXtBlock(nn.Module):
 
     def __init__(self, 
@@ -110,7 +109,6 @@ class MedNeXtBlock(nn.Module):
         return x1
 
 
-
 class MedNeXtDownBlock(MedNeXtBlock):
 
     def __init__(self, in_channels, out_channels, exp_r=4, kernel_size=7, 
@@ -151,7 +149,6 @@ class MedNeXtDownBlock(MedNeXtBlock):
             x1 = x1 + res
 
         return x1
-
 
 
 class MedNeXtUpBlock(MedNeXtBlock):
@@ -208,7 +205,6 @@ class MedNeXtUpBlock(MedNeXtBlock):
         return x1
 
 
-
 class OutBlock(nn.Module):
 
     def __init__(self, in_channels, n_classes, dim):
@@ -222,7 +218,6 @@ class OutBlock(nn.Module):
     
     def forward(self, x, dummy_tensor=None): 
         return self.conv_out(x)
-
 
 
 class LayerNorm(nn.Module):
@@ -250,7 +245,6 @@ class LayerNorm(nn.Module):
             x = (x - u) / torch.sqrt(s + self.eps)
             x = self.weight[:, None, None, None] * x + self.bias[:, None, None, None]
             return x
-
 
 
 class MedNeXt(nn.Module):
@@ -630,7 +624,6 @@ class MedNeXt(nn.Module):
             return x
 
 
-
 class MM_MedNext_Encoder(BaseModule):
     def __init__(self, 
         in_channels: int, 
@@ -806,7 +799,6 @@ class MM_MedNext_Encoder(BaseModule):
         return (x_res_0, x_res_1, x_res_2, x_res_3, x)
 
 
-
 class MM_MedNext_Decoder_Vallina(BaseDecodeHead):
     def __init__(self,
         embed_dims: int,
@@ -968,7 +960,6 @@ class MM_MedNext_Decoder_Vallina(BaseDecodeHead):
 
         x = self.cls_seg(x)
         return x
-
 
 
 class MM_MedNext_Decoder(BaseModule):
@@ -1137,7 +1128,7 @@ class MM_MedNext_Decoder(BaseModule):
         del x_res_1, x_up_1
 
         x_up_0 = self.checkpoint(self.up_0, x)
-        dec_x = x_res_0 + x_up_0 
+        dec_x = x_res_0 + x_up_0
         x = self.checkpoint(self.dec_block_0, dec_x)
         x = self.checkpoint(self.out_0, x)
         del x_res_0, x_up_0, dec_x
@@ -1147,7 +1138,6 @@ class MM_MedNext_Decoder(BaseModule):
             return (x, x_ds_1, x_ds_2, x_ds_3, x_ds_4)
         else: 
             return (x,)
-
 
 
 class MM_MedNext_Decoder_3D(BaseDecodeHead_3D):
@@ -1192,5 +1182,3 @@ class MM_MedNext_Decoder_3D(BaseDecodeHead_3D):
     
     def forward(self, inputs):
         return self.mednext(inputs)
-
-

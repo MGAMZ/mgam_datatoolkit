@@ -1145,6 +1145,25 @@ class Seg3DDataPreProcessor(SegDataPreProcessor):
         return dict(inputs=inputs, data_samples=data_samples)
 
 
+class PixelUnshuffle1D(torch.nn.Module):
+    def __init__(self, downscale_factor):
+        super(PixelUnshuffle1D, self).__init__()
+        self.downscale_factor = downscale_factor
+
+    def forward(self, inputs: Tensor):
+        batch, channels, length = inputs.size()
+        r = self.downscale_factor
+        out_channels = channels * r
+        if length % r != 0:
+            raise ValueError(
+                f"Input length ({length}) must be divisible by downscale_factor ({r})."
+            )
+        mid = inputs.view(batch, channels, length // r, r)
+        mid = mid.permute(0, 1, 3, 2)
+        outputs = mid.contiguous().view(batch, out_channels, length // r)
+        return outputs
+
+
 class PixelShuffle3D(torch.nn.Module):
     def __init__(self, upscale_factor):
         super(PixelShuffle3D, self).__init__()
