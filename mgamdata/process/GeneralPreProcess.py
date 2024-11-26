@@ -22,6 +22,33 @@ NOTE
 """
 
 
+class PadVolume(BaseTransform):
+    def __init__(self, size:tuple[int,int,int], pad_val:int=0, pad_label_val:int=0):
+        self.size = size
+        self.pad_val = pad_val
+        self.pad_label_val = pad_label_val
+    
+    def transform(self, results:dict):
+        # center pad
+        img = results['img']
+        
+        pad_z = self.size[0] - img.shape[0]
+        pad_y = self.size[1] - img.shape[1]
+        pad_x = self.size[2] - img.shape[2]
+        pad_z1 = pad_z // 2
+        pad_z2 = pad_z - pad_z1
+        pad_y1 = pad_y // 2
+        pad_y2 = pad_y - pad_y1
+        pad_x1 = pad_x // 2
+        pad_x2 = pad_x - pad_x1
+        
+        results['img'] = np.pad(img, ((pad_z1, pad_z2), (pad_y1, pad_y2), (pad_x1, pad_x2)), mode='constant', constant_values=self.pad_val)
+        if 'gt_seg_map' in results:
+            results['gt_seg_map'] = np.pad(results['gt_seg_map'], ((pad_z1, pad_z2), (pad_y1, pad_y2), (pad_x1, pad_x2)), mode='constant', constant_values=self.pad_label_val)
+            
+        return results
+
+
 class CropSlice_Foreground(BaseTransform):
     """
     Required Keys:
