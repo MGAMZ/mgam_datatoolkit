@@ -26,7 +26,7 @@ def convert_one_case(args):
     
     # 原始扫描转换为SimpleITK格式并保存
     # 类分离的标注文件合并后保存
-    input_image_mha = convert_nii_sitk(input_image_nii_path, dtype=np.int16) # type: ignore
+    input_image_mha = convert_nii_sitk(input_image_nii_path, nii_fdata_order='zyx', dtype=np.int16) # type: ignore
     merged_itk = merge_one_case_segmentations(input_image_mha, series_input_folder)
     
     if spacing is not None:

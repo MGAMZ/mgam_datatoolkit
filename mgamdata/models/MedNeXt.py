@@ -5,7 +5,6 @@ from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint
 
 from mmengine.model import BaseModule
-from mmseg.models.decode_heads.decode_head import BaseDecodeHead
 
 from ..mm.mmseg_Dev3D import BaseDecodeHead_3D
 
@@ -647,11 +646,7 @@ class MM_MedNext_Encoder(BaseModule):
 
         self.do_ds = deep_supervision
         assert dim in ['2d', '3d']
-        
-        if use_checkpoint:
-            self.checkpoint = lambda f,x: checkpoint(f, x, use_reentrant=False)
-        else:
-            self.checkpoint = lambda f,x: f(x)
+        self.use_checkpoint = use_checkpoint
         
         if kernel_size is not None:
             enc_kernel_size = kernel_size
@@ -782,19 +777,30 @@ class MM_MedNext_Encoder(BaseModule):
         )
 
     def forward(self, x: torch.Tensor):
-        # [B, D(Opt.), H, W] -> [B, C, D(Opt.), H, W]
-        x = self.checkpoint(self.stem, x)
+        if self.use_checkpoint:
+            # [B, D(Opt.), H, W] -> [B, C, D(Opt.), H, W]
+            x = checkpoint(self.stem, x, use_reentrant=False)
+            x_res_0 = checkpoint(self.enc_block_0, x, use_reentrant=False)
+            x = checkpoint(self.down_0, x_res_0, use_reentrant=False)
+            x_res_1 = checkpoint(self.enc_block_1, x, use_reentrant=False)
+            x = checkpoint(self.down_1, x_res_1, use_reentrant=False)
+            x_res_2 = checkpoint(self.enc_block_2, x, use_reentrant=False)
+            x = checkpoint(self.down_2, x_res_2, use_reentrant=False)
+            x_res_3 = checkpoint(self.enc_block_3, x, use_reentrant=False)
+            x = checkpoint(self.down_3, x_res_3, use_reentrant=False)
+            x = checkpoint(self.bottleneck, x, use_reentrant=False)
         
-        x_res_0 = self.checkpoint(self.enc_block_0, x)
-        x = self.checkpoint(self.down_0, x_res_0)
-        x_res_1 = self.checkpoint(self.enc_block_1, x)
-        x = self.checkpoint(self.down_1, x_res_1)
-        x_res_2 = self.checkpoint(self.enc_block_2, x)
-        x = self.checkpoint(self.down_2, x_res_2)
-        x_res_3 = self.checkpoint(self.enc_block_3, x)
-        x = self.checkpoint(self.down_3, x_res_3)
-        
-        x = self.checkpoint(self.bottleneck,x )
+        else:
+            x = self.stem(x)
+            x_res_0 = self.enc_block_0(x)
+            x = self.down_0(x_res_0)
+            x_res_1 = self.enc_block_1(x)
+            x = self.down_1(x_res_1)
+            x_res_2 = self.enc_block_2(x)
+            x = self.down_2(x_res_2)
+            x_res_3 = self.enc_block_3(x)
+            x = self.down_3(x_res_3)
+            x = self.bottleneck(x)
         
         return (x_res_0, x_res_1, x_res_2, x_res_3, x)
 

@@ -1,5 +1,6 @@
 import os
 import pdb
+from typing_extensions import Literal
 
 import cv2
 import numpy as np
@@ -12,7 +13,7 @@ from ..process.NDArray import unsafe_astype
 
 
 def convert_nii_sitk(nii_path:str, 
-                     nii_fdata_order:str,
+                     nii_fdata_order:Literal['xyz','zyx'],
                      dtype=np.float32, 
                      ) -> sitk.Image:
     """保证itk mha格式维度顺序为zyx"""

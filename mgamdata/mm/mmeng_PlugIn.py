@@ -58,12 +58,10 @@ def DynamicRunnerSelection(cfg: ConfigType) -> Runner:
                 strategy.update(
                     dict(model_wrapper=dict(auto_wrap_policy=auto_strategy))
                 )
-
                 kwargs["strategy"] = strategy
-                super().__init__(**kwargs)
-
-            else:
-                super().__init__(**kwargs)
+                kwargs["cfg"]["strategy"] = strategy
+                
+            super().__init__(**kwargs)
 
         @staticmethod
         def str_to_log_level(string):
@@ -148,7 +146,6 @@ def DynamicRunnerSelection(cfg: ConfigType) -> Runner:
 
     return mgam_Runner.from_cfg(cfg)
 
-
 # for debug
 class IterBasedTrainLoop_SupportProfiler(IterBasedTrainLoop):
 
@@ -185,7 +182,6 @@ class IterBasedTrainLoop_SupportProfiler(IterBasedTrainLoop):
                 exit(-5)
         else:
             super().run_iter(data_batch)
-
 
 # support for better class-wise performance logging
 class mgam_PerClassMetricLogger_OnTest(LoggerHook):
@@ -238,7 +234,6 @@ class LoggerJSON(LoggerHook):
 
         super().after_test_epoch(runner, metrics)
 
-
 # better AMP support
 class AmpPatchAccumulateOptimWarpper(AmpOptimWrapper):
 
@@ -273,7 +268,6 @@ class AmpPatchAccumulateOptimWarpper(AmpOptimWrapper):
             self.step(**step_kwargs)
             self.zero_grad(**zero_kwargs)
 
-
 # customized DDP training for our task.
 class RemasteredDDP(MMDistributedDataParallel):
     """
@@ -296,7 +290,6 @@ class RemasteredDDP(MMDistributedDataParallel):
             return super().__getattr__(name)
         except:
             return getattr(self.module, name)
-
 
 # customized FSDP training for our task.
 class RemasteredFSDP(MMFullyShardedDataParallel):

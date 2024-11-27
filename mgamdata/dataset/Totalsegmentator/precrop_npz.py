@@ -41,7 +41,7 @@ from mgamdata.process.PreCrop_3D import PreCropper3D
 
 class Totalsegmentator_PreCrop(PreCropper3D):
     def parse_task(self):
-        from mgamdata.mm.mmseg_Dev3D import RandomCrop3D
+        from mgamdata.process.GeneralPreProcess import RandomCrop3D
         task_list = []
         for series in os.listdir(self.args.source_mha_folder):
             task_list.append((
