@@ -247,7 +247,7 @@ class InstanceNorm(BaseTransform):
     - img
     """
 
-    def __init__(self, eps: float = 1e-3) -> None:
+    def __init__(self, eps: float = 1e-6) -> None:
         super().__init__()
         self.eps = eps
 

@@ -49,7 +49,6 @@ def InjectVisualize_2D(img, mask):
     
     assert isinstance(img, np.ndarray) and isinstance(mask, np.ndarray),\
         "img and mask should be numpy.ndarray, but got {} and {}".format(type(img), type(mask))
-    mask[mask == 1] = 255
     
     fig, ax = plt.subplots(1, 2)
     ax[0].imshow(img[0], cmap='gray')
