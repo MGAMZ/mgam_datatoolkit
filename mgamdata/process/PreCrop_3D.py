@@ -1,8 +1,8 @@
-from abc import abstractmethod
 import os
 import argparse
 import json
 import multiprocessing as mp
+from abc import abstractmethod
 from tqdm import tqdm
 
 import numpy as np
@@ -109,7 +109,7 @@ class PreCropper3D:
         }
         
         if self.args.num_cropped is None:
-            num_cropped = int(np.prod(np.array(image_array.shape) // np.array(cropper.crop_size)))
+            num_cropped = int(np.prod(np.array(image_array.shape) // np.array(cropper.crop_size))) * 8
         else:
             num_cropped = self.args.num_cropped
         
