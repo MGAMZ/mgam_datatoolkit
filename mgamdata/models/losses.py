@@ -11,10 +11,11 @@ class PixelReconstructionLoss(BaseModule):
     def __init__(self,
                  criterion="L2",
                  use_sigmoid:bool=False,
+                 reduction='mean',
                  *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._loss_name = f"loss_{criterion}"
-        self.criterion = L1Loss() if criterion == "L1" else MSELoss()
+        self.criterion = L1Loss(reduction=reduction) if criterion == "L1" else MSELoss(reduction=reduction)
         self.use_sigmoid = use_sigmoid
     
     def forward(self, pred:Tensor, target:Tensor, *args, **kwargs):

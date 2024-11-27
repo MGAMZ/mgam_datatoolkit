@@ -11,7 +11,7 @@ from mmengine.config import DictAction
 
 from mgamdata.mm import MM_WORK_DIR_ROOT, MM_TEST_DIR_ROOT, MM_CONFIG_ROOT
 
-SUPPORTED_MODELS = ['MedNeXt', "mae"]
+SUPPORTED_MODELS = ['MedNeXt', "mae", "DSNet"]
 
 
 class auto_runner:
