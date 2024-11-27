@@ -18,9 +18,8 @@ from .DatasetInitialize import SA_Med2D
 import numpy as np
 
 
-DATASET_ROOT_LINUX = os.path.join(os.environ['HOME'], 'SA-Med2D-16M', 'CaseSeperated')
-                    #  if os.name=='posix' else 'D:/PostGraduate/DL/SA-Med2D-20M/CaseSeperated/'
-DATASET_ROOT_MNT = '/mnt/d/PostGraduate/DL/SA-Med2D-20M/CaseSeperated/'
+DATASET_ROOT_LINUX = '/file1/mgam_datasets/SA-Med2D-20M/CaseSeperated/'
+DATASET_ROOT_MNT = '/file1/mgam_datasets/SA-Med2D-20M/CaseSeperated/'
 
 
 # 单进程 mmseg数据集设定

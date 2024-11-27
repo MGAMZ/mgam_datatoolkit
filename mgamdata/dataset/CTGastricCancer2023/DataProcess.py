@@ -74,7 +74,6 @@ class LoadCTLabel(BaseTransform):
         return results	# gt_seg_map: [H,W]
 
 
-
 class CTSegVisualizationHook(SegVisualizationHook):
     def __init__ (self, reverse_stretch=None, lmdb_backend_proxy=None, **kwargs):
         super().__init__(**kwargs)

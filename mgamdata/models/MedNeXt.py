@@ -965,7 +965,7 @@ class MM_MedNext_Decoder(BaseModule):
         del x_res_1, x_up_1
 
         x_up_0 = self.checkpoint(self.up_0, x)
-        dec_x = x_res_0 + x_up_0 
+        dec_x = x_res_0 + x_up_0
         x = self.checkpoint(self.dec_block_0, dec_x)
         x = self.checkpoint(self.out_0, x)
         del x_res_0, x_up_0, dec_x

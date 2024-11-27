@@ -10,7 +10,7 @@ import torch
 from torch import Tensor
 from torch.nn import functional as F
 
-from mmcv.transforms import to_tensor, Resize, BaseTransform
+from mmcv.transforms import to_tensor
 from mmengine.runner import Runner
 from mmengine.structures.base_data_element import BaseDataElement
 from mmseg.engine.hooks import SegVisualizationHook
@@ -22,6 +22,7 @@ from mmseg.models.losses.dice_loss import DiceLoss
 from mmseg.models.losses.accuracy import accuracy
 from mmseg.visualization.local_visualizer import SegLocalVisualizer
 from mmseg.structures.seg_data_sample import SegDataSample, PixelData
+
 
 
 class VolumeData(BaseDataElement):
@@ -494,7 +495,7 @@ class BaseDecodeHead_3D(BaseDecodeHead):
         self,
         inputs: tuple[Tensor],
         batch_data_samples: list[Seg3DDataSample],
-        train_cfg: dict,
+        train_cfg:dict|None=None,
     ) -> dict:
         """Forward function for training.
 
@@ -1144,181 +1145,23 @@ class Seg3DDataPreProcessor(SegDataPreProcessor):
         return dict(inputs=inputs, data_samples=data_samples)
 
 
-class Resize3D(Resize):
-    @staticmethod
-    def scale_2D_or_3D(original_shape: list[int], target_shape: list[int]):
-        if len(original_shape) == len(target_shape) + 1:
-            return [original_shape[0], *target_shape]
-        elif len(original_shape) == len(target_shape):
-            return target_shape
-        else:
+class PixelUnshuffle1D(torch.nn.Module):
+    def __init__(self, downscale_factor):
+        super(PixelUnshuffle1D, self).__init__()
+        self.downscale_factor = downscale_factor
+
+    def forward(self, inputs: Tensor):
+        batch, channels, length = inputs.size()
+        r = self.downscale_factor
+        out_channels = channels * r
+        if length % r != 0:
             raise ValueError(
-                "The dimension of the segmentation map should be equal "
-                "to the scale dimension or the scale dimension plus 1, "
-                f"but got {original_shape} and {target_shape}"
+                f"Input length ({length}) must be divisible by downscale_factor ({r})."
             )
-
-    def _resize_seg(self, results: dict) -> None:
-        """Resize semantic segmentation map with ``results['scale']``."""
-        for seg_key in results.get("seg_fields", []):
-            if results.get(seg_key, None) is not None:
-                scale = self.scale_2D_or_3D(results[seg_key].shape, results["scale"])
-                original = torch.from_numpy(results[seg_key])
-                results[seg_key] = F.interpolate(
-                    original[None, None], size=scale, mode="nearest"
-                )[0, 0].numpy()
-
-    def _resize_img(self, results: dict) -> None:
-        """Resize images with ``results['scale']``."""
-        if results.get("img", None) is not None:
-            scale = self.scale_2D_or_3D(results["img"].shape, results["scale"])
-            original = torch.from_numpy(results["img"].astype(np.float32))
-            img = F.interpolate(original[None, None], size=scale, mode="trilinear")
-
-            results["img"] = img[0, 0].numpy().astype(results["img"].dtype)
-            results["img_shape"] = img.shape
-            results["scale_factor"] = [
-                new / ori
-                for new, ori in zip(results["img_shape"], results["ori_shape"])
-            ]
-
-
-class RandomCrop3D(BaseTransform):
-    """Random crop the 3D volume & seg.
-
-    Required Keys:
-
-    - img
-    - gt_seg_map
-
-    Modified Keys:
-
-    - img
-    - img_shape
-    - gt_seg_map
-
-
-    Args:
-        crop_size (Union[int, Tuple[int, int, int]]):  Expected size after cropping
-            with the format of (d, h, w). If set to an integer, then cropping
-            depth, width and height are equal to this integer.
-        cat_max_ratio (float): The maximum ratio that single category could
-            occupy.
-        ignore_index (int): The label index to be ignored. Default: 255
-    """
-
-    def __init__(
-        self,
-        crop_size: int | tuple[int, int, int],
-        cat_max_ratio: float = 1.0,
-        ignore_index: int = 255,
-    ):
-        super().__init__()
-        if isinstance(crop_size, Sequence):
-            assert (
-                len(crop_size) == 3
-            ), f"The expected crop_size containing 3 integers, but got {crop_size}"
-        elif isinstance(crop_size, int):
-            crop_size = (crop_size, crop_size, crop_size)
-        else:
-            raise TypeError(f"Unsupported crop size: {crop_size}")
-
-        assert min(crop_size) > 0
-        self.crop_size = crop_size
-        self.cat_max_ratio = cat_max_ratio
-        self.ignore_index = ignore_index
-
-    def crop_bbox(self, results: dict, failed_times: int = 0) -> tuple:
-        """get a crop bounding box.
-
-        Args:
-            results (dict): Result dict from loading pipeline.
-
-        Returns:
-            tuple: Coordinates of the cropped volume.
-        """
-
-        def generate_crop_bbox(img: np.ndarray) -> tuple:
-            """Randomly get a crop bounding box.
-
-            Args:
-                img (np.ndarray): Original input volume.
-
-            Returns:
-                tuple: Coordinates of the cropped volume.
-            """
-
-            margin_d = max(img.shape[0] - self.crop_size[0], 0)
-            margin_h = max(img.shape[1] - self.crop_size[1], 0)
-            margin_w = max(img.shape[2] - self.crop_size[2], 0)
-            offset_d = np.random.randint(0, margin_d + 1)
-            offset_h = np.random.randint(0, margin_h + 1)
-            offset_w = np.random.randint(0, margin_w + 1)
-            crop_d1, crop_d2 = offset_d, offset_d + self.crop_size[0]
-            crop_y1, crop_y2 = offset_h, offset_h + self.crop_size[1]
-            crop_x1, crop_x2 = offset_w, offset_w + self.crop_size[2]
-
-            return crop_d1, crop_d2, crop_y1, crop_y2, crop_x1, crop_x2
-
-        img = results["img"]
-        crop_bbox = generate_crop_bbox(img)
-        if self.cat_max_ratio < 1.0:
-            # Repeat 10 times
-            for crop_time in range(10):
-                seg_temp = self.crop(results["gt_seg_map"], crop_bbox)
-                labels, cnt = np.unique(seg_temp, return_counts=True)
-                cnt = cnt[labels != self.ignore_index]
-                if (len(cnt) > 1) and (
-                    (np.max(cnt) / np.sum(cnt)) < self.cat_max_ratio
-                ):
-                    break
-                crop_bbox = generate_crop_bbox(img)
-
-        return crop_bbox
-
-    def crop(self, img: np.ndarray, crop_bbox: tuple) -> np.ndarray:
-        """Crop from ``img``
-
-        Args:
-            img (np.ndarray): Original input volume.
-            crop_bbox (tuple): Coordinates of the cropped volume.
-
-        Returns:
-            np.ndarray: The cropped volume.
-        """
-
-        crop_d1, crop_d2, crop_y1, crop_y2, crop_x1, crop_x2 = crop_bbox
-        img = img[crop_d1:crop_d2, crop_y1:crop_y2, crop_x1:crop_x2, ...]
-        return img
-
-    def transform(self, results: dict) -> dict:
-        """Transform function to randomly crop volumes, semantic segmentation
-        maps.
-
-        Args:
-            results (dict): Result dict from loading pipeline.
-
-        Returns:
-            dict: Randomly cropped results, 'img_shape' key in result dict is
-                updated according to crop size.
-        """
-
-        img = results["img"]
-        crop_bbox = self.crop_bbox(results)
-
-        # crop the volume
-        img = self.crop(img, crop_bbox)
-
-        # crop semantic seg
-        for key in results.get("seg_fields", []):
-            results[key] = self.crop(results[key], crop_bbox)
-
-        results["img"] = img
-        results["img_shape"] = img.shape[:3]
-        return results
-
-    def __repr__(self):
-        return self.__class__.__name__ + f"(crop_size={self.crop_size})"
+        mid = inputs.view(batch, channels, length // r, r)
+        mid = mid.permute(0, 1, 3, 2)
+        outputs = mid.contiguous().view(batch, out_channels, length // r)
+        return outputs
 
 
 class PixelShuffle3D(torch.nn.Module):

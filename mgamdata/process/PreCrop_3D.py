@@ -8,7 +8,7 @@ from tqdm import tqdm
 import numpy as np
 import SimpleITK as sitk
 
-from ..mm.mmseg_Dev3D import RandomCrop3D
+from ..process.GeneralPreProcess import RandomCrop3D
 from .NDArray import unsafe_astype
 
 
@@ -95,7 +95,7 @@ class PreCropper3D:
                cropper, # type: ignore
                image_itk_path:str, 
                anno_itk_path:str):
-        from mgamdata.mm.mmseg_Dev3D import RandomCrop3D
+        from .GeneralPreProcess import RandomCrop3D
         cropper: RandomCrop3D
         
         image_itk_image = sitk.ReadImage(image_itk_path)
