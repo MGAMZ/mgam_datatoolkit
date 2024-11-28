@@ -8,7 +8,7 @@ import torch
 from torch.nn import PixelUnshuffle as PixelUnshuffle2D
 
 from mmengine.model.base_module import BaseModule
-from mmengine.dist import all_gather, get_rank
+from mmengine.dist import all_gather, get_rank, is_main_process
 from mmpretrain.registry import MODELS
 from mmpretrain.structures import DataSample
 from mmpretrain.models.selfsup.base import BaseSelfSupervisor
@@ -85,6 +85,12 @@ class MoCoV3Head_WithAcc(BaseModule):
         # Einstein sum is more intuitive
         logits = torch.einsum('nc,mc->nm', [pred, target]) / self.temperature
 
+        """
+        使用一个混淆矩阵来表达经过两组不同的变换之后的同batch样本之间的相似度
+        理想情况下，模型应当能识别出同样的样本，因此这个矩阵应当是对角线上有较大值，其他地方为较小值
+        从分类任务混淆矩阵的角度出发，这代表着样本的gt标签就是它们自身的index
+        """
+        
         # generate labels
         batch_size = logits.shape[0]
         labels = (torch.arange(batch_size, dtype=torch.long) +
@@ -194,11 +200,12 @@ class AutoEncoder_MoCoV3(AutoEncoderSelfSup):
 
         selfsup1 = self.head.loss(q1, k2)
         selfsup2 = self.head.loss(q2, k1)
-        
+
         loss = selfsup1[0] + selfsup2[0]
         acc1 = self.calc_acc(logits=selfsup1[1], labels=selfsup1[2])
         acc2 = self.calc_acc(logits=selfsup2[1], labels=selfsup2[2])
         acc = (acc1 + acc2) / 2
-
+        if is_main_process():
+            acc = torch.cat(all_gather(acc)).mean()
         losses = dict(loss_MoCoV3=loss, acc_MoCoV3=acc)
         return losses
