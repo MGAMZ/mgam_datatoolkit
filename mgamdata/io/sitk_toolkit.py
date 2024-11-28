@@ -32,7 +32,6 @@ def sitk_resample_to_spacing(image: sitk.Image,
     return sitk_resample_to_image(image, reference_image, interpolator=interpolator,default_value=default_value)
 
 
-
 def sitk_resample_to_spacing_v2(mha:sitk.Image, 
                                 spacing:Sequence[float], 
                                 field:str):
@@ -72,7 +71,6 @@ def sitk_resample_to_spacing_v2(mha:sitk.Image,
     return mha_resampled
 
 
-
 def sitk_resample_to_image(image:sitk.Image, 
                            reference_image:sitk.Image, 
                            default_value=0., 
@@ -100,7 +98,6 @@ def sitk_resample_to_image(image:sitk.Image,
     return resample_filter.Execute(image)
 
 
-
 def sitk_resample_to_size(image, new_size:list[float], field='image'):
     new_size = new_size[::-1]
     original_size = image.GetSize()
@@ -121,7 +118,6 @@ def sitk_resample_to_size(image, new_size:list[float], field='image'):
     return resampled
 
 
-
 def sitk_new_blank_image(size, spacing, direction, origin, default_value=0.):
     pdb.set_trace()
     image = sitk.GetImageFromArray(np.ones(size, dtype=np.float32).T * default_value, isVector=False)
@@ -131,10 +127,8 @@ def sitk_new_blank_image(size, spacing, direction, origin, default_value=0.):
     return image
 
 
-
 def calculate_origin_offset(new_spacing, old_spacing):
     return np.subtract(new_spacing, old_spacing) / 2.0
-
 
 
 def LoadDcmAsSitkImage_EngineeringOrder(dcm_case_path, spacing, sort_by_distance=True
@@ -237,7 +231,6 @@ def LoadDcmAsSitkImage_EngineeringOrder(dcm_case_path, spacing, sort_by_distance
     return resampled_mha, original_spacing, original_size, resampled_size
 
 
-
 def LoadDcmAsSitkImage_JianYingOrder(dcm_case_path, spacing
     ) -> tuple[sitk.Image, 
                tuple[float, float, float]|None, 
@@ -290,7 +283,6 @@ def LoadDcmAsSitkImage_JianYingOrder(dcm_case_path, spacing
         return resampled_mha, original_spacing, original_size, resampled_size
 
 
-
 def LoadDcmAsSitkImage(mode:str, dcm_case_path:str, spacing:tuple[float, float, float]):
     assert mode.lower() in ['engineering', 'jianying'], "mode must be one of ['engineering', 'jianying']"
 
@@ -298,7 +290,6 @@ def LoadDcmAsSitkImage(mode:str, dcm_case_path:str, spacing:tuple[float, float, 
         return LoadDcmAsSitkImage_EngineeringOrder(dcm_case_path, spacing)
     else:
         return LoadDcmAsSitkImage_JianYingOrder(dcm_case_path, spacing)
-
 
 
 def LoadMhaAnno(mha_root, patient, ori_spacing, out_spacing, resampled_size):
@@ -333,7 +324,6 @@ def LoadMhaAnno(mha_root, patient, ori_spacing, out_spacing, resampled_size):
     
     anno_without_class_channel = np.argmax(anno_with_class_channel, axis=0)
     return anno_with_class_channel, anno_without_class_channel
-
 
 
 def merge_masks(mha_paths: list[str], 
@@ -377,7 +367,6 @@ def merge_masks(mha_paths: list[str],
     return merged_mask_image
 
 
-
 def split_image_label_pairs_to_2d(image: sitk.Image, label: sitk.Image):
     """
     将image和label在最高维度上进行切分，迭代式返回slice-pair。
@@ -401,3 +390,4 @@ def split_image_label_pairs_to_2d(image: sitk.Image, label: sitk.Image):
         image_slice:np.ndarray = image_array[i]
         label_slice:np.ndarray = label_array[i]
         yield image_slice, label_slice
+

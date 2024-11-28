@@ -2,13 +2,11 @@ import os
 import pdb
 from typing_extensions import Literal
 
-import cv2
 import numpy as np
 import nibabel as nib
 import SimpleITK as sitk
 
 from ..process.NDArray import unsafe_astype
-
 
 
 
@@ -40,7 +38,6 @@ def convert_nii_sitk(nii_path:str,
     sitk_img.SetOrigin(nib_origin)
     sitk_img.SetDirection(nib_direction)
     return sitk_img
-
 
 
 def merge_masks(nii_paths: list[str], 
