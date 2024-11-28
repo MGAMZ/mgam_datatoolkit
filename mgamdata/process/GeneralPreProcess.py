@@ -308,16 +308,23 @@ class GaussianBlur(BaseTransform):
 
 
 class GaussianBlur3D(BaseTransform):
-    def __init__(
-        self,
-        kernel_size: int,
-        sigma: float | list[float],
-    ):
-        self.kernel_size = kernel_size
+    def __init__(self, sigma: float):
         self.sigma = sigma
 
     def transform(self, results: dict):
         results["img"] = gaussian_filter(results["img"], sigma=self.sigma)
+        return results
+
+
+class RandomGaussianBlur3D(BaseTransform):
+    def __init__(self, max_sigma:float, prob:float=1.0):
+        self.sigma = max_sigma
+        self.prob = prob
+    
+    def transform(self, results: dict):
+        if np.random.rand(1) < self.prob:
+            sigma = np.random.uniform(0, self.sigma)
+            results["img"] = gaussian_filter(results["img"], sigma=sigma)
         return results
 
 
@@ -510,6 +517,19 @@ class RandomCrop3D(BaseTransform):
 
     def __repr__(self):
         return self.__class__.__name__ + f"(crop_size={self.crop_size})"
+
+
+class RandomAxis(BaseTransform):
+    def __init__(self, axis:tuple[Literal[0,1,2], Literal[0,1,2]], prob:float=0.5):
+        self.axis = axis
+        self.prob = prob
+    
+    def transform(self, results: dict):
+        if np.random.rand(1) < self.prob:
+            results["img"] = np.moveaxis(results["img"], self.axis[0], self.axis[1])
+            if "gt_seg_map" in results:
+                results["gt_seg_map"] = np.moveaxis(results["gt_seg_map"], self.axis[0], self.axis[1])
+        return results
 
 
 class NewAxis(BaseTransform):
