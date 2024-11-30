@@ -1,4 +1,4 @@
-from mgamdata.process.PreCrop_3D import StandardMhaCropper3D
+from mgamdata.process.PreCrop_3D import SemiSupervisedMhaCropper3D
 
 if __name__ == '__main__':
-    StandardMhaCropper3D()
+    SemiSupervisedMhaCropper3D()
