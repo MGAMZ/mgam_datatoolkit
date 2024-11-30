@@ -60,7 +60,7 @@ def sitk_resample_to_spacing_v2(mha:sitk.Image,
     mha_resampled = sitk.Resample(
         image1=mha,
         size=resampled_size,# type:ignore
-        interpolator=sitk.sitkLinear if field == 'image' else sitk.sitkNearestNeighbor,
+        interpolator=sitk.sitkBSpline5 if field == 'image' else sitk.sitkNearestNeighbor,
         outputSpacing=spacing,
         outputPixelType=sitk.sitkInt16 if field == 'image' else sitk.sitkUInt8,
         outputOrigin=mha.GetOrigin(),

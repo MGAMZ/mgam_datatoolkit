@@ -15,9 +15,11 @@ def convert_nii_sitk(nii_path:str,
                      dtype=np.float32, 
                      ) -> sitk.Image:
     """保证itk mha格式维度顺序为zyx"""
-    
-    nib_img = nib.load(nii_path)
-    nib_array:np.ndarray = nib_img.get_fdata()
+    try:
+        nib_img = nib.load(nii_path)
+        nib_array:np.ndarray = nib_img.get_fdata()
+    except Exception as e:
+        raise ValueError(f"Failed to load NIfTI file: {nii_path}.") from e
     nib_meta = nib_img.header
     nib_spacing = nib_meta['pixdim'][1:4].tolist() # type: ignore
     nib_origin = nib_meta.get_qform()[0:3, 3].tolist()
