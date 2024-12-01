@@ -87,14 +87,11 @@ class PreCropper3D:
     def main(self):
         self.arg_parse()
         os.makedirs(self.args.dest_npz_folder, exist_ok=True)
-        json.dump(
-            vars(self.args),
-            open(os.path.join(self.args.dest_npz_folder, "crop_meta.json"), "w"),
-            indent=4,
-        )
-        self.task_list = self.parse_task()
+        crop_meta_path = os.path.join(self.args.dest_npz_folder, "crop_meta.json")
+        json.dump(vars(self.args), open(crop_meta_path, "w"), indent=4)
 
-        results = []
+        self.task_list = self.parse_task()
+        series_meta = {}
         if self.args.mp:
             with mp.Pool() as pool:
                 fetcher = pool.imap_unordered(self.crop_per_series, self.task_list)
@@ -105,15 +102,33 @@ class PreCropper3D:
                     dynamic_ncols=True,
                     leave=False,
                 ):
-                    results.append(result)
+                    series_meta.update(result)
         else:
             for task in tqdm(
                 self.task_list, "Cropping", dynamic_ncols=True, leave=False
             ):
                 result = self.crop_per_series(task)
-                results.append(result)
+                series_meta.update(result)
 
-        print(f"Finished cropping {len(results)} series.")
+        print(f"Finished cropping {len(self.task_list)} series.")
+        print(f"Writing cropped patches' meta to {crop_meta_path}.")
+
+        cropped_series_meta = {
+            "crop_args": vars(self.args),
+            "num_series": len(series_meta),
+            "num_patches": sum(
+                [
+                    one_series_meta["num_patches"]
+                    for one_series_meta in series_meta.values()
+                ]
+            ),
+            "anno_available": [
+                series_id
+                for series_id, series_meta in series_meta.items()
+                if series_meta["anno_available"] is True
+            ],
+        }
+        json.dump(cropped_series_meta, open(crop_meta_path, "w"), indent=4)
 
     def all_index_ensured(self, label: np.ndarray):
         if self.args.ensure_index is None or np.random.rand() > self.args.ensure_ratio:
@@ -121,10 +136,11 @@ class PreCropper3D:
         else:
             return any(index not in label for index in self.args.ensure_index)
 
-    def crop_per_series(self, args: tuple):
+    def crop_per_series(self, args: tuple) -> dict:
         cropper, image_itk_path, anno_itk_path, save_folder = args
         cropper: RandomCrop3D
         os.makedirs(save_folder, exist_ok=True)
+        existed_classes = {}
 
         for crop_idx, (img_array, anno_array) in enumerate(
             self.Crop3D(cropper, image_itk_path, anno_itk_path)
@@ -132,7 +148,36 @@ class PreCropper3D:
             save_path = os.path.join(
                 save_folder, f"{os.path.basename(save_folder)}_{crop_idx}.npz"
             )
-            np.savez_compressed(file=save_path, img=img_array, gt_seg_map=anno_array)
+            np.savez_compressed(
+                file=save_path,
+                img=img_array,
+                gt_seg_map=anno_array if anno_array is not None else np.nan,
+            )
+            existed_classes[os.path.basename(save_path)] = (
+                np.unique(anno_array).tolist() if anno_array is not None else None
+            )
+
+        json.dump(
+            {
+                "series_id": os.path.basename(save_folder),
+                "shape": img_array.shape,
+                "num_patches": crop_idx + 1,
+                "anno_available": anno_array is not None,
+                "class_within_patch": existed_classes,
+            },
+            open(
+                os.path.join(save_folder, "SeriesMeta.json"),
+                "w",
+            ),
+            indent=4,
+        )
+
+        return {
+            os.path.basename(save_folder): {
+                "num_patches": crop_idx + 1,
+                "anno_available": anno_array is not None,
+            }
+        }
 
     def Crop3D(
         self, cropper, image_itk_path: str, anno_itk_path: str | None  # type: ignore
@@ -158,7 +203,7 @@ class PreCropper3D:
 
         if self.args.num_cropped is None:
             num_cropped = (
-                int(np.prod(np.array(image_array.shape) // np.array(cropper.crop_size)))
+                int(np.prod(np.array(image_array.shape) / np.array(cropper.crop_size)))
                 * 8
             )
         else:
@@ -220,7 +265,6 @@ class StandardMhaCropper3D(PreCropper3D):
 
 class SemiSupervisedMhaCropper3D(PreCropper3D):
     """Use this class when there are some sample with no annoatations."""
-
     def parse_task(self):
         task_list = []
         image_mha_folder = os.path.join(self.args.source_mha_folder, "image")

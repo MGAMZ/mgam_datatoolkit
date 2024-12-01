@@ -1,8 +1,10 @@
 import os
 import re
 import pdb
+import json
 from abc import abstractmethod
 from collections.abc import Generator, Iterable
+from typing_extensions import Literal
 
 import numpy as np
 
@@ -26,10 +28,11 @@ class mgam_BaseSegDataset(BaseSegDataset):
     def __init__(self,
                  split:str,
                  debug:bool=False,
+                 *args, 
                  **kwargs) -> None:
         self.split = split
         self.debug = debug
-        super().__init__(**kwargs)
+        super().__init__(*args, **kwargs)
         self.data_root: str
 
     def _update_palette(self) -> list[list[int]]:
@@ -78,9 +81,9 @@ class mgam_BaseSegDataset(BaseSegDataset):
 class mgam_Standard_3D_Mha(mgam_BaseSegDataset):
     def __init__(self,
                  data_root_mha:str,
-                 **kwargs) -> None:
+                 *args, **kwargs) -> None:
         self.data_root_mha = data_root_mha
-        super().__init__(**kwargs)
+        super().__init__(*args, **kwargs)
         self.data_root: str
 
     def _split(self):
@@ -104,8 +107,18 @@ class mgam_Standard_3D_Mha(mgam_BaseSegDataset):
 
     def sample_iterator(self) -> Generator[tuple[str, str], None, None]:
         for series in self._split():
-            yield (os.path.join(self.data_root, 'image', series+'.mha'),
-                   os.path.join(self.data_root, 'label', series+'.mha'))
+            image_mha_path = os.path.join(self.data_root, 'image', series+'.mha')
+            label_mha_path = os.path.join(self.data_root, 'label', series+'.mha')
+            if os.path.exists(image_mha_path) and os.path.exists(label_mha_path):
+                yield (image_mha_path, label_mha_path)
+
+
+class mgam_SemiSup_3D_Mha(mgam_Standard_3D_Mha):
+    def sample_iterator(self) -> Generator[tuple[str, str], None, None]:
+        for series in self._split():
+            image_mha_path = os.path.join(self.data_root, 'image', series+'.mha')
+            label_mha_path = os.path.join(self.data_root, 'label', series+'.mha')
+            yield (image_mha_path, label_mha_path)
 
 
 class mgam_Standard_Npz_Structure:
@@ -119,10 +132,38 @@ class mgam_Standard_Npz_Structure:
 
 
 class mgam_Standard_Precropped_Npz(mgam_Standard_Npz_Structure, mgam_Standard_3D_Mha):
-    ...
+    pass
+
+
+class mgam_SemiSup_Precropped_Npz(mgam_Standard_Precropped_Npz):
+    def __init__(self, mode:Literal['sup', 'semi', 'unsup'], *args, **kwargs) -> None:
+        self.mode = mode
+        self.precrop_meta = json.load(open(os.path.join(kwargs["data_root"], "crop_meta.json"), 'r'))
+        super().__init__(*args, **kwargs)
+    
+    def _maybe_skip(self, series_id:str):
+        if self.mode == 'sup':
+            return series_id not in self.precrop_meta["anno_available"]
+        else:
+            return False
+    
+    def sample_iterator(self) -> Generator[tuple[str, str], None, None]:
+        for series in self._split():
+            
+            if self._maybe_skip(series):
+                continue
+            
+            series_folder:str = os.path.join(self.data_root, series)
+            for sample in os.listdir(series_folder):
+                if sample.endswith('.npz'):
+                    if self.mode == 'unsup' and 'label' in sample:
+                        continue
+                    yield(os.path.join(series_folder, sample),
+                          os.path.join(series_folder, sample))
 
 
 class mgam_Standard_Patched_Npz(mgam_Standard_Npz_Structure, mgam_BaseSegDataset):
+    """Firstly Introduced for Rose Thyroid dataset"""
     def _split(self):
         all_series = [file.replace('.mha', '') 
                       for file in os.listdir(self.data_root)]
