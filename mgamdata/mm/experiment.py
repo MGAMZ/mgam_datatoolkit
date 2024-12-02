@@ -1,6 +1,7 @@
 import os
 import os.path as osp
 import re
+import glob
 import logging
 from colorama import Fore, Style
 
@@ -78,8 +79,10 @@ class experiment:
         # 模型初始化
         runner = DynamicRunnerSelection(self.cfg)
         ckpt_path = find_latest_checkpoint(self.work_dir)
+        best_path = glob.glob(osp.join(self.work_dir, 'best*.pth'))
+        assert len(best_path) == 1, f"找到多个最佳模型: {best_path}"
         print_log(f"载入检查点: {self.work_dir}", 'current', logging.INFO)
-        runner.load_checkpoint(ckpt_path)
+        runner.load_checkpoint(best_path[0])
         print_log(f"载入完成，执行测试: {self.work_dir}", 'current', logging.INFO)
 
         # 执行测试
