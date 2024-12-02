@@ -10,7 +10,7 @@ import numpy as np
 import SimpleITK as sitk
 
 from mgamdata.io.nii_toolkit import convert_nii_sitk, merge_masks
-from mgamdata.io.sitk_toolkit import sitk_resample_to_spacing_v2, sitk_resample_to_size
+from mgamdata.io.sitk_toolkit import sitk_resample_to_spacing_v2, sitk_resample_to_size, sitk_resample_to_image
 from mgamdata.dataset.Totalsegmentator.meta import CLASS_INDEX_MAP
 
 
@@ -52,7 +52,8 @@ def convert_one_case(args):
         assert size is None, "Cannot set both spacing and size."
         input_image_mha = sitk_resample_to_spacing_v2(input_image_mha, spacing, 'image')
         if os.path.exists(series_nii_label_path):
-            input_label_mha = sitk_resample_to_spacing_v2(input_label_mha, spacing, 'label')
+            # input_label_mha = sitk_resample_to_spacing_v2(input_label_mha, spacing, 'label')
+            input_label_mha = sitk_resample_to_image(input_label_mha, input_image_mha, 'label')
     if size is not None:
         assert spacing is None, "Cannot set both spacing and size."
         input_image_mha = sitk_resample_to_size(input_image_mha, size, 'image')
@@ -61,13 +62,14 @@ def convert_one_case(args):
     
     sitk.WriteImage(input_image_mha, output_image_mha_path, useCompression=True)
     if os.path.exists(series_nii_label_path):
+        assert input_image_mha.GetSize() == input_label_mha.GetSize(), "Image and label size mismatch."
         sitk.WriteImage(input_label_mha, output_label_mha_path, useCompression=True)
 
 
 def convert_and_save_nii_to_mha(input_dir: str, 
                                 output_dir: str, 
-                                use_mp: bool,
-                                spacing:Sequence[float|int]|None=None,
+                                use_mp: bool, 
+                                spacing:Sequence[float|int]|None=None, 
                                 size:Sequence[float|int]|None=None):
     task_list = []
     nii_image_dir = os.path.join(input_dir, 'image')

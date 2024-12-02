@@ -38,9 +38,9 @@ class PreCropper3D:
             help="Max ratio for single catagory can occupy.",
         )
         argparser.add_argument(
-            "--num-cropped",
+            "--num-cropped-ratio",
             type=int,
-            default=None,
+            default=4,
             help="The number of cropped volumes per series.",
         )
         argparser.add_argument(
@@ -201,13 +201,10 @@ class PreCropper3D:
             "seg_fields": ["gt_seg_map"] if anno_array is not None else [],
         }
 
-        if self.args.num_cropped is None:
-            num_cropped = (
+        num_cropped = (
                 int(np.prod(np.array(image_array.shape) / np.array(cropper.crop_size)))
-                * 8
+                * self.args.num_cropped_ratio
             )
-        else:
-            num_cropped = self.args.num_cropped
 
         for i in range(num_cropped):
             # if no label, can't check cat_max_ratio

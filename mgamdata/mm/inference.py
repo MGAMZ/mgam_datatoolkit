@@ -15,7 +15,7 @@ from mmseg.models.segmentors import BaseSegmentor
 from mmseg.apis.inference import init_model, _preprare_data
 
 from ..io.sitk_toolkit import LoadDcmAsSitkImage
-
+from .mmseg_Dev3D import EncoderDecoder_3D
 
 
 INFERENCER_WORK_DIR = "/fileser51/zhangyiqin.sx/mmseg/work_dirs_inferencer/"
@@ -103,31 +103,16 @@ class Inferencer_2D(Inferencer):
         return pred
 
 
-class Inferencer_3D(Inferencer):
-    @torch.inference_mode()
-    def Inference_FromNDArray(self, image_array) -> Tensor:
-        image_array = [i for i in image_array]
-        data, is_batch = _preprare_data(image_array, self.model)
-        # forward the model
-        data = self.model.data_preprocessor(data, False)
-        inputs = torch.stack(data['inputs'])
-        data_samples = [sample.to_dict() for sample in data['data_samples']]
-        pred = self.model.inference(inputs, data_samples)
-        return pred
-
-
 class Inference_exported(Inferencer_2D):
     @abstractmethod
     def __init__(self, wl, ww):
         ...
-
 
     def _set_window(self, inputs):
         inputs = np.clip(inputs, self.wl-self.ww//2, self.wl+self.ww//2)
         inputs = inputs - inputs.min()
         inputs = inputs / inputs.max()
         return inputs.astype(np.float32)
-
 
     @torch.inference_mode()
     def Inference_FromNDArray(self, image_array):
@@ -144,7 +129,6 @@ class Inference_exported(Inferencer_2D):
 
         pred = torch.cat(results, axis=0).transpose(0,1)
         return pred # [Class, D, H, W]
-
 
     def slide_inference(self, inputs: Tensor) -> Tensor:
         h_stride, w_stride = self.test_cfg.stride
@@ -177,11 +161,9 @@ class Inference_exported(Inferencer_2D):
 
         return seg_logits
 
-
     def whole_inference(self, inputs: Tensor) -> Tensor:
         seg_logits = self.forward(inputs)
         return seg_logits
-
 
     def inference(self, inputs: np.ndarray) -> Tensor:
         if self.inference_mode == 'slide':

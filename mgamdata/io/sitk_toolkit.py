@@ -73,26 +73,25 @@ def sitk_resample_to_spacing_v2(mha:sitk.Image,
 
 def sitk_resample_to_image(image:sitk.Image, 
                            reference_image:sitk.Image, 
-                           default_value=0., 
-                           interpolator=sitk.sitkLinear,
-                           output_pixel_type=None):
+                           field='image',
+                           default_value=0.):
     """重采样一个sitk.Image，对齐到另一个sitk.Image。
 
     Args:
         image (sitk.Image): 输入的sitk.Image
         reference_image (sitk.Image): 对齐目标
-        default_value (float, optional): 重采样时填充值. Defaults to 0..
-        interpolator (sitk.InterpolatorEnum, optional): 插值方法. Defaults to sitk.sitkLinear.
-        output_pixel_type ([type], optional): 输出的数据类型. Defaults to None.
+        field (str, optional): 重采样的对象。 可选'image', 'label', 'mask'.
+                               本参数将决定插值方法和数据格式.
+        default_value (float, optional): 重采样时填充值. Defaults to 0.
 
     Returns:
         sitk.Image: 重采样后的sitk.Image
     """
     
     resample_filter = sitk.ResampleImageFilter()
-    resample_filter.SetInterpolator(interpolator)
+    resample_filter.SetInterpolator(sitk.sitkLinear if field == 'image' else sitk.sitkNearestNeighbor)
     resample_filter.SetTransform(sitk.Transform())
-    resample_filter.SetOutputPixelType(output_pixel_type)
+    resample_filter.SetOutputPixelType(sitk.sitkInt16 if field == 'image' else sitk.sitkUInt8)
     resample_filter.SetDefaultPixelValue(default_value)
     resample_filter.SetReferenceImage(reference_image)
     return resample_filter.Execute(image)

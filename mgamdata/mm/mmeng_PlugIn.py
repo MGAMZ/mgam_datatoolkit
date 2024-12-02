@@ -322,7 +322,7 @@ class RatioSampler(DefaultSampler):
         super().__init__(**kwargs)
         self.use_sample_ratio = use_sample_ratio
         print_log(
-            f"RatioSampler used, original num of sample {super().__len__()} -> used {len(self)}",
+            f"RatioSampler used, original num of batches {super().__len__()} -> used {len(self)}",
             MMLogger.get_current_instance(),
         )
 

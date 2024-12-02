@@ -154,7 +154,10 @@ class mgam_SemiSup_Precropped_Npz(mgam_Standard_Precropped_Npz):
                 continue
             
             series_folder:str = os.path.join(self.data_root, series)
-            for sample in os.listdir(series_folder):
+            series_meta = json.load(open(os.path.join(series_folder, 'SeriesMeta.json'), 'r'))
+            patch_npz_files = series_meta["class_within_patch"].keys()
+            for sample in [os.path.join(series_folder, file) 
+                           for file in patch_npz_files]:
                 if sample.endswith('.npz'):
                     if self.mode == 'unsup' and 'label' in sample:
                         continue
