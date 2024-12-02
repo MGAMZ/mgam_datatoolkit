@@ -14,11 +14,24 @@ from mgamdata.io.sitk_toolkit import sitk_resample_to_spacing_v2, sitk_resample_
 from mgamdata.dataset.Totalsegmentator.meta import CLASS_INDEX_MAP
 
 
+
+def maybe_skip(series_nii_image_path:str, series_nii_label_path:str):
+    try:
+        if os.path.exists(series_nii_image_path):
+            sitk.ReadImage(series_nii_image_path)
+        if os.path.exists(series_nii_label_path):
+            sitk.ReadImage(series_nii_label_path)
+    
+    except Exception as e:
+        return False
+    
+    return True
+
 def convert_one_case(args):
     series_nii_image_path, series_output_folder, spacing, size = args
     output_image_folder = os.path.join(series_output_folder, 'image')
     output_label_folder = os.path.join(series_output_folder, 'label')
-    series_nii_label_path = series_nii_image_path.replace('imagesTr2200', 'labelsTr2200').replace('_0000.nii.gz', '.nii.gz')
+    series_nii_label_path = series_nii_image_path.replace('image', 'label').replace('_0000.nii.gz', '.nii.gz')
     
     # 构建路径，保持文件存储结构不变
     series_id = os.path.basename(series_nii_image_path).split('_')[1]
@@ -57,10 +70,11 @@ def convert_and_save_nii_to_mha(input_dir: str,
                                 spacing:Sequence[float|int]|None=None,
                                 size:Sequence[float|int]|None=None):
     task_list = []
-    for series_name in os.listdir(input_dir):
+    nii_image_dir = os.path.join(input_dir, 'image')
+    for series_name in os.listdir(nii_image_dir):
         if series_name.endswith('.nii.gz'):
-            series_input_folder = os.path.join(input_dir, series_name)
-            task_list.append((series_input_folder, output_dir, spacing, size))
+            series_nii_image_path = os.path.join(nii_image_dir, series_name)
+            task_list.append((series_nii_image_path, output_dir, spacing, size))
     
     if use_mp:
         with multiprocessing.Pool() as pool:

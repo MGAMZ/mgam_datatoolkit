@@ -80,7 +80,7 @@ class experiment:
         runner = DynamicRunnerSelection(self.cfg)
         ckpt_path = find_latest_checkpoint(self.work_dir)
         best_path = glob.glob(osp.join(self.work_dir, 'best*.pth'))
-        assert len(best_path) == 1, f"找到多个最佳模型: {best_path}"
+        assert len(best_path) == 1, f"尝试在 {best_path} 找到最佳模型，但不能确定最佳。"
         print_log(f"载入检查点: {self.work_dir}", 'current', logging.INFO)
         runner.load_checkpoint(best_path[0])
         print_log(f"载入完成，执行测试: {self.work_dir}", 'current', logging.INFO)

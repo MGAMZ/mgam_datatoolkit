@@ -3,7 +3,6 @@ import os
 import os.path as osp
 import pdb
 from tqdm import tqdm
-from typing import Tuple
 
 import torch
 import numpy as np
@@ -19,9 +18,7 @@ from ..io.sitk_toolkit import LoadDcmAsSitkImage
 
 
 
-
 INFERENCER_WORK_DIR = "/fileser51/zhangyiqin.sx/mmseg/work_dirs_inferencer/"
-
 
 
 def visualize(image_array, gt_class_idx, pred_class_idx):
@@ -35,37 +32,18 @@ def visualize(image_array, gt_class_idx, pred_class_idx):
     return fig
 
 
-
-class Inferencer_2D:
+class Inferencer:
     def __init__(self, cfg_path, ckpt_path):
         self.model:BaseSegmentor = init_model(cfg_path, ckpt_path)
         self.model.eval()
         self.model.requires_grad_(False)
 
+    @abstractmethod
     @torch.inference_mode()
-    def Inference_FromNDArray(self, image_array):
-        image_array = [i for i in image_array]
-        data, is_batch = _preprare_data(image_array, self.model)
+    def Inference_FromNDArray(self, image_array) -> Tensor:
+        ...
 
-        # forward the model
-        results = []
-        data = self.model.data_preprocessor(data, False)
-        inputs = torch.stack(data['inputs'])
-        data_samples = [sample.to_dict() for sample in data['data_samples']]
-        for array, sample in tqdm(zip(inputs, data_samples),
-                                  desc="Inferencing",
-                                  total=len(inputs),
-                                  dynamic_ncols=True,
-                                  leave=False,
-                                  mininterval=1):
-            result:torch.Tensor = self.model.inference(array[None], [sample])
-            results.append(result)
-
-        pred = torch.cat(results, dim=0).transpose(0,1) # [Class, D, H, W]
-        return pred
-
-
-    def Inference_FromITK(self, itk_image:sitk.Image) -> Tuple[sitk.Image, sitk.Image]:
+    def Inference_FromITK(self, itk_image:sitk.Image) -> tuple[sitk.Image, sitk.Image]:
         image_array = sitk.GetArrayFromImage(itk_image) # [D, H, W]
         pred = self.Inference_FromNDArray(image_array) # [Class, D, H, W]
         # 后处理
@@ -74,11 +52,9 @@ class Inferencer_2D:
         itk_pred.CopyInformation(itk_image)
         return itk_image, itk_pred
 
-
     def Inference_FromDcm(self, dcm_slide_folder:str, spacing=None):
         image, _, _, _ = LoadDcmAsSitkImage('engineering', dcm_slide_folder, spacing=spacing)
         return self.Inference_FromITK(image)
-
 
     def Inference_FromITKFolder(self, folder:str, check_exist_path:str|None=None):
         mha_files = []
@@ -102,6 +78,42 @@ class Inferencer_2D:
             tqdm.write(f"Successfully inferenced: {os.path.basename(mha_path)}.")
             yield itk_image, itk_pred, mha_path
 
+
+class Inferencer_2D(Inferencer):
+    @torch.inference_mode()
+    def Inference_FromNDArray(self, image_array) -> Tensor:
+        image_array = [i for i in image_array]
+        data, is_batch = _preprare_data(image_array, self.model)
+
+        # forward the model
+        results = []
+        data = self.model.data_preprocessor(data, False)
+        inputs = torch.stack(data['inputs'])
+        data_samples = [sample.to_dict() for sample in data['data_samples']]
+        for array, sample in tqdm(zip(inputs, data_samples),
+                                  desc="Inferencing",
+                                  total=len(inputs),
+                                  dynamic_ncols=True,
+                                  leave=False,
+                                  mininterval=1):
+            result:torch.Tensor = self.model.inference(array[None], [sample])
+            results.append(result)
+
+        pred = torch.cat(results, dim=0).transpose(0,1) # [Class, D, H, W]
+        return pred
+
+
+class Inferencer_3D(Inferencer):
+    @torch.inference_mode()
+    def Inference_FromNDArray(self, image_array) -> Tensor:
+        image_array = [i for i in image_array]
+        data, is_batch = _preprare_data(image_array, self.model)
+        # forward the model
+        data = self.model.data_preprocessor(data, False)
+        inputs = torch.stack(data['inputs'])
+        data_samples = [sample.to_dict() for sample in data['data_samples']]
+        pred = self.model.inference(inputs, data_samples)
+        return pred
 
 
 class Inference_exported(Inferencer_2D):
@@ -186,7 +198,6 @@ class Inference_exported(Inferencer_2D):
     @abstractmethod
     def forward(self, inputs: np.ndarray) -> Tensor:
         ...
-
 
 
 class Inference_ONNX(Inference_exported):
