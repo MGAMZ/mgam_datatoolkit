@@ -167,7 +167,7 @@ class AutoEncoder_MoCoV3(AutoEncoderSelfSup):
         """
         preds = torch.argmax(logits, dim=1)
         acc = torch.sum(preds == labels).float() / labels.shape[0]
-        return acc
+        return acc.unsqueeze(0)
     
     def loss(
         self, inputs: list[torch.Tensor], data_samples: list[DataSample], **kwargs
@@ -205,7 +205,6 @@ class AutoEncoder_MoCoV3(AutoEncoderSelfSup):
         acc1 = self.calc_acc(logits=selfsup1[1], labels=selfsup1[2])
         acc2 = self.calc_acc(logits=selfsup2[1], labels=selfsup2[2])
         acc = (acc1 + acc2) / 2
-        if is_main_process():
-            acc = torch.cat(all_gather(acc)).mean()
+        acc = torch.cat(all_gather(acc)).mean()
         losses = dict(loss_MoCoV3=loss, acc_MoCoV3=acc)
         return losses
