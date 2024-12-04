@@ -9,7 +9,9 @@ from typing_extensions import Literal
 import numpy as np
 
 from mmcv.transforms import BaseTransform
+from mmengine.registry import DATASETS
 from mmengine.logging import print_log, MMLogger
+from mmengine.dataset import ConcatDataset, BaseDataset
 from mmseg.datasets.basesegdataset import BaseSegDataset
 
 
@@ -184,3 +186,41 @@ class mgam_Standard_Patched_Npz(mgam_Standard_Npz_Structure, mgam_BaseSegDataset
             return all_series[val_end:]
         else:
             raise RuntimeError(f"Unsupported split: {self.split}")
+
+
+class mgam_concat_dataset(ConcatDataset):
+    def __init__(self,
+                 datasets: list[BaseDataset|dict],
+                 lazy_init: bool = False,
+                 ignore_keys: str|list[str]|None = None):
+        self.datasets: list[BaseDataset] = []
+        for i, dataset in enumerate(datasets):
+            if isinstance(dataset, dict):
+                self.datasets.append(DATASETS.build(dataset))
+            elif isinstance(dataset, BaseDataset):
+                self.datasets.append(dataset)
+            else:
+                raise TypeError(
+                    'elements in datasets sequence should be config or '
+                    f'`BaseDataset` instance, but got {type(dataset)}')
+        if ignore_keys is None:
+            self.ignore_keys = []
+        elif isinstance(ignore_keys, str):
+            self.ignore_keys = [ignore_keys]
+        elif isinstance(ignore_keys, list):
+            self.ignore_keys = ignore_keys
+        else:
+            raise TypeError('ignore_keys should be a list or str, '
+                            f'but got {type(ignore_keys)}')
+
+        meta_keys: set = set()
+        for dataset in self.datasets:
+            meta_keys |= dataset.metainfo.keys()
+        # Only use metainfo of first dataset.
+        self._metainfo = self.datasets[0].metainfo
+
+        # HACK MGAM: Skip dataset-wise metainfo consistent check
+
+        self._fully_initialized = False
+        if not lazy_init:
+            self.full_init()
