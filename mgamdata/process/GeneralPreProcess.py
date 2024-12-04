@@ -23,15 +23,17 @@ NOTE
 
 
 class PadVolume(BaseTransform):
-    def __init__(self, size:tuple[int,int,int], pad_val:int=0, pad_label_val:int=0):
+    def __init__(
+        self, size: tuple[int, int, int], pad_val: int = 0, pad_label_val: int = 0
+    ):
         self.size = size
         self.pad_val = pad_val
         self.pad_label_val = pad_label_val
-    
-    def transform(self, results:dict):
+
+    def transform(self, results: dict):
         # center pad
-        img = results['img']
-        
+        img = results["img"]
+
         pad_z = self.size[0] - img.shape[0]
         pad_y = self.size[1] - img.shape[1]
         pad_x = self.size[2] - img.shape[2]
@@ -41,11 +43,21 @@ class PadVolume(BaseTransform):
         pad_y2 = pad_y - pad_y1
         pad_x1 = pad_x // 2
         pad_x2 = pad_x - pad_x1
-        
-        results['img'] = np.pad(img, ((pad_z1, pad_z2), (pad_y1, pad_y2), (pad_x1, pad_x2)), mode='constant', constant_values=self.pad_val)
-        if 'gt_seg_map' in results:
-            results['gt_seg_map'] = np.pad(results['gt_seg_map'], ((pad_z1, pad_z2), (pad_y1, pad_y2), (pad_x1, pad_x2)), mode='constant', constant_values=self.pad_label_val)
-            
+
+        results["img"] = np.pad(
+            img,
+            ((pad_z1, pad_z2), (pad_y1, pad_y2), (pad_x1, pad_x2)),
+            mode="constant",
+            constant_values=self.pad_val,
+        )
+        if "gt_seg_map" in results:
+            results["gt_seg_map"] = np.pad(
+                results["gt_seg_map"],
+                ((pad_z1, pad_z2), (pad_y1, pad_y2), (pad_x1, pad_x2)),
+                mode="constant",
+                constant_values=self.pad_label_val,
+            )
+
         return results
 
 
@@ -196,8 +208,9 @@ class RandomRoll(BaseTransform):
         if isinstance(gap, (int, float)):
             gap = [gap]
 
-        assert len(axis) == len(gap), \
-            f"axis ({len(axis)}) and gap ({len(gap)}) should have the same length"
+        assert len(axis) == len(
+            gap
+        ), f"axis ({len(axis)}) and gap ({len(gap)}) should have the same length"
 
         self.axis: list[int] = axis
         self.gap: list[float] = gap
@@ -219,12 +232,12 @@ class RandomRoll(BaseTransform):
             slicer[axis] = slice(0, gap)
         else:
             slicer[axis] = slice(gap, None)
-        
+
         if "img" in results:
             results["img"][tuple(slicer)] = self.pad_val
         if "gt_seg_map" in results:
             results["gt_seg_map"][tuple(slicer)] = self.seg_pad_val
-        
+
         return results
 
     def transform(self, results):
@@ -317,10 +330,10 @@ class GaussianBlur3D(BaseTransform):
 
 
 class RandomGaussianBlur3D(BaseTransform):
-    def __init__(self, max_sigma:float, prob:float=1.0):
+    def __init__(self, max_sigma: float, prob: float = 1.0):
         self.sigma = max_sigma
         self.prob = prob
-    
+
     def transform(self, results: dict):
         if np.random.rand(1) < self.prob:
             sigma = np.random.uniform(0, self.sigma)
@@ -329,7 +342,7 @@ class RandomGaussianBlur3D(BaseTransform):
 
 
 class RandomFlip3D(BaseTransform):
-    def __init__(self, axis:Literal[0,1,2], prob: float = 0.5):
+    def __init__(self, axis: Literal[0, 1, 2], prob: float = 0.5):
         self.axis = axis
         self.prob = prob
 
@@ -338,7 +351,9 @@ class RandomFlip3D(BaseTransform):
             if "img" in results:
                 results["img"] = np.flip(results["img"], axis=self.axis).copy()
             if "gt_seg_map" in results:
-                results["gt_seg_map"] = np.flip(results["gt_seg_map"], axis=self.axis).copy()
+                results["gt_seg_map"] = np.flip(
+                    results["gt_seg_map"], axis=self.axis
+                ).copy()
         return results
 
 
@@ -520,22 +535,103 @@ class RandomCrop3D(BaseTransform):
 
 
 class RandomAxis(BaseTransform):
-    def __init__(self, axis:tuple[Literal[0,1,2], Literal[0,1,2]], prob:float=0.5):
+    def __init__(
+        self, axis: tuple[Literal[0, 1, 2], Literal[0, 1, 2]], prob: float = 0.5
+    ):
         self.axis = axis
         self.prob = prob
-    
+
     def transform(self, results: dict):
         if np.random.rand(1) < self.prob:
             results["img"] = np.moveaxis(results["img"], self.axis[0], self.axis[1])
             if "gt_seg_map" in results:
-                results["gt_seg_map"] = np.moveaxis(results["gt_seg_map"], self.axis[0], self.axis[1])
+                results["gt_seg_map"] = np.moveaxis(
+                    results["gt_seg_map"], self.axis[0], self.axis[1]
+                )
         return results
 
 
 class NewAxis(BaseTransform):
-    def __init__(self, axis:int):
+    def __init__(self, axis: int):
         self.axis = axis
-    
-    def transform(self, results:dict):
-        results['img'] = np.expand_dims(results['img'], axis=self.axis)
+
+    def transform(self, results: dict):
+        results["img"] = np.expand_dims(results["img"], axis=self.axis)
+        return results
+
+
+class RandomErase(BaseTransform):
+    def __init__(
+        self,
+        max_size: list[int] | int,
+        pad_val: float | int,
+        seg_pad_val=0,
+        prob: float = 0.5,
+    ):
+        self.max_size = max_size if isinstance(max_size, list) else [max_size]
+        self.pad_val = pad_val
+        self.seg_pad_val = seg_pad_val
+        self.prob = prob
+
+    def _random_area(self, image_size: list[int], area_size:list[int]|None=None
+                     ) -> tuple[list[int], list[int]]:
+        assert len(image_size) == len(self.max_size)
+        dim = len(image_size)
+        selected_size = [
+                np.random.randint(1, i) for i in self.max_size
+            ] if area_size is None else area_size
+        
+        start_cord = [np.random.randint(0, image_size[i] - selected_size[i]) 
+                      for i in range(dim)]
+        end_cord = [start_cord[i] + selected_size[i]
+                    for i in range(dim)]
+        return start_cord, end_cord
+
+    def _erase_area(self, array: np.ndarray, start_cord: list[int], end_cord: list[int]):
+        """Erase the information in the selected area, supports any dim"""
+        _area = [slice(start_cord[i], end_cord[i]) 
+                 for i in range(len(start_cord))]
+        array[tuple(_area)] = self.pad_val
+        return array
+
+    def transform(self, results: dict):
+        if np.random.rand(1) < self.prob:
+            cord = self._random_area(results["img"].squeeze().shape)
+            results["img"] = self._erase_area(results["img"], cord[0], cord[1])
+            if "gt_seg_map" in results:
+                results["gt_seg_map"] = self._erase_area(results["gt_seg_map"], cord[0], cord[1])
+        return results
+
+
+class RandomAlter(RandomErase):
+    def _alter_area(self, 
+                    array: np.ndarray, 
+                    source_area: tuple[list[int], list[int]], 
+                    target_area: tuple[list[int], list[int]]):
+        """Exchange the information between two local area, supports any dim"""
+        source_start, source_end = source_area
+        target_start, target_end = target_area
+        _source_area = [slice(source_start[i], source_end[i]) 
+                        for i in range(len(source_start))]
+        _target_area = [slice(target_start[i], target_end[i])
+                        for i in range(len(target_start))]
+        
+        source = array[tuple(_source_area)]
+        target = array[tuple(_target_area)]
+        array[tuple(_target_area)] = source
+        array[tuple(_source_area)] = target
+        return array
+
+    def transform(self, results: dict):
+        if np.random.rand(1) < self.prob:
+            # The location is always randomly determined, 
+            # but the size is only determined when source_cord is calculated.
+            # Nevertheless, the two area can't alter.
+            source_cord = self._random_area(results["img"].squeeze().shape)
+            dest_cord = self._random_area(results["img"].squeeze().shape, 
+                                          area_size=[source_cord[1][i] - source_cord[0][i]
+                                                     for i in range(len(self.max_size))])
+            results["img"] = self._alter_area(results["img"], source_cord, dest_cord)
+            if "gt_seg_map" in results:
+                results["gt_seg_map"] = self._alter_area(results["gt_seg_map"], source_cord, dest_cord)
         return results
