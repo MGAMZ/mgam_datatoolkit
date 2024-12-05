@@ -32,26 +32,33 @@ dest_root
 
 """
 
-
 import os
 
 from mgamdata.process.PreCrop_3D import PreCropper3D
 
 
-
 class Totalsegmentator_PreCrop(PreCropper3D):
     def parse_task(self):
         from mgamdata.process.GeneralPreProcess import RandomCrop3D
+
         task_list = []
         for series in os.listdir(self.args.source_mha_folder):
-            task_list.append((
-                RandomCrop3D(self.args.crop_size, self.args.crop_cat_max, self.args.ignore_index),
-                os.path.join(self.args.source_mha_folder, series, 'ct.mha'),
-                os.path.join(self.args.source_mha_folder, series, 'segmentations.mha'),
-                os.path.join(self.args.dest_npz_folder, series)))
+            image_mha_path = os.path.join(self.args.source_mha_folder, series, "ct.mha")
+            label_mha_path = os.path.join(self.args.source_mha_folder, series, "segmentations.mha")
+            task_list.append(
+                (
+                    RandomCrop3D(
+                        self.args.crop_size,
+                        self.args.crop_cat_max,
+                        self.args.ignore_index,
+                    ),
+                    image_mha_path,
+                    label_mha_path if os.path.exists(label_mha_path) else None,
+                    os.path.join(self.args.dest_npz_folder, series),
+                )
+            )
         return task_list
 
 
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     Totalsegmentator_PreCrop()

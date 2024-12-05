@@ -157,12 +157,15 @@ class PreCropper3D:
                 np.unique(anno_array).tolist() if anno_array is not None else None
             )
 
+        num_patches = len(existed_classes)
+        anno_available = anno_itk_path is not None and num_patches>0
+
         json.dump(
             {
                 "series_id": os.path.basename(save_folder),
-                "shape": img_array.shape,
-                "num_patches": crop_idx + 1,
-                "anno_available": anno_array is not None,
+                "shape": img_array.shape if num_patches>0 else None,
+                "num_patches": num_patches,
+                "anno_available": anno_available,
                 "class_within_patch": existed_classes,
             },
             open(
@@ -171,11 +174,10 @@ class PreCropper3D:
             ),
             indent=4,
         )
-
         return {
             os.path.basename(save_folder): {
-                "num_patches": crop_idx + 1,
-                "anno_available": anno_array is not None,
+                "num_patches": num_patches,
+                "anno_available": anno_available,
             }
         }
 
