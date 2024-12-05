@@ -13,18 +13,20 @@ from ..process.NDArray import unsafe_astype
 def convert_nii_sitk(nii_path:str, 
                      nii_fdata_order:Literal['xyz','zyx'],
                      dtype=np.float32, 
+                     value_offset:int|float|None=None
                      ) -> sitk.Image:
-    """保证itk mha格式维度顺序为zyx"""
+    # 加载并进行值域修正
     try:
         nib_img = nib.load(nii_path)
-        nib_array:np.ndarray = nib_img.get_fdata()
+        nib_array:np.ndarray = nib_img.get_fdata() + value_offset
+        nib_meta = nib_img.header
+        nib_spacing = nib_meta['pixdim'][1:4].tolist() # type: ignore
+        nib_origin = nib_meta.get_qform()[0:3, 3].tolist()
+        nib_direction = nib_meta.get_qform()[0:3, 0:3].flatten().tolist()
     except Exception as e:
         raise ValueError(f"Failed to load NIfTI file: {nii_path}.") from e
-    nib_meta = nib_img.header
-    nib_spacing = nib_meta['pixdim'][1:4].tolist() # type: ignore
-    nib_origin = nib_meta.get_qform()[0:3, 3].tolist()
-    nib_direction = nib_meta.get_qform()[0:3, 0:3].flatten().tolist()
-    
+
+    """保证itk mha格式维度顺序为zyx"""
     if nii_fdata_order == 'xyz':
         nib_array = np.transpose(nib_array, (2, 1, 0))
     elif nii_fdata_order == 'zyx':
