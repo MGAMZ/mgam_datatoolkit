@@ -21,7 +21,6 @@ def maybe_skip(series_nii_image_path:str, series_nii_label_path:str):
             sitk.ReadImage(series_nii_image_path)
         if os.path.exists(series_nii_label_path):
             sitk.ReadImage(series_nii_label_path)
-    
     except Exception as e:
         return False
     
@@ -42,12 +41,12 @@ def convert_one_case(args):
     if os.path.exists(output_image_mha_path) and os.path.exists(output_label_mha_path):
         return
     
-    # 原始扫描转换为SimpleITK格式并保存
-    # 类分离的标注文件合并后保存
+    # sitk读取nii
     input_image_mha = convert_nii_sitk(series_nii_image_path, dtype=np.int16, nii_fdata_order='xyz')
     if os.path.exists(series_nii_label_path):
         input_label_mha = convert_nii_sitk(series_nii_label_path, dtype=np.uint8, nii_fdata_order='xyz')
     
+    # 可选根据spacing或size进行重采样
     if spacing is not None:
         assert size is None, "Cannot set both spacing and size."
         input_image_mha = sitk_resample_to_spacing_v2(input_image_mha, spacing, 'image')
@@ -60,6 +59,7 @@ def convert_one_case(args):
         if os.path.exists(series_nii_label_path):
             input_label_mha = sitk_resample_to_size(input_label_mha, size, 'label')
     
+    # 写入mha
     sitk.WriteImage(input_image_mha, output_image_mha_path, useCompression=True)
     if os.path.exists(series_nii_label_path):
         assert input_image_mha.GetSize() == input_label_mha.GetSize(), "Image and label size mismatch."

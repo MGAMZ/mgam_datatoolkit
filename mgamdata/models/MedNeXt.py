@@ -5,6 +5,7 @@ from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint
 
 from mmengine.model import BaseModule
+from mmseg.models.decode_heads.decode_head import BaseDecodeHead
 
 from ..mm.mmseg_Dev3D import BaseDecodeHead_3D
 
@@ -981,6 +982,49 @@ class MM_MedNext_Decoder(BaseModule):
             return (x, x_ds_1, x_ds_2, x_ds_3, x_ds_4)
         else: 
             return (x,)
+
+
+class MM_MedNext_Decoder_2D(BaseDecodeHead):
+    def __init__(self,
+                 embed_dims: int,
+                 num_classes: int,
+                 exp_r = 4,
+                 kernel_size: int = 7,
+                 block_counts: list = [2,2,2,2,2,2,2,2,2],
+                 deep_supervision: bool = False,
+                 use_checkpoint: bool = False,
+                 norm_type = 'group',
+                 grn = False,
+                 *args, **kwargs
+                ):
+        super().__init__(
+            in_channels=[embed_dims,
+                         embed_dims*2,
+                         embed_dims*4,
+                         embed_dims*8,
+                         embed_dims*16],
+            channels=embed_dims,
+            num_classes=num_classes,
+            input_transform='multiple_select',
+            in_index=[0,1,2,3,4],
+            *args, **kwargs
+        )
+        
+        self.mednext = MM_MedNext_Decoder(
+            embed_dims=embed_dims,
+            num_classes=num_classes,
+            exp_r=exp_r,
+            kernel_size=kernel_size,
+            block_counts=block_counts,
+            deep_supervision=deep_supervision,
+            use_checkpoint=use_checkpoint,
+            norm_type=norm_type,
+            grn=grn,
+            dim="2d",
+        )
+    
+    def forward(self, inputs):
+        return self.mednext(inputs)[0]
 
 
 class MM_MedNext_Decoder_3D(BaseDecodeHead_3D):

@@ -9,6 +9,8 @@ from mmseg.structures import SegDataSample
 from mmseg.models.segmentors import EncoderDecoder
 from mmseg.models.utils import resize
 
+
+
 class AccuCount(BaseMetric):
     """
     Designed for counting the number of cells in a given image.
@@ -43,7 +45,6 @@ class AccuCount(BaseMetric):
             Dict: The computed metrics. The keys are the names of the metrics,
             and the values are corresponding results.
         """
-
         return {
             "mae": np.mean(
                 [np.abs(res["pred_count"] - res["gt_count"]) for res in results]
@@ -61,8 +62,9 @@ class CellCounter(EncoderDecoder):
     def __init__(self, amplify, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.amplify = amplify
+    
     def postprocess_result(self, seg_logits, data_samples):
-        """ Delete post-process sigmoid activation when C=1"""
+        """Delete post-process sigmoid activation when C=1"""
         batch_size, C, H, W = seg_logits.shape
 
         if data_samples is None:
@@ -114,3 +116,8 @@ class CellCounter(EncoderDecoder):
             })
 
         return data_samples
+
+
+class CellCounterClassifier(CellCounter):
+    def __init__(self, amplify, ClasterClassifier):
+        ...
