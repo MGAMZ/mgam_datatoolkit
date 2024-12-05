@@ -560,7 +560,7 @@ class NewAxis(BaseTransform):
         return results
 
 
-class RandomErase(BaseTransform):
+class RandomContinuousErase(BaseTransform):
     def __init__(
         self,
         max_size: list[int] | int,
@@ -603,7 +603,7 @@ class RandomErase(BaseTransform):
         return results
 
 
-class RandomAlter(RandomErase):
+class RandomAlter(RandomContinuousErase):
     def _alter_area(self, 
                     array: np.ndarray, 
                     source_area: tuple[list[int], list[int]], 
@@ -634,4 +634,55 @@ class RandomAlter(RandomErase):
             results["img"] = self._alter_area(results["img"], source_cord, dest_cord)
             if "gt_seg_map" in results:
                 results["gt_seg_map"] = self._alter_area(results["gt_seg_map"], source_cord, dest_cord)
+        return results
+
+
+class RandomDiscreteErase(BaseTransform):
+    def __init__(
+        self,
+        max_ratio: float,
+        pad_val: float | int,
+        seg_pad_val=0,
+        prob: float = 0.5,
+    ):
+        assert 0 < max_ratio <= 1
+        self.max_ratio = max_ratio
+        self.pad_val = pad_val
+        self.seg_pad_val = seg_pad_val
+        self.prob = prob
+
+    def _generate_mask(self, array_shape: tuple, ratio: float) -> np.ndarray:
+        total_elements = np.prod(array_shape)
+        num_erase = int(total_elements * ratio)
+        mask = np.zeros(total_elements, dtype=bool)
+        erase_indices = np.random.choice(total_elements, num_erase, replace=False)
+        mask[erase_indices] = True
+        mask = mask.reshape(array_shape)
+        return mask
+
+    def _apply_mask(self, array: np.ndarray, mask: np.ndarray, pad_value) -> np.ndarray:
+        if array.ndim > mask.ndim:
+            mask = mask[..., None] # channel dim
+        array[mask] = pad_value
+        return array
+
+    def transform(self, results: dict):
+        if np.random.rand() < self.prob:
+            erase_ratio = np.random.uniform(0, self.max_ratio)
+            img_shape = results["img"].squeeze().shape
+            mask = self._generate_mask(img_shape, erase_ratio)
+            results["erase_mask"] = mask
+            
+            results["img"] = self._apply_mask(results["img"], mask, self.pad_val)
+            if "gt_seg_map" in results:
+                results["gt_seg_map"] = self._apply_mask(results["gt_seg_map"], mask, self.seg_pad_val)
+        
+        else:
+            results["erase_mask"] = np.zeros_like(results["img"].squeeze())
+        
+        return results
+
+
+class Identity(BaseTransform):
+    def transform(self, results: dict):
         return results
