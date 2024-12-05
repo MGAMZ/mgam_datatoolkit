@@ -113,13 +113,11 @@ class AutoEncoderSelfSup(BaseSelfSupervisor):
         *args,
         **kwargs,
     ) -> None:
-
         encoder_decoder = torch.nn.Sequential(
             MODELS.build(encoder),
             MODELS.build(neck) if neck is not None else torch.nn.Identity(),
             MODELS.build(decoder) if decoder is not None else torch.nn.Identity(),
         )
-
         super().__init__(
             backbone=encoder_decoder,
             neck=None,
@@ -133,10 +131,7 @@ class AutoEncoderSelfSup(BaseSelfSupervisor):
 
     def _get_whole_model(self) -> torch.nn.Module:
         if self.with_neck:
-            if self.with_head:
-                return torch.nn.Sequential(self.backbone, self.neck, self.head)
-            else:
-                return torch.nn.Sequential(self.backbone, self.neck)
+            return torch.nn.Sequential(self.backbone, self.neck)
         else:
             return self.backbone
 
@@ -208,3 +203,32 @@ class AutoEncoder_MoCoV3(AutoEncoderSelfSup):
         acc = torch.cat(all_gather(acc)).mean()
         losses = dict(loss_MoCoV3=loss, acc_MoCoV3=acc)
         return losses
+
+
+class AutoEncoder_Recon(AutoEncoderSelfSup):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+
+    def loss(
+        self, inputs: list[torch.Tensor], data_samples: list[DataSample], **kwargs
+    ) -> dict[str, torch.Tensor]:
+        """The forward function in training.
+
+        Args:
+            inputs (List[torch.Tensor]): The input images.
+            data_samples (List[DataSample]): All elements required
+                during the forward function.
+
+        Returns:
+            Dict[str, torch.Tensor]: A dictionary of loss components.
+        """
+        assert isinstance(inputs, list)
+        self.backbone: BaseModule
+        self.neck: BaseModule
+        self.head: BaseModule
+        
+        recon = self.backbone(inputs[0])[0]
+        ori = inputs[1]
+        selfsup_loss = self.head.loss(recon, ori)
+        
+        return dict(loss_Recon=selfsup_loss)

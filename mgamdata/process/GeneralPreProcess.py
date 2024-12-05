@@ -568,7 +568,7 @@ class RandomErase(BaseTransform):
         seg_pad_val=0,
         prob: float = 0.5,
     ):
-        self.max_size = max_size if isinstance(max_size, list) else [max_size]
+        self.max_size = max_size if isinstance(max_size, (Sequence)) else [max_size]
         self.pad_val = pad_val
         self.seg_pad_val = seg_pad_val
         self.prob = prob

@@ -173,7 +173,6 @@ class mgam_Standard_Patched_Npz(mgam_Standard_Npz_Structure, mgam_BaseSegDataset
         all_series = [file.replace('.mha', '') 
                       for file in os.listdir(self.data_root)]
         all_series = sorted(all_series, key=lambda x: abs(int(re.search(r'\d+', x).group())))
-        np.random.shuffle(all_series)
         total = len(all_series)
         train_end = int(total * self.SPLIT_RATIO[0])
         val_end = train_end + int(total * self.SPLIT_RATIO[1])
