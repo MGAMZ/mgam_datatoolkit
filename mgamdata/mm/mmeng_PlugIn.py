@@ -22,6 +22,7 @@ from mmengine.runner import (
 )
 from mmengine.runner.runner import ConfigType
 from mmengine.hooks import LoggerHook
+from mmengine.hooks import RuntimeInfoHook as _RuntimeInfoHook
 from mmengine.logging import print_log, MMLogger
 from mmengine.optim.optimizer import AmpOptimWrapper
 from mmengine.model.wrappers import (
@@ -60,7 +61,7 @@ def DynamicRunnerSelection(cfg: ConfigType) -> Runner:
                 )
                 kwargs["strategy"] = strategy
                 kwargs["cfg"]["strategy"] = strategy
-                
+
             super().__init__(**kwargs)
 
         @staticmethod
@@ -146,6 +147,7 @@ def DynamicRunnerSelection(cfg: ConfigType) -> Runner:
 
     return mgam_Runner.from_cfg(cfg)
 
+
 # for debug
 class IterBasedTrainLoop_SupportProfiler(IterBasedTrainLoop):
 
@@ -182,6 +184,7 @@ class IterBasedTrainLoop_SupportProfiler(IterBasedTrainLoop):
                 exit(-5)
         else:
             super().run_iter(data_batch)
+
 
 # support for better class-wise performance logging
 class mgam_PerClassMetricLogger_OnTest(LoggerHook):
@@ -234,6 +237,7 @@ class LoggerJSON(LoggerHook):
 
         super().after_test_epoch(runner, metrics)
 
+
 # better AMP support
 class AmpPatchAccumulateOptimWarpper(AmpOptimWrapper):
 
@@ -268,6 +272,7 @@ class AmpPatchAccumulateOptimWarpper(AmpOptimWrapper):
             self.step(**step_kwargs)
             self.zero_grad(**zero_kwargs)
 
+
 # customized DDP training for our task.
 class RemasteredDDP(MMDistributedDataParallel):
     """
@@ -290,6 +295,7 @@ class RemasteredDDP(MMDistributedDataParallel):
             return super().__getattr__(name)
         except:
             return getattr(self.module, name)
+
 
 # customized FSDP training for our task.
 class RemasteredFSDP(MMFullyShardedDataParallel):
@@ -334,3 +340,13 @@ class RatioSampler(DefaultSampler):
 
     def __len__(self):
         return int(super().__len__() * self.use_sample_ratio)
+
+
+class RuntimeInfoHook(_RuntimeInfoHook):
+    def after_train_iter(
+        self, runner: Runner, batch_idx: int, data_batch: dict, outputs: dict
+    ) -> None:
+        if outputs is not None:
+            for key, value in outputs.items():
+                if 'loss' in key:
+                    runner.message_hub.update_scalar(f"train/{key}", value)

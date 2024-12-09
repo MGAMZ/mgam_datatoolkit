@@ -642,10 +642,12 @@ class RandomDiscreteErase(BaseTransform):
         self,
         max_ratio: float,
         pad_val: float | int,
+        min_ratio: float = 0.,
         seg_pad_val=0,
         prob: float = 0.5,
     ):
         assert 0 < max_ratio <= 1
+        self.min_ratio = min_ratio
         self.max_ratio = max_ratio
         self.pad_val = pad_val
         self.seg_pad_val = seg_pad_val
@@ -668,7 +670,7 @@ class RandomDiscreteErase(BaseTransform):
 
     def transform(self, results: dict):
         if np.random.rand() < self.prob:
-            erase_ratio = np.random.uniform(0, self.max_ratio)
+            erase_ratio = np.random.uniform(self.min_ratio, self.max_ratio)
             img_shape = results["img"].squeeze().shape
             mask = self._generate_mask(img_shape, erase_ratio)
             results["erase_mask"] = mask

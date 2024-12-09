@@ -2,12 +2,13 @@ from abc import abstractmethod
 from functools import partial
 import os
 import pdb
-from typing_extensions import Literal
+from typing_extensions import Literal, OrderedDict
 
 import torch
 from torch import Tensor
 from torch.nn import PixelUnshuffle as PixelUnshuffle2D
 
+from mmengine.utils.misc import is_list_of
 from mmengine.model.base_module import BaseModule
 from mmengine.dist import all_gather, get_rank, is_main_process
 from mmpretrain.registry import MODELS
@@ -129,7 +130,8 @@ class ReconstructionHead(BaseModule):
     def loss(self, recon: Tensor, ori: Tensor):
         proj = self.conv_proj(recon)
         loss = self.criterion(proj.squeeze(), ori.squeeze())
-        return {f'loss_recon_{self.loss_type}': loss}
+        return {f'loss_recon_{self.loss_type}': loss,
+                'reconed': proj}
 
 
 class AutoEncoderSelfSup(BaseSelfSupervisor):
@@ -166,6 +168,29 @@ class AutoEncoderSelfSup(BaseSelfSupervisor):
             return torch.nn.Sequential(self.backbone, self.neck)
         else:
             return self.backbone
+
+    def parse_losses(
+        self, losses: dict,
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        log_vars = []
+        for loss_name, loss_value in losses.items():
+            if 'loss' in loss_name:
+                if isinstance(loss_value, torch.Tensor):
+                    log_vars.append([loss_name, loss_value.mean()])
+                elif is_list_of(loss_value, torch.Tensor):
+                    log_vars.append(
+                        [loss_name,
+                        sum(_loss.mean() for _loss in loss_value)])
+                else:
+                    raise TypeError(
+                        f'{loss_name} is not a tensor or list of tensors')
+            else:
+                log_vars.append([loss_name, loss_value])
+
+        loss = sum(value for key, value in log_vars if 'loss' in key)
+        log_vars.insert(0, ['loss', loss])
+        log_vars = OrderedDict(log_vars)  # type: ignore
+        return loss, log_vars  # type: ignore
 
     @abstractmethod
     def loss(
@@ -258,6 +283,6 @@ class AutoEncoder_Recon(AutoEncoderSelfSup):
         recon = self.backbone(inputs[0])[0]
         ori = inputs[1]
         selfsup_loss = self.head.loss(recon, ori)
+        
         losses.update(selfsup_loss)
-
         return losses

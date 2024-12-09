@@ -145,25 +145,24 @@ class PreCropper3D:
         for crop_idx, (img_array, anno_array) in enumerate(
             self.Crop3D(cropper, image_itk_path, anno_itk_path)
         ):
-            save_path = os.path.join(
-                save_folder, f"{os.path.basename(save_folder)}_{crop_idx}.npz"
-            )
+            save_path = os.path.join(save_folder, f"{crop_idx}.npz")
             np.savez_compressed(
                 file=save_path,
                 img=img_array,
                 gt_seg_map=anno_array if anno_array is not None else np.nan,
             )
+
             existed_classes[os.path.basename(save_path)] = (
                 np.unique(anno_array).tolist() if anno_array is not None else None
             )
 
         num_patches = len(existed_classes)
-        anno_available = anno_itk_path is not None and num_patches>0
+        anno_available = anno_itk_path is not None and num_patches > 0
 
         json.dump(
             {
                 "series_id": os.path.basename(save_folder),
-                "shape": img_array.shape if num_patches>0 else None,
+                "shape": img_array.shape if num_patches > 0 else None,
                 "num_patches": num_patches,
                 "anno_available": anno_available,
                 "class_within_patch": existed_classes,
@@ -174,10 +173,15 @@ class PreCropper3D:
             ),
             indent=4,
         )
+        path_index = [
+            os.path.relpath(os.path.join(save_folder, sample_basepath), os.path.dirname(save_folder))
+            for sample_basepath in existed_classes.keys()
+        ]
         return {
             os.path.basename(save_folder): {
                 "num_patches": num_patches,
                 "anno_available": anno_available,
+                "sample_paths": path_index
             }
         }
 
@@ -204,9 +208,9 @@ class PreCropper3D:
         }
 
         num_cropped = (
-                int(np.prod(np.array(image_array.shape) / np.array(cropper.crop_size)))
-                * self.args.num_cropped_ratio
-            )
+            int(np.prod(np.array(image_array.shape) / np.array(cropper.crop_size)))
+            * self.args.num_cropped_ratio
+        )
 
         for i in range(num_cropped):
             # if no label, can't check cat_max_ratio
@@ -264,6 +268,7 @@ class StandardMhaCropper3D(PreCropper3D):
 
 class SemiSupervisedMhaCropper3D(PreCropper3D):
     """Use this class when there are some sample with no annoatations."""
+
     def parse_task(self):
         task_list = []
         image_mha_folder = os.path.join(self.args.source_mha_folder, "image")
