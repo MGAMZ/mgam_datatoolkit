@@ -5,6 +5,7 @@ import pdb
 from typing_extensions import Literal
 
 import torch
+from torch import Tensor
 from torch.nn import PixelUnshuffle as PixelUnshuffle2D
 
 from mmengine.model.base_module import BaseModule
@@ -17,14 +18,15 @@ from mmpretrain.models.selfsup.mocov3 import CosineEMA
 from mgamdata.mm.mmseg_Dev3D import PixelUnshuffle1D, PixelUnshuffle3D
 
 
-
 class MoCoV3Head_WithAcc(BaseModule):
-    def __init__(self, 
-                 embed_dim:int, 
-                 proj_channel:int, 
-                 dim:Literal['1d','2d','3d'], 
-                 loss: dict, 
-                 temperature: float = 1.0) -> None:
+    def __init__(
+        self,
+        embed_dim: int,
+        proj_channel: int,
+        dim: Literal["1d", "2d", "3d"],
+        loss: dict,
+        temperature: float = 1.0,
+    ) -> None:
         super().__init__()
         self.embed_dim = embed_dim
         self.proj_channel = proj_channel
@@ -36,44 +38,46 @@ class MoCoV3Head_WithAcc(BaseModule):
         self.target_proj = self._init_proj()
 
     def _init_proj(self):
-        if self.dim == '1d':
+        if self.dim == "1d":
             proj_conv = torch.nn.Conv1d
             avgpool = partial(torch.nn.AdaptiveAvgPool1d, output_size=(1))
             pus = PixelUnshuffle1D
-        elif self.dim == '2d':
+        elif self.dim == "2d":
             proj_conv = torch.nn.Conv2d
-            avgpool = partial(torch.nn.AdaptiveAvgPool2d, output_size=(1,1))
+            avgpool = partial(torch.nn.AdaptiveAvgPool2d, output_size=(1, 1))
             pus = PixelUnshuffle2D
-        elif self.dim == '3d':
+        elif self.dim == "3d":
             proj_conv = torch.nn.Conv3d
-            avgpool = partial(torch.nn.AdaptiveAvgPool3d, output_size=(1,1,1))
+            avgpool = partial(torch.nn.AdaptiveAvgPool3d, output_size=(1, 1, 1))
             pus = PixelUnshuffle3D
         else:
             raise NotImplementedError(f"Invalid Dim Setting: {self.dim}")
-        
+
         return torch.nn.Sequential(
-            pus(downscale_factor=self.down_r), # C_out = factor**dim * C_in
-            proj_conv(self.down_r**int(self.dim[0]) * self.embed_dim, self.proj_channel, 1), 
-            torch.nn.GELU(), 
-            avgpool(), 
-            torch.nn.Flatten(start_dim=1), 
+            pus(downscale_factor=self.down_r),  # C_out = factor**dim * C_in
+            proj_conv(
+                self.down_r ** int(self.dim[0]) * self.embed_dim, self.proj_channel, 1
+            ),
+            torch.nn.GELU(),
+            avgpool(),
+            torch.nn.Flatten(start_dim=1),
         )
 
-    def loss(self, base_out: torch.Tensor,
-             momentum_out: torch.Tensor
-             ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def loss(
+        self, base_out: Tensor, momentum_out: Tensor
+    ) -> tuple[Tensor, Tensor, Tensor]:
         """Generate loss.
 
         Args:
-            base_out (torch.Tensor): [N, C, ...] features from base_encoder.
-            momentum_out (torch.Tensor): [N, C, ...] features from momentum_encoder.
+            base_out (Tensor): [N, C, ...] features from base_encoder.
+            momentum_out (Tensor): [N, C, ...] features from momentum_encoder.
 
         Returns:
-            torch.Tensor: The loss tensor.
+            Tensor: The loss tensor.
         """
         # predictor computation
-        pred = self.predictor(base_out) # NxC
-        target = self.target_proj(base_out) # NxC
+        pred = self.predictor(base_out)  # NxC
+        target = self.target_proj(base_out)  # NxC
 
         # normalize
         pred = torch.nn.functional.normalize(pred, dim=1)
@@ -83,21 +87,49 @@ class MoCoV3Head_WithAcc(BaseModule):
         target = torch.cat(all_gather(target), dim=0)
 
         # Einstein sum is more intuitive
-        logits = torch.einsum('nc,mc->nm', [pred, target]) / self.temperature
+        logits = torch.einsum("nc,mc->nm", [pred, target]) / self.temperature
 
         """
         使用一个混淆矩阵来表达经过两组不同的变换之后的同batch样本之间的相似度
         理想情况下，模型应当能识别出同样的样本，因此这个矩阵应当是对角线上有较大值，其他地方为较小值
         从分类任务混淆矩阵的角度出发，这代表着样本的gt标签就是它们自身的index
         """
-        
+
         # generate labels
         batch_size = logits.shape[0]
-        labels = (torch.arange(batch_size, dtype=torch.long) +
-                  batch_size * get_rank()).to(logits.device)
+        labels = (
+            torch.arange(batch_size, dtype=torch.long) + batch_size * get_rank()
+        ).to(logits.device)
 
         loss = self.loss_module(logits, labels)
         return loss, logits, labels
+
+
+class ReconstructionHead(BaseModule):
+    def __init__(
+        self, 
+        model_out_channels: int, 
+        recon_channels: int, 
+        dim: Literal['1d','2d','3d'], 
+        reduction: str = 'mean', 
+        loss_type: Literal['L1','L2'] = 'L1', 
+    ):
+        super().__init__()
+        self.model_out_channels = model_out_channels
+        self.recon_channels = recon_channels
+        self.loss_type = loss_type
+        self.dim = dim
+        self.criterion = (
+            torch.nn.L1Loss(reduction=reduction)
+            if loss_type == "L1"
+            else torch.nn.MSELoss(reduction=reduction)
+        )
+        self.conv_proj = eval(f"torch.nn.Conv{dim}")(model_out_channels, recon_channels, 1)
+
+    def loss(self, recon: Tensor, ori: Tensor):
+        proj = self.conv_proj(recon)
+        loss = self.criterion(proj.squeeze(), ori.squeeze())
+        return {f'loss_recon_{self.loss_type}': loss}
 
 
 class AutoEncoderSelfSup(BaseSelfSupervisor):
@@ -137,8 +169,8 @@ class AutoEncoderSelfSup(BaseSelfSupervisor):
 
     @abstractmethod
     def loss(
-        self, inputs: list[torch.Tensor], data_samples: list[DataSample], **kwargs
-    ) -> dict[str, torch.Tensor]: ...
+        self, inputs: list[Tensor], data_samples: list[DataSample], **kwargs
+    ) -> dict[str, Tensor]: ...
 
 
 class AutoEncoder_MoCoV3(AutoEncoderSelfSup):
@@ -148,34 +180,34 @@ class AutoEncoder_MoCoV3(AutoEncoderSelfSup):
         self.momentum_encoder = CosineEMA(
             self._get_whole_model(), momentum=base_momentum
         )
-    
+
     @staticmethod
-    def calc_acc(logits:torch.Tensor, labels:torch.Tensor) -> torch.Tensor:
+    def calc_acc(logits: Tensor, labels: Tensor) -> Tensor:
         """Calculate the accuracy of the model.
-        
+
         Args:
-            logits (torch.Tensor): The output logits, shape (N, C).
-            labels (torch.Tensor): The target labels, shape (N).
-        
+            logits (Tensor): The output logits, shape (N, C).
+            labels (Tensor): The target labels, shape (N).
+
         Returns
-            torch.Tensor: The accuracy of the model.
+            Tensor: The accuracy of the model.
         """
         preds = torch.argmax(logits, dim=1)
         acc = torch.sum(preds == labels).float() / labels.shape[0]
         return acc.unsqueeze(0)
-    
+
     def loss(
-        self, inputs: list[torch.Tensor], data_samples: list[DataSample], **kwargs
-    ) -> dict[str, torch.Tensor]:
+        self, inputs: list[Tensor], data_samples: list[DataSample], **kwargs
+    ) -> dict[str, Tensor]:
         """The forward function in training.
 
         Args:
-            inputs (List[torch.Tensor]): The input images.
+            inputs (List[Tensor]): The input images.
             data_samples (List[DataSample]): All elements required
                 during the forward function.
 
         Returns:
-            Dict[str, torch.Tensor]: A dictionary of loss components.
+            Dict[str, Tensor]: A dictionary of loss components.
         """
         assert isinstance(inputs, list)
         self.backbone: BaseModule
@@ -206,29 +238,26 @@ class AutoEncoder_MoCoV3(AutoEncoderSelfSup):
 
 
 class AutoEncoder_Recon(AutoEncoderSelfSup):
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
-
     def loss(
-        self, inputs: list[torch.Tensor], data_samples: list[DataSample], **kwargs
-    ) -> dict[str, torch.Tensor]:
+        self, inputs: list[Tensor], data_samples: list[DataSample], **kwargs
+    ) -> dict[str, Tensor]:
         """The forward function in training.
 
         Args:
-            inputs (List[torch.Tensor]): The input images.
+            inputs (List[Tensor]): The input images.
             data_samples (List[DataSample]): All elements required
                 during the forward function.
 
         Returns:
-            Dict[str, torch.Tensor]: A dictionary of loss components.
+            Dict[str, Tensor]: A dictionary of loss components.
         """
         assert isinstance(inputs, list)
         self.backbone: BaseModule
-        self.neck: BaseModule
         self.head: BaseModule
-        
+        losses = {}
         recon = self.backbone(inputs[0])[0]
         ori = inputs[1]
         selfsup_loss = self.head.loss(recon, ori)
-        
-        return dict(loss_Recon=selfsup_loss)
+        losses.update(selfsup_loss)
+
+        return losses
