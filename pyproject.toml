@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mgamdata"
-version = "1.6.2.241203"
+version = "1.6.3.241206"
 requires-python = ">= 3.12"
 authors = [
   {name = "Yiqin Zhang", email = "312065559@qq.com"},
@@ -36,6 +36,11 @@ dependencies = [
   "HolisticTraceAnalysis",
   "pylint-django",
   "tensorrt",
+  "openslide-python",
+  "openslide-bin",
+  "h5py",
+  "timm",
+  "opensdpc",
 ]
 
 [project.scripts]

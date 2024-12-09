@@ -6,12 +6,11 @@ from bdb import BdbQuit
 from os import path as osp
 from colorama import Fore, Style
 
-from mmengine.dist import master_only
 from mmengine.config import DictAction
 
 from mgamdata.mm import MM_WORK_DIR_ROOT, MM_TEST_DIR_ROOT, MM_CONFIG_ROOT
 
-SUPPORTED_MODELS = ['MedNeXt']
+SUPPORTED_MODELS = os.environ['supported_models'].split(',')
 
 
 class auto_runner:
