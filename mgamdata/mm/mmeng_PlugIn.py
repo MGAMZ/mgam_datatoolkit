@@ -143,7 +143,7 @@ def DynamicRunnerSelection(cfg: ConfigType) -> Runner:
             elif self._load_from is not None:
                 self.load_checkpoint(self._load_from)
                 self._has_loaded = True
-
+    
     return mgam_Runner.from_cfg(cfg)
 
 # for debug
