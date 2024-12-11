@@ -19,13 +19,13 @@ from mmseg.datasets.basesegdataset import BaseSegDataset
 from mmseg.engine.hooks import SegVisualizationHook
 
 from . import (
-    CLASS_MAP_ABBR, LABEL_COLOR_DICT,
+    CLASS_MAP, CLASS_MAP_ABBR, LABEL_COLOR_DICT,
     HUANGSHAN_HOSPITAL_SERIES_UIDS,
     RENJI_HOSPITAL_DUPLICATED_SERIES_UIDS,
     ZHEJIANG_HOSPITAL_SERIES_UIDS,
     WENZHOU_HOSPITAL_SERIES_UIDS,
 )
-
+from ..base import mgam_SemiSup_Precropped_Npz, mgam_SemiSup_3D_Mha
 
 
 
@@ -110,7 +110,6 @@ class CT_2D_Sarcopenia(BaseSegDataset):
         return data_list
 
 
-
 class CT_2D_Sar_CrossFold(CT_2D_Sarcopenia):
     def __init__(self, 
                  use_folds:int|list[int], 
@@ -136,7 +135,6 @@ class CT_2D_Sar_CrossFold(CT_2D_Sarcopenia):
             yield series
 
 
-
 class CT_2D_Sar_CrossFold_OnlyRenJiData(CT_2D_Sar_CrossFold):
     def _indexing(self):
         series = super()._indexing()
@@ -156,7 +154,6 @@ class CT_2D_Sar_CrossFold_OnlyRenJiData(CT_2D_Sar_CrossFold):
                 continue
             renji_series.append(serial)
         return renji_series
-
 
 
 class CT_VisualizationHook(SegVisualizationHook):
@@ -237,7 +234,6 @@ class CT_VisualizationHook(SegVisualizationHook):
                 step=self._test_index)
 
 
-
 @deprecated("应当从sitk toolkit中继承或调用，确保一致性")
 def MhaResampleToTarget(source_image:sitk.Image,
                         resample_type:str,
@@ -287,4 +283,16 @@ def MhaResampleToTarget(source_image:sitk.Image,
     return resampled_image
 
 
+# 2024.12.09: Update Sarcopenia Dataset with other latest dataset implementations
+
+class Sarcopenia_base:
+    METAINFO = dict(classes=list(CLASS_MAP.values()))
+
+
+class Sarcopenia_Precrop_Npz(Sarcopenia_base, mgam_SemiSup_Precropped_Npz):
+    pass
+
+
+class Sarcopenia_Mha(Sarcopenia_base, mgam_SemiSup_3D_Mha):
+    pass
 

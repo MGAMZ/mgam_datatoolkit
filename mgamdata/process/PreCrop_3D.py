@@ -174,14 +174,16 @@ class PreCropper3D:
             indent=4,
         )
         path_index = [
-            os.path.relpath(os.path.join(save_folder, sample_basepath), os.path.dirname(save_folder))
+            os.path.relpath(
+                os.path.join(save_folder, sample_basepath), os.path.dirname(save_folder)
+            )
             for sample_basepath in existed_classes.keys()
         ]
         return {
             os.path.basename(save_folder): {
                 "num_patches": num_patches,
                 "anno_available": anno_available,
-                "sample_paths": path_index
+                "sample_paths": path_index,
             }
         }
 
