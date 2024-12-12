@@ -56,9 +56,9 @@ class MedNeXtBlock(nn.Module):
                 num_channels=in_channels
             )
         elif norm_type == 'layer':
-            self.norm = nn.LayerNorm(
+            self.norm = LayerNorm(
                 normalized_shape=in_channels, 
-                elementwise_affine=True
+                data_format='channels_first'
             )
 
         # Second convolution (Expansion) layer with 1x1x1

@@ -691,13 +691,12 @@ class Identity(BaseTransform):
 
 
 class Resample(BaseTransform):
-    def __init__(self, size: list[float], mode: str = "linear", field: str = "img"):
+    def __init__(self, size: list[float], mode: str = "bilinear", field: str = "img"):
         self.size = size
         self.mode = mode
         self.field = field
     
     def transform(self, results: dict):
-        pdb.set_trace()
-        results[self.field] = F.interpolate(results[self.field], size=self.size, mode=self.mode)
+        results[self.field] = F.interpolate(results[self.field][None, None], size=self.size, mode=self.mode).squeeze()
         return results
 

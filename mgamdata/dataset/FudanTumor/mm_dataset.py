@@ -5,6 +5,7 @@ import pdb
 import torch
 import numpy as np
 import pandas as pd
+from sklearn.preprocessing import MinMaxScaler
 
 from mmengine.logging import print_log, MMLogger
 from mmpretrain.datasets.base_dataset import BaseDataset
@@ -40,6 +41,7 @@ class WSL_Dataset(BaseDataset):
         self.csv_path = anno
         self.data_root = data_root
         self._load()
+        self._norm()
         
         super(WSL_Dataset, self).__init__(
             ann_file="", data_root=data_root, *args, **kwargs
@@ -85,6 +87,11 @@ class WSL_Dataset(BaseDataset):
             self.anno = self.anno.iloc[train_size + val_size :]
         else:
             raise ValueError(f"Invalid split mode: {self.split}")
+
+    def _norm(self):
+        scaler = MinMaxScaler()
+        columns_to_scale = self.anno.columns.difference(['slide_id'])
+        self.anno[columns_to_scale] = scaler.fit_transform(self.anno[columns_to_scale])
 
     def _parse_sample(self, sample: pd.Series) -> tuple:
         # 寻找列包含“标签”的列，并取出该部分数据，组成np.ndarray

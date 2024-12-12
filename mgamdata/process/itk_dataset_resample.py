@@ -97,20 +97,17 @@ def resample_standard_dataset(
             leave=False,
             dynamic_ncols=True,
         ) as pbar:
-            res = [
+            for i in range(len(image_itk_paths)):
                 resample_one_sample(
-                    (
-                        image_itk_paths[i],
-                        label_itk_paths[i],
-                        spacing,
-                        dest_image_folder,
-                        dest_label_folder,
-                    )
+                (
+                    image_itk_paths[i],
+                    label_itk_paths[i],
+                    spacing,
+                    dest_image_folder,
+                    dest_label_folder,
                 )
-                for i in range(len(image_itk_paths))
-            ]
+            )
             pbar.update(len(image_itk_paths))
-    return res
 
 
 def parse_args():
