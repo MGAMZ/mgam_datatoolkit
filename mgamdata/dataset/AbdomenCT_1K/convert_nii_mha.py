@@ -57,6 +57,7 @@ def convert_and_save_nii_to_mha(input_dir: str,
                                 spacing:Sequence[float|int]|None=None,
                                 size:Sequence[float|int]|None=None):
     task_list = []
+    input_dir = os.path.join(input_dir, 'image')
     for series_name in os.listdir(input_dir):
         if series_name.endswith('.nii.gz'):
             series_nii_image_path = os.path.join(input_dir, series_name)
