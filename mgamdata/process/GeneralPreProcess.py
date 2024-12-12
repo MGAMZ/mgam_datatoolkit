@@ -688,3 +688,16 @@ class RandomDiscreteErase(BaseTransform):
 class Identity(BaseTransform):
     def transform(self, results: dict):
         return results
+
+
+class Resample(BaseTransform):
+    def __init__(self, size: list[float], mode: str = "linear", field: str = "img"):
+        self.size = size
+        self.mode = mode
+        self.field = field
+    
+    def transform(self, results: dict):
+        pdb.set_trace()
+        results[self.field] = F.interpolate(results[self.field], size=self.size, mode=self.mode)
+        return results
+

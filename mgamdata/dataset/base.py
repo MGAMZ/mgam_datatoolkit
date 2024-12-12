@@ -89,7 +89,7 @@ class mgam_Standard_3D_Mha(mgam_BaseSegDataset):
         all_series = [
             file.replace(".mha", "")
             for file in os.listdir(os.path.join(self.data_root_mha, "label"))
-            if file.endswith("mha")
+            if file.endswith(".mha")
         ]
         all_series = sorted(
             all_series, key=lambda x: abs(int(re.search(r"\d+", x).group()))
@@ -166,9 +166,12 @@ class mgam_SemiSup_Precropped_Npz(mgam_Standard_Precropped_Npz):
                 continue
 
             series_folder: str = os.path.join(self.data_root, series)
-            series_meta = orjson.loads(
-                open(os.path.join(series_folder, "SeriesMeta.json"), "r").read()
-            )
+            try:
+                series_meta = orjson.loads(
+                    open(os.path.join(series_folder, "SeriesMeta.json"), "r").read()
+                )
+            except FileNotFoundError:
+                pdb.set_trace()
             patch_npz_files = series_meta["class_within_patch"].keys()
             for sample in [
                 os.path.join(series_folder, file) for file in patch_npz_files

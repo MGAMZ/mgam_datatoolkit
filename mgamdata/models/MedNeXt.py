@@ -11,97 +11,104 @@ from ..mm.mmseg_Dev3D import BaseDecodeHead_3D
 
 
 
+import torch
+import torch.nn as nn
+
 class MedNeXtBlock(nn.Module):
-
     def __init__(self, 
-                in_channels:int, 
-                out_channels:int, 
-                exp_r:int=4, 
-                kernel_size:int=7, 
-                do_res:int=True,
-                norm_type:str = 'group',
-                n_groups:int | None = None,
-                dim = '3d',
-                grn = False
+                 in_channels:int, 
+                 out_channels:int, 
+                 exp_r:int=4, 
+                 kernel_size:int=7, 
+                 do_res:bool=True,
+                 norm_type:str='group',
+                 n_groups:int=None,
+                 dim:str='3d',
+                 grn:bool=False
                 ):
-
         super().__init__()
 
         self.do_res = do_res
 
-        assert dim in ['2d', '3d']
+        assert dim in ['1d', '2d', '3d']
         self.dim = dim
-        if self.dim == '2d':
+        if self.dim == '1d':
+            conv = nn.Conv1d
+        elif self.dim == '2d':
             conv = nn.Conv2d
         elif self.dim == '3d':
             conv = nn.Conv3d
-            
+
         # First convolution layer with DepthWise Convolutions
         self.conv1 = conv(
-            in_channels = in_channels,
-            out_channels = in_channels,
-            kernel_size = kernel_size,
-            stride = 1,
-            padding = kernel_size//2,
-            groups = in_channels if n_groups is None else n_groups,
+            in_channels=in_channels,
+            out_channels=in_channels,
+            kernel_size=kernel_size,
+            stride=1,
+            padding=kernel_size//2,
+            groups=in_channels if n_groups is None else n_groups,
         )
 
         # Normalization Layer. GroupNorm is used by default.
-        if norm_type=='group':
+        if norm_type == 'group':
             self.norm = nn.GroupNorm(
                 num_groups=in_channels, 
                 num_channels=in_channels
-                )
-        elif norm_type=='layer':
-            self.norm = LayerNorm(
+            )
+        elif norm_type == 'layer':
+            self.norm = nn.LayerNorm(
                 normalized_shape=in_channels, 
-                data_format='channels_first'
-                )
+                elementwise_affine=True
+            )
 
-        # Second convolution (Expansion) layer with Conv3D 1x1x1
+        # Second convolution (Expansion) layer with 1x1x1
         self.conv2 = conv(
-            in_channels = in_channels,
-            out_channels = exp_r*in_channels,
-            kernel_size = 1,
-            stride = 1,
-            padding = 0
+            in_channels=in_channels,
+            out_channels=exp_r*in_channels,
+            kernel_size=1,
+            stride=1,
+            padding=0
         )
         
         # GeLU activations
         self.act = nn.GELU()
         
-        # Third convolution (Compression) layer with Conv3D 1x1x1
+        # Third convolution (Compression) layer with 1x1x1
         self.conv3 = conv(
-            in_channels = exp_r*in_channels,
-            out_channels = out_channels,
-            kernel_size = 1,
-            stride = 1,
-            padding = 0
+            in_channels=exp_r*in_channels,
+            out_channels=out_channels,
+            kernel_size=1,
+            stride=1,
+            padding=0
         )
-
+        
         self.grn = grn
+        
         if grn:
             if dim == '3d':
-                self.grn_beta = nn.Parameter(torch.zeros(1,exp_r*in_channels,1,1,1), requires_grad=True)
-                self.grn_gamma = nn.Parameter(torch.zeros(1,exp_r*in_channels,1,1,1), requires_grad=True)
+                self.grn_beta = nn.Parameter(torch.zeros(1, exp_r*in_channels, 1, 1, 1), requires_grad=True)
+                self.grn_gamma = nn.Parameter(torch.zeros(1, exp_r*in_channels, 1, 1, 1), requires_grad=True)
             elif dim == '2d':
-                self.grn_beta = nn.Parameter(torch.zeros(1,exp_r*in_channels,1,1), requires_grad=True)
-                self.grn_gamma = nn.Parameter(torch.zeros(1,exp_r*in_channels,1,1), requires_grad=True)
+                self.grn_beta = nn.Parameter(torch.zeros(1, exp_r*in_channels, 1, 1), requires_grad=True)
+                self.grn_gamma = nn.Parameter(torch.zeros(1, exp_r*in_channels, 1, 1), requires_grad=True)
+            elif dim == '1d':
+                self.grn_beta = nn.Parameter(torch.zeros(1, exp_r*in_channels, 1), requires_grad=True)
+                self.grn_gamma = nn.Parameter(torch.zeros(1, exp_r*in_channels, 1), requires_grad=True)
 
- 
     def forward(self, x, dummy_tensor=None):
-        
         x1 = x
         x1 = self.conv1(x1)
         x1 = self.act(self.conv2(self.norm(x1)))
         if self.grn:
             # gamma, beta: learnable affine transform parameters
-            # X: input of shape (N,C,H,W,D)
+            # X: input shape based on dim
             if self.dim == '3d':
                 gx = torch.norm(x1, p=2, dim=(-3, -2, -1), keepdim=True)
             elif self.dim == '2d':
                 gx = torch.norm(x1, p=2, dim=(-2, -1), keepdim=True)
-            nx = gx / (gx.mean(dim=1, keepdim=True)+1e-6)
+            elif self.dim == '1d':
+                gx = torch.norm(x1, p=2, dim=-1, keepdim=True)
+            nx = gx / (gx.mean(dim=1, keepdim=True) + 1e-6)
             x1 = self.grn_gamma * (x1 * nx) + self.grn_beta + x1
         x1 = self.conv3(x1)
         if self.do_res:
