@@ -8,7 +8,7 @@ import numpy as np
 import SimpleITK as sitk
 
 from mgamdata.io.nii_toolkit import convert_nii_sitk, merge_masks
-from mgamdata.io.sitk_toolkit import sitk_resample_to_spacing_v2, sitk_resample_to_size
+from mgamdata.io.sitk_toolkit import sitk_resample_to_spacing, sitk_resample_to_size
 from mgamdata.dataset.Totalsegmentator.meta import CLASS_INDEX_MAP
 
 
@@ -31,8 +31,8 @@ def convert_one_case(args):
     
     if spacing is not None:
         assert size is None, "Cannot set both spacing and size."
-        input_image_mha = sitk_resample_to_spacing_v2(input_image_mha, spacing, 'image')
-        merged_itk = sitk_resample_to_spacing_v2(merged_itk, spacing, 'label')
+        input_image_mha = sitk_resample_to_spacing(input_image_mha, spacing, 'image')
+        merged_itk = sitk_resample_to_spacing(merged_itk, spacing, 'label')
     if size is not None:
         assert spacing is None, "Cannot set both spacing and size."
         input_image_mha = sitk_resample_to_size(input_image_mha, size, 'image')
