@@ -88,7 +88,7 @@ class AccuCount(BaseMetric):
 
 
 class CellCounter(EncoderDecoder):
-    def __init__(self, amplify, *args, **kwargs):
+    def __init__(self, amplify:int, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.amplify = amplify
 

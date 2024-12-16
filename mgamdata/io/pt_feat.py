@@ -21,5 +21,5 @@ class FuseFeat(BaseTransform):
         
         if "csv" in self.field:
             results["feat_csv"] = torch.from_numpy(results["feat_csv"])
-        
+
         return results

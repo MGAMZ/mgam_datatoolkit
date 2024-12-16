@@ -2,6 +2,7 @@ import pdb
 
 import torch
 from torch import nn
+from mmcv.transforms import BaseTransform
 
 from mmengine.model.base_model import BaseDataPreprocessor
 from mmpretrain.datasets.transforms.formatting import PackInputs, DataSample
@@ -33,7 +34,7 @@ class Classifier(ImageClassifier):
     ):
         if mode == "tensor":
             feats = self.extract_feat(inputs, data_samples)
-            return self.head(feats) if self.with_head else feats
+            return self.head(feats) if self.with_head else feats # type:ignore
         elif mode == "loss":
             return self.loss(inputs, data_samples)
         elif mode == "predict":
@@ -52,7 +53,7 @@ class Classifier(ImageClassifier):
         if stage == "backbone":
             return x
         if self.with_neck:
-            x = self.neck(x)
+            x = self.neck(x) # type:ignore
         if stage == "neck":
             return x
 
@@ -99,7 +100,6 @@ class PackTwoFeats(PackInputs):
 
         packed_results["data_samples"] = data_sample
         return packed_results
-
 
 # 第一版模型，用于跑通程序以及简单观察可拟合性
 class MLP(BaseBackbone):
@@ -219,23 +219,25 @@ class YiQin_WeightedPatch(BaseBackbone):
             nn.GELU(),
         )
         self.csv_extractor = nn.Sequential(
-            nn.Linear(NUM_CSV_FEAT, 2 * NUM_CSV_FEAT), 
-            nn.GELU(), 
-            nn.Linear(2 * NUM_CSV_FEAT, 4 * NUM_CSV_FEAT), 
-            nn.GELU(), 
-            nn.Linear(4 * NUM_CSV_FEAT, 4 * NUM_CSV_FEAT), 
-            nn.GELU(), 
+            nn.Linear(NUM_CSV_FEAT, 2 * NUM_CSV_FEAT),
+            nn.GELU(),
+            nn.Linear(2 * NUM_CSV_FEAT, 4 * NUM_CSV_FEAT),
+            nn.GELU(),
+            nn.Linear(4 * NUM_CSV_FEAT, 4 * NUM_CSV_FEAT),
+            nn.GELU(),
         )
         self.fused_extractor = nn.Sequential(
-            nn.Linear(512 + 4 * NUM_CSV_FEAT, out_CLAM_feat_channels*4), 
-            nn.GELU(), 
-            nn.Linear(out_CLAM_feat_channels*4, out_CLAM_feat_channels*2), 
-            nn.GELU(), 
-            nn.Linear(out_CLAM_feat_channels*2, out_CLAM_feat_channels), 
-            nn.GELU(), 
+            nn.Linear(512 + 4 * NUM_CSV_FEAT, out_CLAM_feat_channels * 4),
+            nn.GELU(),
+            nn.Linear(out_CLAM_feat_channels * 4, out_CLAM_feat_channels * 2),
+            nn.GELU(),
+            nn.Linear(out_CLAM_feat_channels * 2, out_CLAM_feat_channels),
+            nn.GELU(),
         )
 
-    def forward(self, inputs: torch.Tensor, data_samples: list[DataSample]):
+    def forward(
+        self, inputs: torch.Tensor, data_samples: list[DataSample]
+    ) -> torch.Tensor:
         """
         Args:
             CLAM_feat (torch.Tensor): [N, C, 1024]
@@ -267,5 +269,39 @@ class YiQin_WeightedPatch(BaseBackbone):
         CSV_feat = self.csv_extractor(CSV_feat)
         concat_feat = torch.cat((channelwise_compressed, CSV_feat), dim=1)
         fused_feat = self.fused_extractor(concat_feat)
-        
+
         return (fused_feat,)
+
+
+class SVM(BaseBackbone):
+    def __init__(self, use_CLAM_feat: bool, use_CSV_feat: bool):
+        super().__init__()
+        self.use_CLAM_feat = use_CLAM_feat
+        self.use_CSV_feat = use_CSV_feat
+
+    def forward(
+        self, inputs: torch.Tensor, data_samples: list[DataSample]
+    ) -> torch.Tensor:
+        """
+        Identify projection, the svm's Linear is implemented in head module,
+        rather in backbone module.
+        """
+        feats = []
+        if self.use_CLAM_feat:
+            feats.append(inputs if inputs.ndim==2 else inputs.mean(dim=1))
+        if self.use_CSV_feat:
+            feats.append(torch.stack([i.feat_csv for i in data_samples]))
+        
+        if len(feats) == 2:
+            feat = torch.cat(feats, dim=1)
+        
+        return (feat,)
+
+
+class Label_for_SVM(BaseTransform):
+    def transform(self, results:dict):
+        l = results["gt_score"]
+        l[l <0.5] = -1
+        l[l >=0.5] = 1
+        results["gt_score"] = l
+        return results

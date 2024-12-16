@@ -15,21 +15,9 @@ from mmseg.models.segmentors import BaseSegmentor
 from mmseg.apis.inference import init_model, _preprare_data
 
 from ..io.sitk_toolkit import LoadDcmAsSitkImage
-from .mmseg_Dev3D import EncoderDecoder_3D
 
 
 INFERENCER_WORK_DIR = "/fileser51/zhangyiqin.sx/mmseg/work_dirs_inferencer/"
-
-
-def visualize(image_array, gt_class_idx, pred_class_idx):
-    fig, ax = plt.subplots(1, 3, figsize=(15, 5))
-    ax[0].imshow(image_array, cmap='gray')
-    ax[0].set_title("Image")
-    ax[1].imshow(gt_class_idx, cmap='tab20')
-    ax[1].set_title("Ground Truth")
-    ax[2].imshow(pred_class_idx, cmap='tab20')
-    ax[2].set_title("Prediction")
-    return fig
 
 
 class Inferencer:
