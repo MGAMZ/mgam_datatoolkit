@@ -5,36 +5,27 @@ import warnings
 from collections.abc import Sequence
 from glob import glob
 from colorama import Style, Fore
-from typing_extensions import deprecated
+from typing_extensions import Literal
 
 import pydicom
-from pydicom import dicomio
 import numpy as np
 import SimpleITK as sitk
 
 
-@deprecated("已在V2版本中实现性能改进")
-def sitk_resample_to_spacing(image: sitk.Image, 
-                             new_spacing:tuple[float, float, float], 
-                             interpolator,
-                             default_value=0.):
-    """ 
-        将一个sitk.Image对象重采样到指定的spacing。
-        本方法的实现效率较差，且细节较多。
-        在v2版本中，对部分功能转移由sitk内置方法实现，可靠性更高。
-    """
-    
-    zoom_factor = np.divide(image.GetSpacing(), new_spacing)
-    new_size = np.asarray(np.ceil(np.round(np.multiply(zoom_factor, image.GetSize()), decimals=5)), dtype=np.int16)
-    offset = calculate_origin_offset(new_spacing, image.GetSpacing())
-    reference_image = sitk_new_blank_image(size=new_size, spacing=new_spacing, direction=image.GetDirection(),
-                                           origin=image.GetOrigin() + offset, default_value=default_value)
-    return sitk_resample_to_image(image, reference_image, interpolator=interpolator,default_value=default_value)
+
+STANDARD_DIRECTION = [1, 0, 0, 0, 1, 0, 0, 0, 1]
+STANDARD_ORIGIN = [0, 0, 0]
+PIXEL_TYPE = lambda field: sitk.sitkInt16 if field == "image" else sitk.sitkUInt8
+INTERPOLATOR = lambda field: (
+    sitk.sitkBSpline5 if field == "image" else sitk.sitkNearestNeighbor
+)
 
 
-def sitk_resample_to_spacing_v2(mha:sitk.Image, 
-                                spacing:Sequence[float], 
-                                field:str):
+def sitk_resample_to_spacing(
+    mha: sitk.Image,
+    spacing: Sequence[float],
+    field: Literal["image", "label"],
+):
     """改进后的重采样方法。
 
     Args:
@@ -42,39 +33,41 @@ def sitk_resample_to_spacing_v2(mha:sitk.Image,
         spacing (tuple[float,float,float]): 新的spacing
         field (str, optional): 重采样的对象。 可选'image', 'label', 'mask'.
                                本参数将决定插值方法和数据格式。
-    
+        standardize (bool, optional): 是否标准化输出的origin和direction. Defaults to False.
+
     Returns:
         sitk.Image: 重采样后的sitk.Image
     """
-    
-    assert field in ['image', 'label', 'mask'], "field must be one of ['image', 'label', 'mask']"
-    
+    assert field in ["image", "label"], "field must be one of ['image', 'label']"
+
     # 计算重采样后的Spacing
     spacing = spacing[::-1]
     original_size = mha.GetSize()
     original_spacing = mha.GetSpacing()
-    spacing_ratio = [original_spacing[i]/spacing[i] for i in range(3)]
-    resampled_size = [int(original_size[i] * spacing_ratio[i])-1 for i in range(3)]
-    
+    original_origin = mha.GetOrigin()
+    spacing_ratio = [original_spacing[i] / spacing[i] for i in range(3)]
+    resampled_size = [int(original_size[i] * spacing_ratio[i]) - 1 for i in range(3)]
+    target_origin = [original_origin[d] + 0.5 * (spacing[d] - original_spacing[d])
+                     for d in range(3)]
     # 执行重采样
-    mha_resampled = sitk.Resample(
+    return sitk.Resample(
         image1=mha,
-        size=resampled_size,# type:ignore
-        interpolator=sitk.sitkBSpline5 if field == 'image' else sitk.sitkNearestNeighbor,
+        size=resampled_size,  # type:ignore
+        interpolator=INTERPOLATOR(field),
         outputSpacing=spacing,
-        outputPixelType=sitk.sitkInt16 if field == 'image' else sitk.sitkUInt8,
-        outputOrigin=mha.GetOrigin(),
+        outputPixelType=PIXEL_TYPE(field),
+        outputOrigin=target_origin,
         outputDirection=mha.GetDirection(),
         transform=sitk.Transform(),
     )
-    
-    return mha_resampled
 
 
-def sitk_resample_to_image(image:sitk.Image, 
-                           reference_image:sitk.Image, 
-                           field='image',
-                           default_value=0.):
+def sitk_resample_to_image(
+    image: sitk.Image,
+    reference_image: sitk.Image,
+    field: Literal["image", "label"],
+    default_value=0.0,
+):
     """重采样一个sitk.Image，对齐到另一个sitk.Image。
 
     Args:
@@ -87,61 +80,109 @@ def sitk_resample_to_image(image:sitk.Image,
     Returns:
         sitk.Image: 重采样后的sitk.Image
     """
-    
-    resample_filter = sitk.ResampleImageFilter()
-    resample_filter.SetInterpolator(sitk.sitkLinear if field == 'image' else sitk.sitkNearestNeighbor)
-    resample_filter.SetTransform(sitk.Transform())
-    resample_filter.SetOutputPixelType(sitk.sitkInt16 if field == 'image' else sitk.sitkUInt8)
-    resample_filter.SetDefaultPixelValue(default_value)
-    resample_filter.SetReferenceImage(reference_image)
-    return resample_filter.Execute(image)
+    return sitk.Resample(
+        image1=image,
+        size=reference_image.GetSize(),
+        interpolator=INTERPOLATOR(field),
+        outputSpacing=reference_image.GetSpacing(),
+        outputPixelType=PIXEL_TYPE(field),
+        outputOrigin=reference_image.GetOrigin(),
+        outputDirection=reference_image.GetDirection(),
+        defaultPixelValue=default_value,
+    )
 
 
-def sitk_resample_to_size(image, new_size:list[float], field='image'):
+def sitk_resample_to_size(
+    image,
+    new_size: list[float],
+    field: Literal["image", "label"],
+):
+    """
+    Args:
+        image (sitk.Image): 输入的sitk.Image
+        new_size (list[float]): 新的大小
+        field (str, optional): 重采样的对象。 可选'image', 'label', 'mask'.
+                               本参数将决定插值方法和数据格式.
+        standardize (bool, optional): 是否标准化输出的origin和direction. Defaults to False.
+
+    Returns:
+        sitk.Image: 重采样后的sitk.Image
+    """
     new_size = new_size[::-1]
     original_size = image.GetSize()
     original_spacing = image.GetSpacing()
+    original_origin = image.GetOrigin()
     if len(new_size) == 2:
         new_size = new_size + [original_size[-1]]
     new_spacing = np.divide(original_spacing, np.divide(new_size, original_size))
-    resampled = sitk.Resample(
+    target_origin = [original_origin[d] + 0.5 * (new_spacing[d] - original_spacing[d])
+                     for d in range(3)]
+
+    return sitk.Resample(
         image1=image,
         size=new_size,
-        interpolator=sitk.sitkLinear if field == 'image' else sitk.sitkNearestNeighbor,
+        interpolator=INTERPOLATOR(field),
         outputSpacing=new_spacing,
-        outputPixelType=sitk.sitkInt16 if field == 'image' else sitk.sitkUInt8,
-        outputOrigin=image.GetOrigin(),
+        outputPixelType=PIXEL_TYPE(field),
+        outputOrigin=target_origin,
         outputDirection=image.GetDirection(),
         transform=sitk.Transform(),
     )
-    return resampled
 
 
-def sitk_new_blank_image(size, spacing, direction, origin, default_value=0.):
-    pdb.set_trace()
-    image = sitk.GetImageFromArray(np.ones(size, dtype=np.float32).T * default_value, isVector=False)
+def sitk_new_blank_image(size, spacing, direction, origin, default_value=0.0):
+    image = sitk.GetImageFromArray(
+        np.ones(size, dtype=np.float32).T * default_value, isVector=False
+    )
     image.SetSpacing(spacing)
     image.SetDirection(direction)
     image.SetOrigin(origin)
     return image
 
 
-def calculate_origin_offset(new_spacing, old_spacing):
-    return np.subtract(new_spacing, old_spacing) / 2.0
+def nii_to_sitk(
+    nii_path: str,
+    field: Literal["image", "label"],
+    value_offset: int | float | None = None,
+) -> sitk.Image:
+    try:
+        sitk_img = sitk.ReadImage(
+            nii_path,
+            outputPixelType=sitk.sitkInt16 if field == "image" else sitk.sitkUInt8,
+        )
+        if value_offset is not None:
+            sitk_img_new = sitk.GetImageFromArray(
+                sitk.GetArrayFromImage(sitk_img) + value_offset
+            )
+            sitk_img_new.CopyInformation(sitk_img)
+            sitk_img = sitk_img_new
+    except Exception as e:
+        raise ValueError(f"Failed to load NIfTI file: {nii_path}.") from e
+
+    return sitk_img
 
 
-def LoadDcmAsSitkImage_EngineeringOrder(dcm_case_path, spacing, sort_by_distance=True
-    ) -> tuple[sitk.Image, 
-         tuple[float, float, float]|None, 
-         tuple[int, int, int]|None,
-         tuple[int, int, int]|None
-    ]:
+def LoadDcmAsSitkImage_EngineeringOrder(
+    dcm_case_path, spacing, sort_by_distance=True
+) -> tuple[
+    sitk.Image,
+    tuple[float, float, float] | None,
+    tuple[int, int, int] | None,
+    tuple[int, int, int] | None,
+]:
     # Spacing: [D, H, W]
-    
+
     class DcmInfo(object):
-        def __init__(self, dcm_path, series_instance_uid, 
-                     acquisition_number, sop_instance_uid, instance_number,
-                     image_orientation_patient, image_position_patient):
+        def __init__(
+            self,
+            dcm_path,
+            series_instance_uid,
+            acquisition_number,
+            sop_instance_uid,
+            instance_number,
+            image_orientation_patient,
+            image_position_patient,
+        ):
             super(DcmInfo, self).__init__()
 
             self.dcm_path = dcm_path
@@ -155,12 +196,14 @@ def LoadDcmAsSitkImage_EngineeringOrder(dcm_case_path, spacing, sort_by_distance
             self.slice_distance = self._cal_distance()
 
         def _cal_distance(self):
-            normal = [self.image_orientation_patient[1] * self.image_orientation_patient[5] -
-                      self.image_orientation_patient[2] * self.image_orientation_patient[4],
-                      self.image_orientation_patient[2] * self.image_orientation_patient[3] -
-                      self.image_orientation_patient[0] * self.image_orientation_patient[5],
-                      self.image_orientation_patient[0] * self.image_orientation_patient[4] -
-                      self.image_orientation_patient[1] * self.image_orientation_patient[3]]
+            normal = [
+                self.image_orientation_patient[1] * self.image_orientation_patient[5]
+                - self.image_orientation_patient[2] * self.image_orientation_patient[4],
+                self.image_orientation_patient[2] * self.image_orientation_patient[3]
+                - self.image_orientation_patient[0] * self.image_orientation_patient[5],
+                self.image_orientation_patient[0] * self.image_orientation_patient[4]
+                - self.image_orientation_patient[1] * self.image_orientation_patient[3],
+            ]
 
             distance = 0
             for i in range(3):
@@ -190,8 +233,15 @@ def LoadDcmAsSitkImage_EngineeringOrder(dcm_case_path, spacing, sort_by_distance
             _image_orientation_patient = dcm.ImageOrientationPatient
             _image_position_patient = dcm.ImagePositionPatient
 
-            dcm_info = DcmInfo(file_path, _series_instance_uid, None, _sop_instance_uid,
-                               _instance_number, _image_orientation_patient, _image_position_patient)
+            dcm_info = DcmInfo(
+                file_path,
+                _series_instance_uid,
+                None,
+                _sop_instance_uid,
+                _instance_number,
+                _image_orientation_patient,
+                _image_position_patient,
+            )
 
             if is_sop_instance_uid_exist(dcm_info, dcm_infos):
                 continue
@@ -205,20 +255,76 @@ def LoadDcmAsSitkImage_EngineeringOrder(dcm_case_path, spacing, sort_by_distance
 
     reader.SetFileNames(dcm_series)
     reader.SetNumberOfWorkUnits(16)
-    sitk_image:sitk.Image = reader.Execute()
-    
+    sitk_image: sitk.Image = reader.Execute()
+
     if spacing is None:
         return sitk_image, None, None, None
-    
+
     original_spacing = sitk_image.GetSpacing()
     original_size = sitk_image.GetSize()
     spacing = spacing[::-1]
-    spacing_ratio = [original_spacing[i]/spacing[i] for i in range(3)]
-    resampled_size = [int(original_size[i] * spacing_ratio[i])-1 for i in range(3)]
-    
+    spacing_ratio = [original_spacing[i] / spacing[i] for i in range(3)]
+    resampled_size = [int(original_size[i] * spacing_ratio[i]) - 1 for i in range(3)]
+
     resampled_mha = sitk.Resample(
+        image1=sitk_image,
+        size=resampled_size,  # type: ignore
+        interpolator=sitk.sitkLinear,
+        outputSpacing=spacing,
+        outputPixelType=sitk.sitkInt16,
+        outputOrigin=sitk_image.GetOrigin(),
+        outputDirection=sitk_image.GetDirection(),
+        transform=sitk.Transform(),
+    )
+
+    return resampled_mha, original_spacing, original_size, resampled_size
+
+
+def LoadDcmAsSitkImage_JianYingOrder(dcm_case_path, spacing) -> tuple[
+    sitk.Image,
+    tuple[float, float, float] | None,
+    tuple[int, int, int] | None,
+    tuple[int, int, int] | None,
+]:
+
+    dcms = []
+    dcm_paths = glob(osp.join(dcm_case_path, "*.dcm"))
+
+    for dcm_path in dcm_paths:
+        ds = pydicom.dcmread(dcm_path)
+        if (0x20, 0x32) not in ds:  # (0020, 0032) Image Position (Patient)
+            warnings.warn(
+                Fore.YELLOW
+                + f"ImagePosition Missing, Deprecating: {dcm_case_path}"
+                + Style.RESET_ALL
+            )
+            return False
+        dcms.append((dcm_path, ds[0x20, 0x32].value[-1]))
+
+    else:
+        dcms = sorted(dcms, key=lambda x: x[1], reverse=True)
+
+    sorted_dcm_paths = [dcm[0] for dcm in dcms]
+    reader = sitk.ImageSeriesReader()
+    reader.SetFileNames(sorted_dcm_paths)
+    reader.SetNumberOfWorkUnits(8)
+    sitk_image: sitk.Image = reader.Execute()
+
+    if spacing is None:
+        return sitk_image, None, None, None
+
+    else:
+        original_spacing = sitk_image.GetSpacing()
+        original_size = sitk_image.GetSize()
+        spacing = spacing[::-1]  # 对外接口尽量保持[D, H, W] 不要搞~~
+        spacing_ratio = [original_spacing[i] / spacing[i] for i in range(3)]
+        resampled_size = [
+            int(original_size[i] * spacing_ratio[i]) - 1 for i in range(3)
+        ]
+
+        resampled_mha = sitk.Resample(
             image1=sitk_image,
-            size=resampled_size,# type: ignore
+            size=resampled_size,  # type: ignore
             interpolator=sitk.sitkLinear,
             outputSpacing=spacing,
             outputPixelType=sitk.sitkInt16,
@@ -226,66 +332,19 @@ def LoadDcmAsSitkImage_EngineeringOrder(dcm_case_path, spacing, sort_by_distance
             outputDirection=sitk_image.GetDirection(),
             transform=sitk.Transform(),
         )
-    
-    return resampled_mha, original_spacing, original_size, resampled_size
 
-
-def LoadDcmAsSitkImage_JianYingOrder(dcm_case_path, spacing
-    ) -> tuple[sitk.Image, 
-               tuple[float, float, float]|None, 
-               tuple[int, int, int]|None,
-               tuple[int, int, int]|None
-    ]:
-    
-    dcms = []
-    dcm_paths = glob(osp.join(dcm_case_path, '*.dcm'))
-
-    for dcm_path in dcm_paths:
-        ds = pydicom.dcmread(dcm_path)
-        if (0x20, 0x32) not in ds: # (0020, 0032) Image Position (Patient)
-            warnings.warn(Fore.YELLOW + 
-                        f"ImagePosition Missing, Deprecating: {dcm_case_path}" +
-                        Style.RESET_ALL)
-            return False
-        dcms.append((dcm_path, ds[0x20, 0x32].value[-1]))
-    
-    else:
-        dcms = sorted(dcms, key=lambda x: x[1], reverse=True)
-    
-    sorted_dcm_paths = [dcm[0] for dcm in dcms]
-    reader = sitk.ImageSeriesReader()
-    reader.SetFileNames(sorted_dcm_paths)
-    reader.SetNumberOfWorkUnits(8)
-    sitk_image:sitk.Image = reader.Execute()
-
-    if spacing is None:
-        return sitk_image, None, None, None
-    
-    else:
-        original_spacing = sitk_image.GetSpacing()
-        original_size = sitk_image.GetSize()
-        spacing = spacing[::-1] # 对外接口尽量保持[D, H, W] 不要搞~~
-        spacing_ratio = [original_spacing[i]/spacing[i] for i in range(3)]
-        resampled_size = [int(original_size[i] * spacing_ratio[i])-1 for i in range(3)]
-        
-        resampled_mha = sitk.Resample(
-                image1=sitk_image,
-                size=resampled_size,# type: ignore
-                interpolator=sitk.sitkLinear,
-                outputSpacing=spacing,
-                outputPixelType=sitk.sitkInt16,
-                outputOrigin=sitk_image.GetOrigin(),
-                outputDirection=sitk_image.GetDirection(),
-                transform=sitk.Transform(),
-            )
-        
         return resampled_mha, original_spacing, original_size, resampled_size
 
 
-def LoadDcmAsSitkImage(mode:str, dcm_case_path:str, spacing:tuple[float, float, float]):
-    assert mode.lower() in ['engineering', 'jianying'], "mode must be one of ['engineering', 'jianying']"
+def LoadDcmAsSitkImage(
+    mode: str, dcm_case_path: str, spacing: tuple[float, float, float]
+):
+    assert mode.lower() in [
+        "engineering",
+        "jianying",
+    ], "mode must be one of ['engineering', 'jianying']"
 
-    if mode.lower() == 'engineering':
+    if mode.lower() == "engineering":
         return LoadDcmAsSitkImage_EngineeringOrder(dcm_case_path, spacing)
     else:
         return LoadDcmAsSitkImage_JianYingOrder(dcm_case_path, spacing)
@@ -293,14 +352,14 @@ def LoadDcmAsSitkImage(mode:str, dcm_case_path:str, spacing:tuple[float, float, 
 
 def LoadMhaAnno(mha_root, patient, ori_spacing, out_spacing, resampled_size):
     anno = []
-    for class_idx in range(0,4):
-        sitk_path = osp.join(mha_root, patient, patient+f"_{class_idx}.mha")
+    for class_idx in range(0, 4):
+        sitk_path = osp.join(mha_root, patient, patient + f"_{class_idx}.mha")
         if not osp.exists(sitk_path):
             return None, None
-        
+
         sitk_image = sitk.ReadImage(sitk_path)
         sitk_image.SetSpacing(ori_spacing)
-        
+
         resampled_mha = sitk.Resample(
             image1=sitk_image,
             size=resampled_size,
@@ -313,40 +372,45 @@ def LoadMhaAnno(mha_root, patient, ori_spacing, out_spacing, resampled_size):
         )
         array = sitk.GetArrayFromImage(resampled_mha)
         anno.append(array)
-    
-    anno_with_class_channel = np.stack(anno, axis=0)    # (Class, D, H, W)
-    
+
+    anno_with_class_channel = np.stack(anno, axis=0)  # (Class, D, H, W)
+
     background_location = np.argwhere(anno_with_class_channel.sum(axis=0) == 0)
     background_seg_map = np.zeros_like(anno_with_class_channel[0])
-    background_seg_map[background_location[:, 0], background_location[:, 1], background_location[:, 2]] = 1
-    anno_with_class_channel = np.concatenate([background_seg_map[np.newaxis, ...], anno_with_class_channel], axis=0)
-    
+    background_seg_map[
+        background_location[:, 0], background_location[:, 1], background_location[:, 2]
+    ] = 1
+    anno_with_class_channel = np.concatenate(
+        [background_seg_map[np.newaxis, ...], anno_with_class_channel], axis=0
+    )
+
     anno_without_class_channel = np.argmax(anno_with_class_channel, axis=0)
     return anno_with_class_channel, anno_without_class_channel
 
 
-def merge_masks(mha_paths: list[str], 
-                class_index_map: dict[str, int],
-                dtype=np.uint8
-                ) -> sitk.Image:
+def merge_masks(
+    mha_paths: list[str], class_index_map: dict[str, int], dtype=np.uint8
+) -> sitk.Image:
     """
     将所有类的掩码合并到一个掩码中并返回SimpleITK图像。
-    
+
     :param mha_paths: 所有mha文件的路径列表
     :param class_index_map: 类名到索引的映射字典
     :return: 合并后的SimpleITK图像
     """
     # 初始化一个空的掩码图像
     merged_mask = None
-    
+
     # 遍历mha文件路径列表中的每个文件
     for seg_file_path in mha_paths:
         if os.path.isfile(seg_file_path):
             class_name = os.path.basename(seg_file_path)[:-4]
             class_index = class_index_map.get(class_name)
             if class_index is None:
-                raise ValueError(f"Class name {class_name} not found in class_index_map: {seg_file_path}")
-            
+                raise ValueError(
+                    f"Class name {class_name} not found in class_index_map: {seg_file_path}"
+                )
+
             # 读取掩码文件
             mask = sitk.ReadImage(seg_file_path)
             mask_array = sitk.GetArrayFromImage(mask)
@@ -355,38 +419,43 @@ def merge_masks(mha_paths: list[str],
                 merged_mask = np.zeros_like(mask_array)
             # 将当前类的掩码添加到合并掩码中
             merged_mask[mask_array == 1] = class_index
-    
+
     if merged_mask is None:
         raise ValueError("No mask found in the provided paths")
-    
+
     # 将合并后的掩码转换为SimpleITK图像
     merged_mask_image = sitk.GetImageFromArray(merged_mask.astype(dtype))
     merged_mask_image.CopyInformation(mask)
-    
+
     return merged_mask_image
 
 
 def split_image_label_pairs_to_2d(image: sitk.Image, label: sitk.Image):
     """
     将image和label在最高维度上进行切分，迭代式返回slice-pair。
-    
+
     :param image: SimpleITK图像
     :param label: SimpleITK图像
     :yield: (image_slice, label_slice) 对
     """
     # 一致性检查
-    assert image.GetSize() == label.GetSize(), f"Image size {image.GetSize()} != Label size {label.GetSize()}"
-    assert image.GetSpacing() == label.GetSpacing(), f"Image spacing {image.GetSpacing()} != Label spacing {label.GetSpacing()}"
-    assert image.GetOrigin() == label.GetOrigin(), f"Image origin {image.GetOrigin()} != Label origin {label.GetOrigin()}"
+    assert (
+        image.GetSize() == label.GetSize()
+    ), f"Image size {image.GetSize()} != Label size {label.GetSize()}"
+    assert (
+        image.GetSpacing() == label.GetSpacing()
+    ), f"Image spacing {image.GetSpacing()} != Label spacing {label.GetSpacing()}"
+    assert (
+        image.GetOrigin() == label.GetOrigin()
+    ), f"Image origin {image.GetOrigin()} != Label origin {label.GetOrigin()}"
     # assert image.GetDirection() == label.GetDirection(), f"Image direction {image.GetDirection()} != Label direction {label.GetDirection()}"
-    
+
     # 将SimpleITK图像转换为NumPy数组
     image_array = sitk.GetArrayFromImage(image)
     label_array = sitk.GetArrayFromImage(label)
-    
+
     # Z轴切片
     for i in range(len(image_array)):
-        image_slice:np.ndarray = image_array[i]
-        label_slice:np.ndarray = label_array[i]
+        image_slice: np.ndarray = image_array[i]
+        label_slice: np.ndarray = label_array[i]
         yield image_slice, label_slice
-
