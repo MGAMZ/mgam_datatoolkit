@@ -245,3 +245,19 @@ class mgam_concat_dataset(ConcatDataset):
         self._fully_initialized = False
         if not lazy_init:
             self.full_init()
+
+
+class unsup_base:
+    METAINFO = dict(classes=["background"])
+
+
+class unsup_base_Precrop_Npz(unsup_base, mgam_SemiSup_Precropped_Npz):
+    pass
+
+
+class unsup_base_Mha(unsup_base, mgam_Standard_3D_Mha):
+    pass
+
+
+class unsup_base_Semi_Mha(unsup_base, mgam_SemiSup_3D_Mha):
+    pass
