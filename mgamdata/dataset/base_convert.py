@@ -45,8 +45,8 @@ class StandardFileFormatter:
     def convert_one_sample(self, args):
         image_path, label_path, dest_folder, series_id, spacing, size = args
         convertion_log = {
-            "img": image_path,
-            "ann": label_path,
+            "img": os.path.relpath(image_path, self.data_root) if image_path is not None else None,
+            "ann": os.path.relpath(label_path, self.data_root) if label_path is not None else None,
             "id": series_id,
         }
 
@@ -112,7 +112,7 @@ class StandardFileFormatter:
 
     def execute(self):
         task_list = self.tasks()
-        saved_path = []
+        per_sample_log = []
 
         if self.use_mp:
             with mp.Pool() as pool:
@@ -123,15 +123,23 @@ class StandardFileFormatter:
                     leave=False,
                     dynamic_ncols=True,
                 ):
-                    saved_path.append(result)
+                    per_sample_log.append(result)
         else:
             for args in tqdm(
                 task_list, leave=False, dynamic_ncols=True, desc="convert2mha"
             ):
                 result = self.convert_one_sample(args)
-                saved_path.append(result)
+                per_sample_log.append(result)
         
-        json.dump(saved_path, open(os.path.join(self.dest_root, "convertion_log.json"), "w"), indent=4)
+        convertion_log = {
+            "data_root": self.data_root, 
+            "dest_root": self.dest_root,
+            "spacing": self.spacing,
+            "size": self.size,
+            "per_sample_log": per_sample_log,
+        }
+        json.dump(convertion_log, open(os.path.join(self.dest_root, "convertion_log.json"), "w"), indent=4)
+        print(f"Converted {len(per_sample_log)} series. Saved to {self.dest_root}.")
 
     @classmethod
     def start_from_argparse(cls):
