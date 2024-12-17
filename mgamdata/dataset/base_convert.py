@@ -1,9 +1,11 @@
 import os
 import argparse
 import pdb
+import json
 import multiprocessing as mp
 from abc import abstractmethod
 from collections.abc import Sequence
+from textwrap import indent
 from tqdm import tqdm
 
 from ..io.sitk_toolkit import (
@@ -42,6 +44,11 @@ class StandardFileFormatter:
 
     def convert_one_sample(self, args):
         image_path, label_path, dest_folder, series_id, spacing, size = args
+        convertion_log = {
+            "img": image_path,
+            "ann": label_path,
+            "id": series_id,
+        }
 
         # source path and output folder
         output_image_folder = os.path.join(dest_folder, "image")
@@ -51,8 +58,10 @@ class StandardFileFormatter:
         os.makedirs(output_image_folder, exist_ok=True)
         os.makedirs(output_label_folder, exist_ok=True)
         if os.path.exists(output_image_mha_path):
-            if os.path.exists(output_label_mha_path) or not os.path.exists(label_path):
-                return
+            if label_path is None \
+            or os.path.exists(output_label_mha_path) \
+            or not os.path.exists(label_path):
+                return convertion_log
 
         if isinstance(image_path, str) and ".dcm" in image_path:
             input_image_mha, input_label_mha = StandardFileFormatter.convert_one_sample_dcm(image_path, label_path)
@@ -84,7 +93,8 @@ class StandardFileFormatter:
                 input_image_mha.GetSize() == input_label_mha.GetSize()
             ), "Image and label size mismatch."
             sitk.WriteImage(input_label_mha, output_label_mha_path, useCompression=True)
-
+        
+        return convertion_log
 
     @staticmethod
     def convert_one_sample_dcm(image_path:str, label_path:str):
@@ -100,25 +110,28 @@ class StandardFileFormatter:
             input_label_mha = None
         return input_image_mha, input_label_mha
 
-
     def execute(self):
         task_list = self.tasks()
+        saved_path = []
 
         if self.use_mp:
             with mp.Pool() as pool:
-                for _ in tqdm(
+                for result in tqdm(
                     pool.imap_unordered(self.convert_one_sample, task_list),
                     total=len(task_list),
-                    desc="nii2mha",
+                    desc="convert2mha",
                     leave=False,
                     dynamic_ncols=True,
                 ):
-                    pass
+                    saved_path.append(result)
         else:
             for args in tqdm(
-                task_list, leave=False, dynamic_ncols=True, desc="nii2mha"
+                task_list, leave=False, dynamic_ncols=True, desc="convert2mha"
             ):
-                self.convert_one_sample(args)
+                result = self.convert_one_sample(args)
+                saved_path.append(result)
+        
+        json.dump(saved_path, open(os.path.join(self.dest_root, "convertion_log.json"), "w"), indent=4)
 
     @classmethod
     def start_from_argparse(cls):
