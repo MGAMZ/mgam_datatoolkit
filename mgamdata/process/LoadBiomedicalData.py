@@ -1,13 +1,12 @@
 import pdb
-from typing import Sequence
-from typing_extensions import deprecated
+from typing_extensions import deprecated, Sequence
 
 import cv2
 import numpy as np
 import SimpleITK as sitk
 
 from mmcv.transforms import BaseTransform
-from mgamdata.io.sitk_toolkit import sitk_resample_to_spacing_v2, sitk_resample_to_size
+from mgamdata.io.sitk_toolkit import sitk_resample_to_spacing, sitk_resample_to_size
 
 
 """
@@ -74,7 +73,7 @@ class LoadFromMHA(BaseTransform):
 
     def _process_mha(self, mha, field):
         if self.resample_spacing is not None:
-            mha = sitk_resample_to_spacing_v2(mha, self.spacing, field)
+            mha = sitk_resample_to_spacing(mha, self.spacing, field)
         if self.resample_size is not None:
             mha = sitk_resample_to_size(mha, self.resample_size, field)
         # mha.GetSize(): [X, Y, Z]
