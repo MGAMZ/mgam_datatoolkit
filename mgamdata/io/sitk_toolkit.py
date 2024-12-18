@@ -56,7 +56,7 @@ def sitk_resample_to_spacing(
         interpolator=INTERPOLATOR(field),
         outputSpacing=spacing,
         outputPixelType=PIXEL_TYPE(field),
-        outputOrigin=target_origin,
+        outputOrigin=mha.GetOrigin(),
         outputDirection=mha.GetDirection(),
         transform=sitk.Transform(),
     )
@@ -124,7 +124,7 @@ def sitk_resample_to_size(
         interpolator=INTERPOLATOR(field),
         outputSpacing=new_spacing,
         outputPixelType=PIXEL_TYPE(field),
-        outputOrigin=target_origin,
+        outputOrigin=image.GetOrigin(),
         outputDirection=image.GetDirection(),
         transform=sitk.Transform(),
     )
