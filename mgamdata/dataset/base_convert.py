@@ -63,11 +63,16 @@ class StandardFileFormatter:
             or not os.path.exists(label_path):
                 return convertion_log
 
-        if isinstance(image_path, str) and ".dcm" in image_path:
-            input_image_mha, input_label_mha = StandardFileFormatter.convert_one_sample_dcm(image_path, label_path)
-        
-        elif ".nii.gz" in image_path:
-            input_image_mha, input_label_mha = StandardFileFormatter.convert_one_sample_nii(image_path, label_path)
+        try:
+            if isinstance(image_path, str) and ".dcm" in image_path:
+                input_image_mha, input_label_mha = StandardFileFormatter.convert_one_sample_dcm(image_path, label_path)
+            
+            elif ".nii.gz" in image_path:
+                input_image_mha, input_label_mha = StandardFileFormatter.convert_one_sample_nii(image_path, label_path)
+        except Exception as e:
+            convertion_log["id"] = "error"
+            convertion_log["error"] = str(e)
+            return convertion_log
 
         # resample
         if spacing is not None:

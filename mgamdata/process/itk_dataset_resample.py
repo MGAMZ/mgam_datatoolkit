@@ -6,10 +6,10 @@ from multiprocessing import Pool
 
 import SimpleITK as sitk
 
-from mgamdata.io.sitk_toolkit import sitk_resample_to_spacing_v2
+from mgamdata.io.sitk_toolkit import sitk_resample_to_spacing
 
 
-def resample_one_sample(args) -> tuple[sitk.Image, sitk.Image] | None:
+def resample_one_sample(args) -> tuple[sitk.Image, sitk.Image|None] | None:
     """
     Resample a single sample image and its corresponding label image to a specified spacing.
 
@@ -32,13 +32,16 @@ def resample_one_sample(args) -> tuple[sitk.Image, sitk.Image] | None:
         return None
 
     image_itk = sitk.ReadImage(image_itk_path)
-    label_itk = sitk.ReadImage(label_itk_path)
-    image_resampled = sitk_resample_to_spacing_v2(image_itk, spacing, "image")
-    label_resampled = sitk_resample_to_spacing_v2(label_itk, spacing, "label")
+    if os.path.exists(label_itk_path):
+        label_itk = sitk.ReadImage(label_itk_path)
+    image_resampled = sitk_resample_to_spacing(image_itk, spacing, "image")
+    if os.path.exists(label_itk_path):
+        label_resampled = sitk_resample_to_spacing(label_itk, spacing, "label")
 
     sitk.WriteImage(image_resampled, target_image_path, useCompression=True)
-    sitk.WriteImage(label_resampled, target_label_path, useCompression=True)
-    return image_resampled, label_resampled
+    if os.path.exists(label_itk_path):
+        sitk.WriteImage(label_resampled, target_label_path, useCompression=True)
+    return image_resampled, label_resampled if os.path.exists(label_itk_path) else None
 
 
 def resample_standard_dataset(
@@ -56,11 +59,8 @@ def resample_standard_dataset(
         for f in os.listdir(source_image_folder)
         if f.endswith(".mha")
     ]
-    label_itk_paths = [
-        os.path.join(source_label_folder, f)
-        for f in os.listdir(source_label_folder)
-        if f.endswith(".mha")
-    ]
+    label_itk_paths = [i.replace("image", "label") 
+                       for i in image_itk_paths]
 
     if mp:
         task_list = [
