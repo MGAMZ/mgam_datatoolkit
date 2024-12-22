@@ -3,6 +3,7 @@ import argparse
 import json
 import multiprocessing as mp
 from abc import abstractmethod
+from colorama import Fore, Style
 from tqdm import tqdm
 
 import numpy as np
@@ -71,6 +72,14 @@ class PreCropper3D:
             default=False,
             help="Whether to use multiprocessing.",
         )
+        argparser.add_argument(
+            "--cut-edge",
+            type=int,
+            default=[1, 1, 1],
+            nargs="+",
+            help="The edge size to cut off (delete) in each dimension. "
+            "This is to avoid some datasets have invalid slice on the edge of a dcm series.",
+        )
         self.args = argparser.parse_args()
 
     @abstractmethod
@@ -83,52 +92,6 @@ class PreCropper3D:
             - save_folder
         """
         ...
-
-    def main(self):
-        self.arg_parse()
-        os.makedirs(self.args.dest_npz_folder, exist_ok=True)
-        crop_meta_path = os.path.join(self.args.dest_npz_folder, "crop_meta.json")
-        json.dump(vars(self.args), open(crop_meta_path, "w"), indent=4)
-
-        self.task_list = self.parse_task()
-        series_meta = {}
-        if self.args.mp:
-            with mp.Pool() as pool:
-                fetcher = pool.imap_unordered(self.crop_per_series, self.task_list)
-                for result in tqdm(
-                    fetcher,
-                    "Cropping",
-                    total=len(self.task_list),
-                    dynamic_ncols=True,
-                    leave=False,
-                ):
-                    series_meta.update(result)
-        else:
-            for task in tqdm(
-                self.task_list, "Cropping", dynamic_ncols=True, leave=False
-            ):
-                result = self.crop_per_series(task)
-                series_meta.update(result)
-
-        print(f"Finished cropping {len(self.task_list)} series.")
-        print(f"Writing cropped patches' meta to {crop_meta_path}.")
-
-        cropped_series_meta = {
-            "crop_args": vars(self.args),
-            "num_series": len(series_meta),
-            "num_patches": sum(
-                [
-                    one_series_meta["num_patches"]
-                    for one_series_meta in series_meta.values()
-                ]
-            ),
-            "anno_available": [
-                series_id
-                for series_id, series_meta in series_meta.items()
-                if series_meta["anno_available"] is True
-            ],
-        }
-        json.dump(cropped_series_meta, open(crop_meta_path, "w"), indent=4)
 
     def all_index_ensured(self, label: np.ndarray):
         if self.args.ensure_index is None or np.random.rand() > self.args.ensure_ratio:
@@ -190,10 +153,9 @@ class PreCropper3D:
     def Crop3D(
         self, cropper, image_itk_path: str, anno_itk_path: str | None  # type: ignore
     ):
-        from .GeneralPreProcess import RandomCrop3D
-
         cropper: RandomCrop3D
 
+        # Load Image and Segmentations
         image_itk_image = sitk.ReadImage(image_itk_path)
         image_array = sitk.GetArrayFromImage(image_itk_image)
         if anno_itk_path is not None:
@@ -201,6 +163,30 @@ class PreCropper3D:
             anno_array = sitk.GetArrayFromImage(anno_itk_image)
         else:
             anno_array = None
+
+        if any(
+            [
+                dim < crop_size
+                for dim, crop_size in zip(image_array.shape, cropper.crop_size)
+            ]
+        ):
+            print(
+                Fore.YELLOW,
+                f"Deprecated due to image shape: {image_itk_path}",
+                Style.RESET_ALL,
+            )
+            return None
+
+        # Cut Edge on each dimension if it contains Non-Zero value
+        if self.args.cut_edge is not None and any(self.args.cut_edge):
+            for dim, cut_length in enumerate(self.args.cut_edge):
+                dim_length = image_array.shape[dim]
+                indices_to_cut = np.arange(self.args.cut_edge) + np.arange(
+                    dim_length - cut_length, dim_length
+                )
+                image_array = np.delete(image_array, indices_to_cut, axis=dim)
+                if anno_array is not None:
+                    anno_array = np.delete(anno_array, indices_to_cut, axis=dim)
 
         # not giving the seg_fields, RandomCrop3D will not crop label.
         data = {
@@ -240,6 +226,52 @@ class PreCropper3D:
                 cropped_image_array: np.ndarray = cropper.crop(image_array, crop_bbox)
                 cropped_image_array = unsafe_astype(cropped_image_array, np.int16)
                 yield cropped_image_array, None
+
+    def main(self):
+        self.arg_parse()
+        os.makedirs(self.args.dest_npz_folder, exist_ok=True)
+        crop_meta_path = os.path.join(self.args.dest_npz_folder, "crop_meta.json")
+        json.dump(vars(self.args), open(crop_meta_path, "w"), indent=4)
+
+        self.task_list = self.parse_task()
+        series_meta = {}
+        if self.args.mp:
+            with mp.Pool() as pool:
+                fetcher = pool.imap_unordered(self.crop_per_series, self.task_list)
+                for result in tqdm(
+                    fetcher,
+                    "Cropping",
+                    total=len(self.task_list),
+                    dynamic_ncols=True,
+                    leave=False,
+                ):
+                    series_meta.update(result)
+        else:
+            for task in tqdm(
+                self.task_list, "Cropping", dynamic_ncols=True, leave=False
+            ):
+                result = self.crop_per_series(task)
+                series_meta.update(result)
+
+        print(f"Finished cropping {len(self.task_list)} series.")
+        print(f"Writing cropped patches' meta to {crop_meta_path}.")
+
+        cropped_series_meta = {
+            "crop_args": vars(self.args),
+            "num_series": len(series_meta),
+            "num_patches": sum(
+                [
+                    one_series_meta["num_patches"]
+                    for one_series_meta in series_meta.values()
+                ]
+            ),
+            "anno_available": [
+                series_id
+                for series_id, series_meta in series_meta.items()
+                if series_meta["anno_available"] is True
+            ],
+        }
+        json.dump(cropped_series_meta, open(crop_meta_path, "w"), indent=4)
 
 
 class StandardMhaCropper3D(PreCropper3D):

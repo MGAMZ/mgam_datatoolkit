@@ -1,5 +1,6 @@
 import os
 import argparse
+import datetime
 import pdb
 import json
 import multiprocessing as mp
@@ -137,6 +138,7 @@ class StandardFileFormatter:
                 per_sample_log.append(result)
         
         convertion_log = {
+            "date": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "data_root": self.data_root, 
             "dest_root": self.dest_root,
             "spacing": self.spacing,
@@ -271,4 +273,3 @@ class format_from_unsup_datasets(StandardFileFormatter):
               f"among which {len(task_list)} available series, "
               f"{deprecated_dcm} deprecated dcms series.")
         return task_list
-
