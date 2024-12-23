@@ -8,6 +8,7 @@ import torch
 from torch import Tensor
 from torch.nn import PixelUnshuffle as PixelUnshuffle2D
 
+from mmengine.model import MomentumAnnealingEMA
 from mmengine.utils.misc import is_list_of
 from mmengine.model.base_module import BaseModule
 from mmengine.dist import all_gather, get_rank, is_main_process
@@ -15,6 +16,7 @@ from mmpretrain.registry import MODELS
 from mmpretrain.structures import DataSample
 from mmpretrain.models.selfsup.base import BaseSelfSupervisor
 from mmpretrain.models.selfsup.mocov3 import CosineEMA
+
 
 from mgamdata.mm.mmseg_Dev3D import PixelUnshuffle1D, PixelUnshuffle3D
 
@@ -108,12 +110,12 @@ class MoCoV3Head_WithAcc(BaseModule):
 
 class ReconstructionHead(BaseModule):
     def __init__(
-        self, 
-        model_out_channels: int, 
-        recon_channels: int, 
-        dim: Literal['1d','2d','3d'], 
-        reduction: str = 'mean', 
-        loss_type: Literal['L1','L2'] = 'L1', 
+        self,
+        model_out_channels: int,
+        recon_channels: int,
+        dim: Literal["1d", "2d", "3d"],
+        reduction: str = "mean",
+        loss_type: Literal["L1", "L2"] = "L1",
     ):
         super().__init__()
         self.model_out_channels = model_out_channels
@@ -125,13 +127,14 @@ class ReconstructionHead(BaseModule):
             if loss_type == "L1"
             else torch.nn.MSELoss(reduction=reduction)
         )
-        self.conv_proj = eval(f"torch.nn.Conv{dim}")(model_out_channels, recon_channels, 1)
+        self.conv_proj = eval(f"torch.nn.Conv{dim}")(
+            model_out_channels, recon_channels, 1
+        )
 
     def loss(self, recon: Tensor, ori: Tensor):
         proj = self.conv_proj(recon)
         loss = self.criterion(proj.squeeze(), ori.squeeze())
-        return {f'loss_recon_{self.loss_type}': loss,
-                'reconed': proj}
+        return {f"loss_recon_{self.loss_type}": loss, "reconed": proj}
 
 
 class AutoEncoderSelfSup(BaseSelfSupervisor):
@@ -163,32 +166,33 @@ class AutoEncoderSelfSup(BaseSelfSupervisor):
             **kwargs,
         )
 
-    def _get_whole_model(self) -> torch.nn.Module:
+    @property
+    def whole_model_(self) -> torch.nn.Module:
         if self.with_neck:
             return torch.nn.Sequential(self.backbone, self.neck)
         else:
             return self.backbone
 
     def parse_losses(
-        self, losses: dict,
+        self,
+        losses: dict,
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         log_vars = []
         for loss_name, loss_value in losses.items():
-            if 'loss' in loss_name:
+            if "loss" in loss_name:
                 if isinstance(loss_value, torch.Tensor):
                     log_vars.append([loss_name, loss_value.mean()])
                 elif is_list_of(loss_value, torch.Tensor):
                     log_vars.append(
-                        [loss_name,
-                        sum(_loss.mean() for _loss in loss_value)])
+                        [loss_name, sum(_loss.mean() for _loss in loss_value)]
+                    )
                 else:
-                    raise TypeError(
-                        f'{loss_name} is not a tensor or list of tensors')
+                    raise TypeError(f"{loss_name} is not a tensor or list of tensors")
             else:
                 log_vars.append([loss_name, loss_value])
 
-        loss = sum(value for key, value in log_vars if 'loss' in key)
-        log_vars.insert(0, ['loss', loss])
+        loss = sum(value for key, value in log_vars if "loss" in key)
+        log_vars.insert(0, ["loss", loss])
         log_vars = OrderedDict(log_vars)  # type: ignore
         return loss, log_vars  # type: ignore
 
@@ -203,7 +207,7 @@ class AutoEncoder_MoCoV3(AutoEncoderSelfSup):
         super().__init__(*args, **kwargs)
         self.base_momentum = base_momentum
         self.momentum_encoder = CosineEMA(
-            self._get_whole_model(), momentum=base_momentum
+            self.whole_model_, momentum=base_momentum
         )
 
     @staticmethod
@@ -245,7 +249,7 @@ class AutoEncoder_MoCoV3(AutoEncoderSelfSup):
         # compute key features, [N, C] each, no gradient
         with torch.no_grad():
             # update momentum encoder
-            self.momentum_encoder.update_parameters(self._get_whole_model())
+            self.momentum_encoder.update_parameters(self.whole_model_)
 
             k1 = self.momentum_encoder(inputs[0])[0]
             k2 = self.momentum_encoder(inputs[1])[0]
@@ -283,6 +287,54 @@ class AutoEncoder_Recon(AutoEncoderSelfSup):
         recon = self.backbone(inputs[0])[0]
         ori = inputs[1]
         selfsup_loss = self.head.loss(recon, ori)
+
+        losses.update(selfsup_loss)
+        return losses
+
+
+class RelativeSimilaritySelfSup(AutoEncoderSelfSup):
+    def __init__(self, momentum=1e-4, gamma=100, update_interval=1, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.momentum_encoder = MomentumAnnealingEMA(
+            self.whole_model_,
+            momentum=momentum,
+            gamma=gamma,
+            interval=update_interval,
+        )
+
+    def parse_target(self, data_samples: list[DataSample]):
+        # coords (coordinates): [N, 3 (sub-volume), 3 (coord-dim)]
+        coords = torch.stack([sample.coord for sample in data_samples])
+        # abs_gap (absolute distance): [N, 3 (start from), 3 (point to), 3(coord-dim)]
+        abs_gap = torch.stack([sample.abs_gap for sample in data_samples])
+        # rel_gap (relative distance): [N, 3 (start from), 3 (point to), 3(coord-dim)]
+        rel_gap = abs_gap / torch.triu(abs_gap, diagonal=1).sum(dim=(1,2))
+        return coords, abs_gap, rel_gap
+
+    def loss(
+        self, inputs: list[Tensor], data_samples: list[DataSample], **kwargs
+    ) -> dict[str, Tensor]:
+        assert isinstance(inputs, list)
+        self.backbone: BaseModule
+        self.head: BaseModule
         
+        # sv: sub volume
+        sv1 = inputs[0]
+        sv2 = inputs[1]
+        sv3 = inputs[2]
+        coords, abs_gap, rel_gap = self.parse_target(data_samples)
+        
+        # f_sv: neural implicit representation
+        nir_sv1 = self.whole_model_(sv1)[0]
+        nir_sv2 = self.whole_model_(sv2)[0]
+        nir_sv3 = self.whole_model_(sv3)[0]
+        nir = torch.stack([nir_sv1, nir_sv2, nir_sv3], dim=1)
+        
+        rel_gap_loss = self.gap_head.loss(nir, rel_gap)
+        nir_sim_loss = self.sim_head.loss(nir, coords)
+
+        losses = {}
+        selfsup_loss = self.head.loss(recon, ori)
+
         losses.update(selfsup_loss)
         return losses

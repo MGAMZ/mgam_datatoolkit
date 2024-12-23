@@ -9,8 +9,6 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from meta import DATA_ROOT, LOCATION_ANNO_CSV, CLUSTER_ANNO_CSV, FILE_ID_MAP_CSV
-
 
 def __reference_implementation__():
     import json
@@ -18,7 +16,7 @@ def __reference_implementation__():
     import cv2
     import numpy as np
 
-    cell_path = FILE_ID_MAP_CSV
+    cell_path = ...
     mask_path = "/fileser/rongkuan/mywork/cellcount/QualityTROSE_cell_count/patch_mask/"
     f = glob("/home/rongkuan/Quality_TROSE/7787/*.json")
     cell_count = 0
@@ -31,11 +29,7 @@ def __reference_implementation__():
             str = file.read()
             label_name = label.split("/")[-1].split(".")[0]
 
-            ori_path = matchingdf[matchingdf["序列号"] == label_name][
-                "原始路径"
-            ].iloc[  # type:ignore
-                0
-            ]
+            ori_path = matchingdf[matchingdf["序列号"] == label_name]["原始路径"].iloc[0] # type:ignore
             real_uid = ori_path.split("/")[0].split("_")[0]
             real_filename = ori_path.split("/")[-1]
             real_filename = real_uid + "_" + real_filename
@@ -231,24 +225,21 @@ def convert_gt_points_to_heatmap(
 def parse_args():
     parser = argparse.ArgumentParser(description="Convert GT Points to Heatmap")
     parser.add_argument(
-        "--data-root", type=str, default=DATA_ROOT, help="Root directory of image data"
+        "--patch-root", type=str, help="Root directory of image data"
     )
     parser.add_argument(
         "--location-anno-csv",
         type=str,
-        default=LOCATION_ANNO_CSV,
         help="CSV file containing location annotations",
     )
     parser.add_argument(
         "--cluster-anno-csv",
         type=str,
-        default=CLUSTER_ANNO_CSV,
         help="CSV file containing cluster annotations",
     )
     parser.add_argument(
         "--fileidmap-csv", 
         type=str, 
-        default=FILE_ID_MAP_CSV, 
         help="CSV file containing file ID mapping",
     )
     parser.add_argument(
@@ -261,7 +252,7 @@ def parse_args():
 if __name__ == "__main__":
     args = parse_args()
     convert_gt_points_to_heatmap(
-        args.data_root,
+        args.patch_root,
         args.location_anno_csv,
         args.cluster_anno_csv,
         args.fileidmap_csv,
