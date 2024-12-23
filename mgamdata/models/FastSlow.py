@@ -332,6 +332,7 @@ class RelativeSimilaritySelfSup(AutoEncoderSelfSup):
         
         rel_gap_loss = self.gap_head.loss(nir, rel_gap)
         nir_sim_loss = self.sim_head.loss(nir, coords)
+        
 
         losses = {}
         selfsup_loss = self.head.loss(recon, ori)
