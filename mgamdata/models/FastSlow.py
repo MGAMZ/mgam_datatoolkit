@@ -1,8 +1,9 @@
-from abc import abstractmethod
-from functools import partial
 import os
 import pdb
+from abc import abstractmethod
+from functools import partial
 from typing_extensions import Literal, OrderedDict
+from itertools import product
 
 import torch
 from torch import Tensor
@@ -18,6 +19,7 @@ from mmpretrain.models.selfsup.base import BaseSelfSupervisor
 from mmpretrain.models.selfsup.mocov3 import CosineEMA
 
 from mgamdata.mm.mmseg_Dev3D import PixelUnshuffle1D, PixelUnshuffle3D
+
 
 
 class MoCoV3Head_WithAcc(BaseModule):
@@ -328,10 +330,10 @@ class RelativeSimilaritySelfSup(AutoEncoderSelfSup):
         nir_sv1 = self.whole_model_(sv1)[0]
         nir_sv2 = self.momentum_encoder(sv2)[0]
         nir_sv3 = self.momentum_encoder(sv3)[0]
-        nir = torch.stack([nir_sv1, nir_sv2, nir_sv3], dim=1) # [N, 3, C, Z, Y, X]
+        nir = torch.stack([nir_sv1, nir_sv2, nir_sv3], dim=1)  # [N, 3, C, Z, Y, X]
         
         # relative gap self-supervision
-        rel_gap_loss = self.gap_head.loss(nir, rel_gap)
+        rel_gap_loss = self.gap_head.loss(nir, abs_gap)
         # similarity self-supervision (Opposite nir has larger difference, namely negative label)
         nir_sim_loss = self.sim_head.loss(nir, coords)
         # vector angle self-supervision (Add Sum 180°)
@@ -347,33 +349,249 @@ class RelativeSimilaritySelfSup(AutoEncoderSelfSup):
         }
 
 
-class GapPredictor(BaseModule):
-    def __init__(self, in_channels:int, dim:Literal["1d","2d","3d"]):
-        self.in_channels = in_channels
+class GlobalAvgPool(torch.nn.Module):
+    def __init__(self, dim: Literal["1d", "2d", "3d"]):
+        super().__init__()
         self.dim = dim
-        if dim == "1d":
-            self.avg_pool = torch.nn.AdaptiveAvgPool1d((1))
-            downsample_conv = torch.nn.Conv1d
-        elif dim == "2d":
-            self.avg_pool = torch.nn.AdaptiveMaxPool2d((1,1))
-            downsample_conv = torch.nn.Conv2d
-        elif dim == "3d":
-            self.avg_pool = torch.nn.AdaptiveMaxPool3d((1,1,1))
-            downsample_conv = torch.nn.Conv3d
+
+    def forward(self, x: Tensor) -> Tensor:
+        if self.dim == "1d":
+            return torch.nn.functional.adaptive_avg_pool1d(x, 1).squeeze(-1)
+        elif self.dim == "2d":
+            return torch.nn.functional.adaptive_avg_pool2d(x, (1,1)).squeeze(-1).squeeze(-1)
+        elif self.dim == "3d":
+            return torch.nn.functional.adaptive_avg_pool3d(x, (1,1,1)).squeeze(-1).squeeze(-1).squeeze(-1)
         else:
-            raise TypeError(f"Invalid dimension {dim}")
+            raise NotImplementedError(f"Invalid Dim Setting: {self.dim}")
+
+
+class BaseVolumeWisePredictor(BaseModule):
+    def __init__(self, dim:Literal["1d","2d","3d"], in_channels:int, num_volume:int=3):
+        self.dim = dim
+        self.num_volume = num_volume
+        self.act = torch.nn.GELU()
+        self.embed = eval(f"torch.nn.Conv{dim}")(in_channels, in_channels, 1)
+        self.avg_pool = GlobalAvgPool(dim)
+    
+    def forward(self, x:Tensor) -> Tensor:
+        """
+        Args:
+            x (Tensor): [N, num_volume, C, Z, Y, X]
         
+        Returns:
+            x (Tensor): [N, num_volume, C]
+        """
+        num_volume = x.size(1)
+        # forward each volume
+        x = torch.stack(
+            x.chunk(
+                self.act(self.embed(num_volume)), 
+                dim=1
+            ), 
+            dim=1
+        )  # [N, num_volume, C, ...]
+        x = self.avg_pool(x) # [N, num_volume, C, *1]
+        return x  # [N, num_volume, C]
+
+
+class GapPredictor(BaseVolumeWisePredictor):
+    def __init__(self, dim:Literal["1d","2d","3d"], in_channels:int):
+        super().__init__(dim, in_channels)
         self.proj = torch.nn.ModuleList([
             torch.nn.Linear(in_channels//(2**i), in_channels//(2**(i+1)))
             for i in range(4)
         ])
+        self.act = torch.nn.GELU()
+        self.cri = torch.nn.SmoothL1Loss()
     
-    def forward(self, nir:Tensor, rel_gap:Tensor) -> Tensor:
+    def forward(self, nir:Tensor) -> Tensor:
         """
         Args:
-            nir (Tensor): Size [N, 3, C, Z, Y, X]
-            rel_gap (Tensor): Size [N, 3 (start from), 3 (point to), 3(coord-dim)]
+            nir (Tensor): Size [N, num_volume, C, Z, Y, X]
+            rel_gap (Tensor): Size [N, num_volume (start from), num_volume (point to), coord-dim-length]
         
         Returns:
             vector gap sort loss (Tensor): [N, ]
         """
+        nir = super().forward(nir)  # [N, num_volume, C]
+        for proj in self.proj:
+            nir = proj(nir)
+            nir = self.act(nir)
+        
+        # Relative Positional Representation of Each Sub-Volume
+        # The origin may align with the mean value of all samples' world coordinate systems'origin.
+        # diff equals to the relative distance between each `nir`.
+        rel_pos_rep_diff = nir.unsqueeze(2) - nir.unsqueeze(1)  # (N, num_volume, num_volume, C)
+        # calculate the distance of `rel_pos_rep_diff`
+        similarity = rel_pos_rep_diff.norm(dim=-1)  # (N, num_volume, num_volume)
+        
+        return similarity  # (N, num_volume, num_volume)
+    
+    def loss(self, nir:Tensor, abs_gap:Tensor) -> Tensor:
+        # nir: []
+        similarity = self.forward(nir)  # (N, num_volume, num_volume)
+        loss = self.cri(similarity, abs_gap)
+        return loss
+
+
+class SimPairDiscriminator(BaseModule):
+    LABEL_ADJA_PAIR = 1
+    LABEL_DIST_PAIR = 0
+    
+    def __init__(self, sub_volume_size:int|list[int], dim:Literal["1d","2d","3d"], in_channels:int):
+        super().__init__()
+        self.s = sub_volume_size
+        self.dim = dim
+        self.in_channels = in_channels
+        
+        self.pair_encoder = torch.nn.ModuleList([
+            eval(f"torch.nn.Conv{dim}")(in_channels*(2**i), in_channels*(2**(i+1)), 3, 2)
+            for i in range(4)
+        ])
+        self.act = torch.nn.GELU()
+        self.avg_pool = GlobalAvgPool(dim)
+        self.discriminator = torch.nn.Linear(in_channels*(2**4), 1, bias=False)
+    
+    def _get_subvolume_indices(self, diff_vectors, volume_shape
+        ) -> list[
+                  dict[
+                       tuple[int,int], 
+                       tuple[int, list[slice], list[slice]]
+                      ]
+                 ]:
+        """
+        Args:
+            diff_vectors: shape [N, *extra_dims, d], where d = len(volume_shape) - 1
+            volume_shape: (N, D1, D2, ..., Dd)
+
+        Returns:
+            a list of dictionaries where each element :
+                indices[n][(i1, i2, ...)] = (n, [slice, slice, ..., slice])
+                    i1 = (0,0), i2 = (0,1), ...
+                n is batch index
+        
+        NOTE for Usage:
+            (n, adjacent_slices, distant_slices) = indices[3][(2,4)]
+            Volumes[n, :, *adjacent_slices] or Volumes[n, :, *distant_slices]
+        
+        NOTE
+            The highest dimension of indices is batch, which is easy to understand, 
+            as all batches remain independent.
+
+            After selecting the batch, 
+            the next step is to choose the source Volume and the target Volume, 
+            and combine them into a Tuple. 
+            For example, 
+            if I want to obtain the indices of proximity and distance in Volume 1 relative to Volume 2, 
+            I should choose the Tuple (1,2).
+
+            After selection, 
+            indices will return a Tuple containing three elements: 
+            1) the first value represents the batch index, 
+            2) the second value contains the indices of the subset in Volume 1 that is close to Volume 2, 
+            3) the third value contains the indices of the subset in Volume 1 that is far from Volume 2.
+        """
+        
+        N = volume_shape[0]
+        dims = volume_shape[1:]  # D1, D2, ..., Dd
+        shape_diff = diff_vectors.shape  # [N, *extra_dims, d]
+        assert len(dims) == shape_diff[-1], f"The last dimension of diff_vectors ({shape_diff[-1]}) should be equal to the length of `volume_shape` - 1 ({len(dims)})"
+        extra_dims = shape_diff[1:-1]  # exclude N and d, leaving only the extra dimensions
+
+        indices = [dict() for _ in range(N)]
+
+        for n in range(N):
+            # iterate through all combinations of extra_dims
+            for idx in product(*(range(s) for s in extra_dims)):
+                # Extract the diff values along the last dimension, which correspond to the d coordinates
+                diff = diff_vectors[(n,) + idx]  # shape [d]
+                adjacent_slices = []
+                distant_slices = []
+                
+                for dim_i in range(len(dims)):
+                    size = dims[dim_i]
+                    # Decide the slice based on the sign of diff[dim_i]
+                    adjacent_slice_part = slice(None, self.s) \
+                                 if diff[dim_i].item() < 0 \
+                                 else slice(size-self.s, None)
+                    distant_slice_part = slice(size-self.s, None) \
+                                         if diff[dim_i].item() < 0 \
+                                         else slice(None, self.s)
+                    adjacent_slices.append(adjacent_slice_part)
+                    distant_slices.append(distant_slice_part)
+                
+                indices[n][idx] = (n, adjacent_slices, distant_slices)
+
+        return indices
+
+    def _sub_volume_selector(self, nir:Tensor, sub_volume_indices):
+        batched_samples = []
+        for n in range(len(sub_volume_indices)):
+            processed_pairs = set()
+            samples = []
+            for (vol_from, vol_to) in sub_volume_indices[n].keys():
+                if (vol_from, vol_to) in processed_pairs or (vol_to, vol_from) in processed_pairs:
+                    continue
+                    
+                # fetch index
+                _, adj_from_to, dist_from_to = sub_volume_indices[n][(vol_from, vol_to)]
+                _, adj_to_from, dist_to_from = sub_volume_indices[n][(vol_to, vol_from)]
+                
+                # select adjacent sub-nir
+                v_from_adj = nir[n, vol_from, :, *adj_from_to]
+                v_to_adj = nir[n, vol_to, :, *adj_to_from]
+                
+                # select distant sub-nir
+                v_from_dist = nir[n, vol_from, :, *dist_from_to]
+                v_to_dist = nir[n, vol_to, :, *dist_to_from]
+                
+                # encode, sample: [4, C, ...]
+                sample = torch.stack([v_from_adj, v_to_adj, v_from_dist, v_to_dist], dim=0)
+                samples.append(sample)
+                processed_pairs.add((vol_from, vol_to))  # mark as processed
+            
+            batched_samples.append(torch.stack(samples, dim=0)) # [num_pairs, 4, C, ...]
+            
+        return torch.stack(batched_samples, dim=0)  # [N, num_pairs, 4, C, ...]
+
+    def encode(self, sub_vols:Tensor) -> Tensor:
+        """
+        Args: 
+            sub_vols (Tensor): [N, num_pairs, 4, C, ...]
+            
+        Returns:
+            encoded_vols (Tensor): [N, num_pairs, 4, C]
+        """
+        
+        ori_shape = sub_vols.shape
+        sub_vols = sub_vols.reshape(ori_shape[0], ori_shape[1]*ori_shape[2], *ori_shape[3:])
+        encoded = []
+        
+        for i in range(sub_vols.size(1)):
+            v = sub_vols[:, i]
+            for enc_layer in self.pair_encoder:
+                v = enc_layer(v)
+                v = self.act(v)
+            v = self.avg_pool(v)
+            encoded.append(v)
+        
+        return torch.stack(encoded, dim=1).reshape(ori_shape)  # [N, num_pairs, 4, C]
+
+    def loss(self, nir:Tensor, abs_gap:Tensor) -> Tensor:
+        """
+        Args:
+            neural implicit representation (Tensor): [N, num_volume, C, Z, Y, X]
+            abs_gap (Tensor): [N, num_volume (start from), num_volume (point to), coord-dim-length]
+        """
+        
+        sub_volume_indices = self._get_subvolume_indices(abs_gap, nir.shape[3:])
+        sub_volumes = self._sub_volume_selector(nir, sub_volume_indices)  # [N, num_pairs, 4, C, ...]
+        encoded_sub_volumes = self.encode(sub_volumes)  # [N, num_pairs, 4, C]
+        
+        discr = self.discriminator(sub_volumes).squeeze(-1)  # [N, num_pairs*4]
+        
+        labels = torch.zeros_like(discr)
+        labels[:, ::4], labels[:, 1::4] = 1, 1  # 每组中前两个(相邻对)设为1
+        
+        bce_loss = torch.nn.functional.binary_cross_entropy_with_logits(discr, labels)
+        return bce_loss
