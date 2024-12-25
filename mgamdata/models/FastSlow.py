@@ -10,9 +10,9 @@ import torch
 from torch import Tensor
 from torch.nn import PixelUnshuffle as PixelUnshuffle2D
 
-from mmengine.model import MomentumAnnealingEMA
+from mmengine.config import ConfigDict
+from mmengine.model import MomentumAnnealingEMA, BaseModule
 from mmengine.utils.misc import is_list_of
-from mmengine.model.base_module import BaseModule
 from mmengine.dist import all_gather, get_rank, is_main_process
 from mmpretrain.registry import MODELS
 from mmpretrain.structures import DataSample
@@ -295,8 +295,20 @@ class AutoEncoder_Recon(AutoEncoderSelfSup):
 
 
 class RelativeSimilaritySelfSup(AutoEncoderSelfSup):
-    def __init__(self, momentum=1e-4, gamma=100, update_interval=1, *args, **kwargs):
+    def __init__(
+        self, 
+        gap_head:ConfigDict, 
+        sim_head:ConfigDict, 
+        vec_head:ConfigDict, 
+        momentum=1e-4, 
+        gamma=100, 
+        update_interval=1, 
+        *args, **kwargs
+    ):
         super().__init__(*args, **kwargs)
+        self.gap_head:BaseModule = MODELS.build(gap_head)
+        self.sim_head = MODELS.build(sim_head)
+        self.vec_head = MODELS.build(vec_head)
         self.momentum_encoder = MomentumAnnealingEMA(
             self.whole_model_,
             momentum=momentum,
@@ -368,10 +380,14 @@ class GlobalAvgPool(torch.nn.Module):
 
 class BaseVolumeWisePredictor(BaseModule):
     def __init__(self, dim:Literal["1d","2d","3d"], in_channels:int, num_volume:int=3):
+        super().__init__()
         self.dim = dim
         self.num_volume = num_volume
         self.act = torch.nn.GELU()
-        self.embed = eval(f"torch.nn.Conv{dim}")(in_channels, in_channels, 1)
+        self.proj = torch.nn.ModuleList([
+            eval(f"torch.nn.Conv{dim}")(in_channels//(2**i), in_channels//(2**(i+1)), 3, 2)
+            for i in range(3)
+        ])
         self.avg_pool = GlobalAvgPool(dim)
     
     def forward(self, x:Tensor) -> Tensor:
@@ -382,27 +398,21 @@ class BaseVolumeWisePredictor(BaseModule):
         Returns:
             x (Tensor): [N, num_volume, C]
         """
-        num_volume = x.size(1)
-        # forward each volume
-        x = torch.stack(
-            x.chunk(
-                self.act(self.embed(num_volume)), 
-                dim=1
-            ), 
-            dim=1
-        )  # [N, num_volume, C, ...]
-        x = self.avg_pool(x) # [N, num_volume, C, *1]
-        return x  # [N, num_volume, C]
+        x = x.transpose(1,0)
+        extreacted = []
+        for batch in x:
+            for proj in self.proj:
+                batch = proj(batch)
+                batch = self.act(batch)
+            batch = self.avg_pool(batch)
+            extreacted.append(batch)
+        
+        return torch.stack(extreacted, dim=1)  # [N, num_volume, C]
 
 
 class GapPredictor(BaseVolumeWisePredictor):
-    def __init__(self, dim:Literal["1d","2d","3d"], in_channels:int):
-        super().__init__(dim, in_channels)
-        self.proj = torch.nn.ModuleList([
-            torch.nn.Linear(in_channels//(2**i), in_channels//(2**(i+1)))
-            for i in range(4)
-        ])
-        self.act = torch.nn.GELU()
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self.cri = torch.nn.SmoothL1Loss()
     
     def forward(self, nir:Tensor) -> Tensor:
@@ -415,9 +425,6 @@ class GapPredictor(BaseVolumeWisePredictor):
             vector gap sort loss (Tensor): [N, ]
         """
         nir = super().forward(nir)  # [N, num_volume, C]
-        for proj in self.proj:
-            nir = proj(nir)
-            nir = self.act(nir)
         
         # Relative Positional Representation of Each Sub-Volume
         # The origin may align with the mean value of all samples' world coordinate systems'origin.
@@ -433,6 +440,26 @@ class GapPredictor(BaseVolumeWisePredictor):
         similarity = self.forward(nir)  # (N, num_volume, num_volume)
         loss = self.cri(similarity, abs_gap)
         return loss
+
+
+class VecAngConstraint(BaseVolumeWisePredictor):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.cri = torch.nn.SmoothL1Loss()
+    
+    def forward(self, nir:Tensor) -> Tensor:
+        """
+        
+        Args:
+            nir (Tensor): Size [N, num_volume, C, Z, Y, X]
+            rel_gap (Tensor): Size [N, num_volume (start from), num_volume (point to), coord-dim-length]
+        
+        Returns:
+            vector gap sort loss (Tensor): [N, ]
+        """
+    
+    def loss(self, nir:Tensor, coord:Tensor) -> Tensor:
+        ...
 
 
 class SimPairDiscriminator(BaseModule):
@@ -642,8 +669,9 @@ class SimPairDiscriminator(BaseModule):
 
 
 
-"""MGAM TEST PASSED @ 2024.12.25"""
 
+
+"""MGAM TEST"""
 
 def generate_test_data(batch_size:int=2, 
                       num_volumes:int=3,
@@ -663,7 +691,6 @@ def generate_test_data(batch_size:int=2,
     abs_gap = torch.randn(batch_size, num_volumes, num_volumes, 3)
     
     return nir, abs_gap
-
 
 class TestSimPairDiscriminator:
     @pytest.fixture
@@ -731,6 +758,82 @@ class TestSimPairDiscriminator:
         assert target.shape == (batch_size, num_pairs, 2)
         assert torch.all(target[..., 0] == discriminator.LABEL_ADJA_PAIR)
         assert torch.all(target[..., 1] == discriminator.LABEL_DIST_PAIR)
+
+def test_gap_predictor():
+    # 测试3D情况
+    batch_size = 2
+    num_volume = 3
+    channels = 16
+    spatial_size = 64
+    
+    predictor = GapPredictor(
+        dim="3d",
+        in_channels=channels,
+        num_volume=num_volume
+    )
+    
+    # 创建模拟输入
+    nir = torch.randn(
+        batch_size, 
+        num_volume,
+        channels,
+        spatial_size,
+        spatial_size,
+        spatial_size
+    )
+    
+    # 测试forward方法
+    similarity = predictor.forward(nir)
+    
+    # 验证输出形状
+    assert similarity.shape == (batch_size, num_volume, num_volume)
+    
+    # 测试loss方法
+    abs_gap = torch.randn(batch_size, num_volume, num_volume)
+    loss = predictor.loss(nir, abs_gap)
+    assert isinstance(loss, Tensor)
+    assert loss.ndim == 0  # 标量损失值
+
+def test_gap_predictor_different_dims():
+    dims = ["1d", "2d", "3d"]
+    spatial_sizes = {
+        "1d": (64,),
+        "2d": (64, 64),
+        "3d": (64, 64, 64)
+    }
+    
+    for dim in dims:
+        batch_size = 2
+        num_volume = 3
+        channels = 16
+        
+        predictor = GapPredictor(
+            dim=dim,
+            in_channels=channels,
+            num_volume=num_volume
+        )
+        
+        # 创建对应维度的输入
+        input_shape = (batch_size, num_volume, channels) + spatial_sizes[dim]
+        nir = torch.randn(*input_shape)
+        
+        # 测试forward
+        similarity = predictor.forward(nir)
+        assert similarity.shape == (batch_size, num_volume, num_volume)
+
+def test_gap_predictor_edge_cases():
+    # 测试单batch情况
+    predictor = GapPredictor("3d", 16, 3)
+    nir = torch.randn(1, 3, 16, 48, 48, 48)
+    similarity = predictor.forward(nir)
+    assert similarity.shape == (1, 3, 3)
+    
+    # 测试最小volume数
+    predictor = GapPredictor("3d", 16, 2)
+    nir = torch.randn(2, 2, 16, 48, 48, 48)
+    similarity = predictor.forward(nir)
+    assert similarity.shape == (2, 2, 2)
+
 
 
 if __name__ == "__main__":
