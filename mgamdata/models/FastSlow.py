@@ -1,5 +1,6 @@
 import os
 import pdb
+import pytest
 from abc import abstractmethod
 from functools import partial
 from typing_extensions import Literal, OrderedDict
@@ -435,8 +436,8 @@ class GapPredictor(BaseVolumeWisePredictor):
 
 
 class SimPairDiscriminator(BaseModule):
-    LABEL_ADJA_PAIR = 1
-    LABEL_DIST_PAIR = 0
+    LABEL_ADJA_PAIR = 0
+    LABEL_DIST_PAIR = 1
     
     def __init__(self, sub_volume_size:int|list[int], dim:Literal["1d","2d","3d"], in_channels:int):
         super().__init__()
@@ -445,12 +446,13 @@ class SimPairDiscriminator(BaseModule):
         self.in_channels = in_channels
         
         self.pair_encoder = torch.nn.ModuleList([
-            eval(f"torch.nn.Conv{dim}")(in_channels*(2**i), in_channels*(2**(i+1)), 3, 2)
+            eval(f"torch.nn.Conv{dim}")(2*in_channels*(2**i), 2*in_channels*(2**(i+1)), 3, 2)
             for i in range(4)
         ])
         self.act = torch.nn.GELU()
         self.avg_pool = GlobalAvgPool(dim)
-        self.discriminator = torch.nn.Linear(in_channels*(2**4), 1, bias=False)
+        self.discriminator = torch.nn.Linear(2 * in_channels*(2**4), 1, bias=False)
+        self.cri = torch.nn.BCELoss()
     
     def _get_subvolume_indices(self, diff_vectors, volume_shape
         ) -> list[
@@ -554,28 +556,65 @@ class SimPairDiscriminator(BaseModule):
             
         return torch.stack(batched_samples, dim=0)  # [N, num_pairs, 4, C, ...]
 
-    def encode(self, sub_vols:Tensor) -> Tensor:
+    def forward(self, sub_vols:Tensor) -> Tensor:
         """
         Args: 
             sub_vols (Tensor): [N, num_pairs, 4, C, ...]
             
         Returns:
-            encoded_vols (Tensor): [N, num_pairs, 4, C]
+            encoded_vols (Tensor): [N, num_pairs, 2 (adjacent, distant)]
+        
+        NOTE
+            The third dimension 4 equals to [adj1, adj2, dist1, dist2]
         """
         
         ori_shape = sub_vols.shape
-        sub_vols = sub_vols.reshape(ori_shape[0], ori_shape[1]*ori_shape[2], *ori_shape[3:])
-        encoded = []
+        # sub_vols: [N, num_pairs*2, 2C, ...]
+        sub_vols = sub_vols.reshape(ori_shape[0], ori_shape[1]*2, 2*ori_shape[3], *ori_shape[4:])
+        dist_preds = []
         
-        for i in range(sub_vols.size(1)):
-            v = sub_vols[:, i]
+        for pair in range(sub_vols.size(1)):
+            v = sub_vols[:, pair]  # [N, 2C, ...]
             for enc_layer in self.pair_encoder:
                 v = enc_layer(v)
                 v = self.act(v)
-            v = self.avg_pool(v)
-            encoded.append(v)
+            v = self.avg_pool(v)  # [N, 2C]
+            v = self.discriminator(v).squeeze(-1)  # [N, ]
+            dist_preds.append(v)
         
-        return torch.stack(encoded, dim=1).reshape(ori_shape)  # [N, num_pairs, 4, C]
+        # dist_preds: [N, num_pairs, 2]
+        dist_preds = torch.stack(dist_preds, dim=-1).reshape(ori_shape[0], ori_shape[1], 2)
+        
+        return dist_preds # [N, num_pairs, 2]
+
+    def _generate_target(self, dist_preds:Tensor) -> Tensor:
+        """Generate pseudo-labels for discriminator predictions
+        
+        Args:
+            dist_preds (Tensor): shape [N, num_pairs, 2]
+            
+        Returns:
+            target (Tensor): shape [N, num_pairs, 2]
+        """
+        assert dist_preds.size(-1) == 2, f"dist_preds should have 2 channels, but got {dist_preds.size(-1)}"
+        if not hasattr(self, "pseudo_label"):
+            target = torch.empty_like(dist_preds)
+            target[..., 0] = self.LABEL_ADJA_PAIR  # adjacent pairs
+            target[..., 1] = self.LABEL_DIST_PAIR  # distant pairs
+            setattr(self, "pseudo_label", target)  # [N, num_pairs, 2]
+
+        return getattr(self, "pseudo_label")  # [N, num_pairs, 2]
+
+    def _binarize_preds(self, dist_preds: Tensor) -> Tensor:
+        """Binarize predictions based on comparison along last dimension
+        
+        Args:
+            dist_preds (Tensor): shape [N, num_pairs, 2]
+            
+        Returns:
+            binary_preds (Tensor): shape [N, num_pairs, 2]
+        """
+        return torch.argsort(dist_preds, dim=-1).float()
 
     def loss(self, nir:Tensor, abs_gap:Tensor) -> Tensor:
         """
@@ -584,14 +623,115 @@ class SimPairDiscriminator(BaseModule):
             abs_gap (Tensor): [N, num_volume (start from), num_volume (point to), coord-dim-length]
         """
         
-        sub_volume_indices = self._get_subvolume_indices(abs_gap, nir.shape[3:])
+        # determine the adjacent and distant sub-volumes' position
+        sub_volume_indices = self._get_subvolume_indices(abs_gap, [nir.shape[0], *nir.shape[3:]])
+        
+        # get view of these positions
         sub_volumes = self._sub_volume_selector(nir, sub_volume_indices)  # [N, num_pairs, 4, C, ...]
-        encoded_sub_volumes = self.encode(sub_volumes)  # [N, num_pairs, 4, C]
         
-        discr = self.discriminator(sub_volumes).squeeze(-1)  # [N, num_pairs*4]
+        # execute prediction forward
+        dist_preds = self.forward(sub_volumes)  # [N, num_pairs, 2 (adja, dist)]
+        # binarize the prediction
+        dist_preds = self._binarize_preds(dist_preds)  # [N, num_pairs, 2 (adja, dist)]
         
-        labels = torch.zeros_like(discr)
-        labels[:, ::4], labels[:, 1::4] = 1, 1  # 每组中前两个(相邻对)设为1
+        # generate pseudo-label using adjacent and distant contexts
+        target = self._generate_target(dist_preds)
+
+        # execute loss calculation
+        return self.cri(dist_preds, target)
+
+
+
+"""MGAM TEST PASSED @ 2024.12.25"""
+
+
+def generate_test_data(batch_size:int=2, 
+                      num_volumes:int=3,
+                      channels:int=4,
+                      volume_size:int=64) -> tuple[torch.Tensor, torch.Tensor]:
+    """生成测试数据
+    
+    Returns:
+        nir: [N, num_volumes, C, Z, Y, X]
+        abs_gap: [N, num_volumes, num_volumes, 3]
+    """
+    # 生成随机体积数据
+    nir = torch.randn(batch_size, num_volumes, channels, 
+                     volume_size, volume_size, volume_size)
+    
+    # 生成随机距离向量
+    abs_gap = torch.randn(batch_size, num_volumes, num_volumes, 3)
+    
+    return nir, abs_gap
+
+
+class TestSimPairDiscriminator:
+    @pytest.fixture
+    def discriminator(self):
+        return SimPairDiscriminator(
+            sub_volume_size=48,
+            dim="3d",
+            in_channels=4
+        )
+    
+    def test_initialization(self, discriminator):
+        assert discriminator.s == 48
+        assert discriminator.dim == "3d"
+        assert discriminator.in_channels == 4
+        assert len(discriminator.pair_encoder) == 4
+    
+    def test_forward(self, discriminator):
+        batch_size, num_pairs = 2, 3
+        num_sub_vols, channels = 4, 4
+        vol_size = 48
         
-        bce_loss = torch.nn.functional.binary_cross_entropy_with_logits(discr, labels)
-        return bce_loss
+        # 创建输入tensor
+        sub_vols = torch.randn(batch_size, num_pairs, num_sub_vols, 
+                             channels, vol_size, vol_size, vol_size)
+        
+        # 执行forward
+        output = discriminator.forward(sub_vols)
+        
+        # 检查输出维度
+        assert output.shape == (batch_size, num_pairs, 2)
+    
+    def test_loss_calculation(self, discriminator):
+        # 生成测试数据
+        nir, abs_gap = generate_test_data()
+        
+        # 计算损失
+        loss = discriminator.loss(nir, abs_gap)
+        
+        # 检查损失是否为标量
+        assert loss.dim() == 0
+        assert not torch.isnan(loss)
+        assert not torch.isinf(loss)
+    
+    def test_sub_volume_selector(self, discriminator):
+        # 生成测试数据
+        nir, abs_gap = generate_test_data()
+        
+        # 获取子体积索引
+        indices = discriminator._get_subvolume_indices(abs_gap, [nir.shape[0], *nir.shape[3:]])
+        
+        # 选择子体积
+        sub_vols = discriminator._sub_volume_selector(nir, indices)
+        
+        # 检查输出维度
+        assert len(sub_vols.shape) == 7  # [N, num_pairs, 4, C, s, s, s]
+        assert sub_vols.shape[2] == 4    # 4个子体积
+        assert all(s == 48 for s in sub_vols.shape[-3:])  # 子体积大小
+    
+    def test_generate_target(self, discriminator):
+        batch_size, num_pairs = 2, 3
+        dist_preds = torch.randn(batch_size, num_pairs, 2)
+        
+        target = discriminator._generate_target(dist_preds)
+        
+        assert target.shape == (batch_size, num_pairs, 2)
+        assert torch.all(target[..., 0] == discriminator.LABEL_ADJA_PAIR)
+        assert torch.all(target[..., 1] == discriminator.LABEL_DIST_PAIR)
+
+
+if __name__ == "__main__":
+    pytest.main([__file__])
