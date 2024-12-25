@@ -50,16 +50,28 @@ def sitk_resample_to_spacing(
     target_origin = [original_origin[d] + 0.5 * (spacing[d] - original_spacing[d])
                      for d in range(3)]
     # 执行重采样
-    return sitk.Resample(
-        image1=mha,
-        size=resampled_size,  # type:ignore
-        interpolator=INTERPOLATOR(field),
-        outputSpacing=spacing,
-        outputPixelType=PIXEL_TYPE(field),
-        outputOrigin=mha.GetOrigin(),
-        outputDirection=mha.GetDirection(),
-        transform=sitk.Transform(),
-    )
+    try:
+        return sitk.Resample(
+            image1=mha,
+            size=resampled_size,  # type:ignore
+            interpolator=INTERPOLATOR(field),
+            outputSpacing=spacing,
+            outputPixelType=PIXEL_TYPE(field),
+            outputOrigin=mha.GetOrigin(),
+            outputDirection=mha.GetDirection(),
+            transform=sitk.Transform(),
+        )
+    except Exception as e:
+        return {
+            "error": f"Failed to resample image: {e}",
+            "original_size": original_size,
+            "original_spacing": original_spacing,
+            "spacing": spacing,
+            "resampled_size": resampled_size,
+            "target_origin": target_origin,
+            "mha": str(mha),
+            "field": field,
+        }
 
 
 def sitk_resample_to_image(

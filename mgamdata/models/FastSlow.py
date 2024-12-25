@@ -17,7 +17,6 @@ from mmpretrain.structures import DataSample
 from mmpretrain.models.selfsup.base import BaseSelfSupervisor
 from mmpretrain.models.selfsup.mocov3 import CosineEMA
 
-
 from mgamdata.mm.mmseg_Dev3D import PixelUnshuffle1D, PixelUnshuffle3D
 
 
@@ -303,7 +302,7 @@ class RelativeSimilaritySelfSup(AutoEncoderSelfSup):
         )
 
     def parse_target(self, data_samples: list[DataSample]):
-        # coords (coordinates): [N, 3 (sub-volume), 3 (coord-dim)]
+        # coords (coordinates):        [N, 3 (sub-volume), 3 (coord-dim)]
         coords = torch.stack([sample.coord for sample in data_samples])
         # abs_gap (absolute distance): [N, 3 (start from), 3 (point to), 3(coord-dim)]
         abs_gap = torch.stack([sample.abs_gap for sample in data_samples])
@@ -314,6 +313,7 @@ class RelativeSimilaritySelfSup(AutoEncoderSelfSup):
     def loss(
         self, inputs: list[Tensor], data_samples: list[DataSample], **kwargs
     ) -> dict[str, Tensor]:
+        
         assert isinstance(inputs, list)
         self.backbone: BaseModule
         self.head: BaseModule
@@ -324,18 +324,56 @@ class RelativeSimilaritySelfSup(AutoEncoderSelfSup):
         sv3 = inputs[2]
         coords, abs_gap, rel_gap = self.parse_target(data_samples)
         
-        # f_sv: neural implicit representation
+        # nir_sv: neural implicit representation of sub-volume
         nir_sv1 = self.whole_model_(sv1)[0]
-        nir_sv2 = self.whole_model_(sv2)[0]
-        nir_sv3 = self.whole_model_(sv3)[0]
-        nir = torch.stack([nir_sv1, nir_sv2, nir_sv3], dim=1)
+        nir_sv2 = self.momentum_encoder(sv2)[0]
+        nir_sv3 = self.momentum_encoder(sv3)[0]
+        nir = torch.stack([nir_sv1, nir_sv2, nir_sv3], dim=1) # [N, 3, C, Z, Y, X]
         
+        # relative gap self-supervision
         rel_gap_loss = self.gap_head.loss(nir, rel_gap)
+        # similarity self-supervision (Opposite nir has larger difference, namely negative label)
         nir_sim_loss = self.sim_head.loss(nir, coords)
+        # vector angle self-supervision (Add Sum 180°)
+        vec_ang_loss = self.vec_head.loss(nir, abs_gap)
         
+        # update momentum model
+        self.momentum_encoder.update_parameters(self.whole_model_)
 
-        losses = {}
-        selfsup_loss = self.head.loss(recon, ori)
+        return {
+            "loss_rel_gap": rel_gap_loss,
+            "loss_nir_sim": nir_sim_loss,
+            "loss_vec_ang": vec_ang_loss,
+        }
 
-        losses.update(selfsup_loss)
-        return losses
+
+class GapPredictor(BaseModule):
+    def __init__(self, in_channels:int, dim:Literal["1d","2d","3d"]):
+        self.in_channels = in_channels
+        self.dim = dim
+        if dim == "1d":
+            self.avg_pool = torch.nn.AdaptiveAvgPool1d((1))
+            downsample_conv = torch.nn.Conv1d
+        elif dim == "2d":
+            self.avg_pool = torch.nn.AdaptiveMaxPool2d((1,1))
+            downsample_conv = torch.nn.Conv2d
+        elif dim == "3d":
+            self.avg_pool = torch.nn.AdaptiveMaxPool3d((1,1,1))
+            downsample_conv = torch.nn.Conv3d
+        else:
+            raise TypeError(f"Invalid dimension {dim}")
+        
+        self.proj = torch.nn.ModuleList([
+            torch.nn.Linear(in_channels//(2**i), in_channels//(2**(i+1)))
+            for i in range(4)
+        ])
+    
+    def forward(self, nir:Tensor, rel_gap:Tensor) -> Tensor:
+        """
+        Args:
+            nir (Tensor): Size [N, 3, C, Z, Y, X]
+            rel_gap (Tensor): Size [N, 3 (start from), 3 (point to), 3(coord-dim)]
+        
+        Returns:
+            vector gap sort loss (Tensor): [N, ]
+        """

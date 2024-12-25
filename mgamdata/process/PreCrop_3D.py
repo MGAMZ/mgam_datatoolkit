@@ -1,9 +1,11 @@
 import os
 import argparse
 import json
+import pdb
 import multiprocessing as mp
 from abc import abstractmethod
 from colorama import Fore, Style
+from typing_extensions import deprecated
 from tqdm import tqdm
 
 import numpy as np
@@ -161,18 +163,22 @@ class PreCropper3D:
         if anno_itk_path is not None:
             anno_itk_image = sitk.ReadImage(anno_itk_path)
             anno_array = sitk.GetArrayFromImage(anno_itk_image)
+            assert (
+                image_array.shape == anno_array.shape
+            ), f"Shape Mismatch on {image_itk_image}, image shape: {image_array.shape}, anno shape: {anno_array.shape}"
         else:
             anno_array = None
 
+        # Deprecat too small volume
         if any(
             [
-                dim < crop_size
-                for dim, crop_size in zip(image_array.shape, cropper.crop_size)
+                vol_size < crop_size
+                for vol_size, crop_size in zip(image_array.shape, cropper.crop_size)
             ]
         ):
             print(
                 Fore.YELLOW,
-                f"Deprecated due to image shape: {image_itk_path}",
+                f"Deprecated due to too small volume ({image_array.shape}): {image_itk_path}",
                 Style.RESET_ALL,
             )
             return None
@@ -181,8 +187,11 @@ class PreCropper3D:
         if self.args.cut_edge is not None and any(self.args.cut_edge):
             for dim, cut_length in enumerate(self.args.cut_edge):
                 dim_length = image_array.shape[dim]
-                indices_to_cut = np.arange(self.args.cut_edge) + np.arange(
-                    dim_length - cut_length, dim_length
+                indices_to_cut = np.concatenate(
+                    [
+                        np.arange(cut_length),
+                        np.arange(dim_length - cut_length, dim_length),
+                    ]
                 )
                 image_array = np.delete(image_array, indices_to_cut, axis=dim)
                 if anno_array is not None:
@@ -274,6 +283,7 @@ class PreCropper3D:
         json.dump(cropped_series_meta, open(crop_meta_path, "w"), indent=4)
 
 
+@deprecated("Use the flexible version `SemiSupervisedMhaCropper3D` please.")
 class StandardMhaCropper3D(PreCropper3D):
     def parse_task(self):
         task_list = []

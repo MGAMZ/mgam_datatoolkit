@@ -5,7 +5,7 @@ from multiprocessing import Pool
 import SimpleITK as sitk
 from tqdm import tqdm
 
-from mgamdata.io.sitk_toolkit import sitk_resample_to_spacing_v2, sitk_resample_to_size
+from mgamdata.io.sitk_toolkit import sitk_resample_to_spacing, sitk_resample_to_size
 
 """
 Convert a mha folder with image and label subfolder
@@ -23,7 +23,7 @@ def process_file(args):
     
     # Resample the MHA file
     if spacing:
-        resampled_mha = sitk_resample_to_spacing_v2(mha, spacing, field)
+        resampled_mha = sitk_resample_to_spacing(mha, spacing, field)
     elif size:
         resampled_mha = sitk_resample_to_size(mha, size, field)
     else:

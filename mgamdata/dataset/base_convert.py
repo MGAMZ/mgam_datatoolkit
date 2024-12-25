@@ -81,6 +81,11 @@ class StandardFileFormatter:
             input_image_mha = sitk_resample_to_spacing(
                 input_image_mha, spacing, "image"
             )
+            if not isinstance(input_image_mha, sitk.Image):
+                convertion_log["id"] = "error"
+                convertion_log["error"] = "Resample to spacing failed."
+                convertion_log["resample_error_detail"] = input_image_mha
+                return convertion_log
         elif size is not None:
             assert spacing is None, "Cannot set both spacing and size."
             input_image_mha = sitk_resample_to_size(
