@@ -6,10 +6,12 @@ from functools import partial
 from typing_extensions import Literal, OrderedDict
 from itertools import product
 
+import numpy as np
 import torch
 from torch import Tensor
 from torch.nn import PixelUnshuffle as PixelUnshuffle2D
 
+from mmcv.transforms import BaseTransform
 from mmengine.config import ConfigDict
 from mmengine.model import MomentumAnnealingEMA, BaseModule
 from mmengine.utils.misc import is_list_of
@@ -294,6 +296,68 @@ class AutoEncoder_Recon(AutoEncoderSelfSup):
         return losses
 
 
+class RandomSubView(BaseTransform):
+    """
+        Get random sub-view from the original image.
+        
+        Required fields:
+            - img: [C, *]
+            - seg: [*] (Optional)
+            - seg_fields
+        
+        Modified fields:
+            - img: [num_views, C, *]
+            - seg: [num_views, *] (Optional)
+        
+        Added fields:
+            - view_coords: [num_views, num_spatial_dims]
+    """
+    def __init__(self, num_views: int, dim: Literal["1d", "2d", "3d"], size: tuple[int]):
+        self.num_views = num_views
+        self.dim = dim
+        self.size = size
+    
+    def _determine_slices(self, shape: tuple[int]) -> tuple[list[slice], list[int]]:
+        full_slices = [slice(None)] * len(shape)
+        center_coords = []
+        
+        for i, s in enumerate(self.size):
+            dim_idx = -(i + 1)
+            start = np.random.randint(0, shape[dim_idx] - s)
+            full_slices[dim_idx] = slice(start, start + s)
+            center_coords.insert(0, start + s // 2)
+            
+        return full_slices, center_coords
+    
+    def _get_sub_view(self, array: np.ndarray, slices: list[slice]) -> np.ndarray:
+        return array[tuple(slices)]
+    
+    def transform(self, results):
+        img = results["img"]
+        segs = {seg_field: [] for seg_field in results.get("seg_fields", [])}
+        coords = []
+        img_views = []
+        
+        for _ in range(self.num_views):
+            slices, center_coord = self._determine_slices(img.shape)
+            
+            sub_img_view = self._get_sub_view(img, slices)
+            img_views.append(sub_img_view)
+            coords.append(center_coord)
+            
+            for seg_field in results.get("seg_fields", []):
+                seg_slices = slices[1:] if len(slices) > 1 else slices
+                sub_seg = self._get_sub_view(results[seg_field], seg_slices)
+                segs[seg_field].append(sub_seg)
+        
+        results["img"] = np.stack(img_views)  # [num_views, *]
+        results["view_coords"] = torch.from_numpy(np.array(coords))  # [num_views, num_spatial_dims]
+        for seg_field in results.get("seg_fields", []):
+            results[seg_field] = np.stack(segs[seg_field])
+        
+        return results
+
+
 class RelativeSimilaritySelfSup(AutoEncoderSelfSup):
     def __init__(
         self, 
@@ -318,32 +382,36 @@ class RelativeSimilaritySelfSup(AutoEncoderSelfSup):
 
     def parse_target(self, data_samples: list[DataSample]):
         # coords (coordinates):        [N, 3 (sub-volume), 3 (coord-dim)]
-        coords = torch.stack([sample.coord for sample in data_samples])
+        coords = torch.stack([sample.view_coord for sample in data_samples])
         # abs_gap (absolute distance): [N, 3 (start from), 3 (point to), 3(coord-dim)]
-        abs_gap = torch.stack([sample.abs_gap for sample in data_samples])
+        abs_gap = torch.linalg.vector_norm(coords.unsqueeze(1) - coords.unsqueeze(2), dim=-1)
         # rel_gap (relative distance): [N, 3 (start from), 3 (point to), 3(coord-dim)]
         rel_gap = abs_gap / torch.triu(abs_gap, diagonal=1).sum(dim=(1,2))
         return coords, abs_gap, rel_gap
 
     def loss(
-        self, inputs: list[Tensor], data_samples: list[DataSample], **kwargs
+        self, inputs: Tensor, data_samples: list[DataSample], **kwargs
     ) -> dict[str, Tensor]:
+        """
+        Args:
+            inputs (Tensor): [N, sub-view, C, *]
+            data_samples (list[DataSample]): 
+                DataSample:
+                    - view_coords (Tensor): [sub-view, 3]
+        """
         
-        assert isinstance(inputs, list)
         self.backbone: BaseModule
         self.head: BaseModule
         
-        # sv: sub volume
-        sv1 = inputs[0]
-        sv2 = inputs[1]
-        sv3 = inputs[2]
+        # sv: sub view
+        sv_main = inputs[:, 0]
+        sv_aux = inputs[:, 1:]
         coords, abs_gap, rel_gap = self.parse_target(data_samples)
         
-        # nir_sv: neural implicit representation of sub-volume
-        nir_sv1 = self.whole_model_(sv1)[0]
-        nir_sv2 = self.momentum_encoder(sv2)[0]
-        nir_sv3 = self.momentum_encoder(sv3)[0]
-        nir = torch.stack([nir_sv1, nir_sv2, nir_sv3], dim=1)  # [N, 3, C, Z, Y, X]
+        # nir_sv: neural implicit representation of sub-sub_view
+        nir_main = self.whole_model_(sv_main)[0]
+        nir_aux = [self.momentum_encoder(sv)[0] for sv in sv_aux]
+        nir = torch.stack([nir_main, *nir_aux], dim=1)  # [N, sub_view, C, Z, Y, X]
         
         # relative gap self-supervision
         rel_gap_loss = self.gap_head.loss(nir, abs_gap)
@@ -443,13 +511,13 @@ class GapPredictor(BaseVolumeWisePredictor):
 
 
 class VecAngConstraint(BaseVolumeWisePredictor):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.cri = torch.nn.SmoothL1Loss()
-    
+    def __init__(self, dim:Literal["1d","2d","3d"], *args, **kwargs):
+        super().__init__(dim=dim, *args, **kwargs)
+        num_channel_from_super = self.proj[-1].out_channels
+        self.proj_direction_vector = torch.nn.Linear(num_channel_from_super, int(dim.replace('d','')))
+
     def forward(self, nir:Tensor) -> Tensor:
         """
-        
         Args:
             nir (Tensor): Size [N, num_volume, C, Z, Y, X]
             rel_gap (Tensor): Size [N, num_volume (start from), num_volume (point to), coord-dim-length]
@@ -457,9 +525,65 @@ class VecAngConstraint(BaseVolumeWisePredictor):
         Returns:
             vector gap sort loss (Tensor): [N, ]
         """
-    
+        nir = super().forward(nir)  # [N, num_volume, C]
+        dire_vect = self.proj_direction_vector(nir)  # [N, num_volume, coord-dim-length]
+        dire_vect_diff = dire_vect.unsqueeze(2) - dire_vect.unsqueeze(1)  # (N, num_volume, num_volume, C)
+        return dire_vect_diff  # (N, num_volume, num_volume, C)
+
+    def find_all_paths_batched(self, direction_tensor: Tensor) -> Tensor:
+        """
+        Args:
+            direction_tensor: Shape [B,L,L,D] tensor containing batched direction vectors
+        Returns:
+            paths_vectors: List of B tensors, each of shape [N,D] containing path vectors
+        """
+        B, L, _, D = direction_tensor.shape
+        start_point = 0
+        all_batch_paths = []
+        
+        for batch_idx in range(B):
+            batch_paths = []
+            
+            def backtrack(current: int, visited: set, path_vector: Tensor):
+                if len(visited) == L:
+                    final_vector = path_vector + direction_tensor[batch_idx, current, start_point]
+                    batch_paths.append(final_vector)
+                    return
+                    
+                for next_point in range(L):
+                    if next_point not in visited:
+                        visited.add(next_point)
+                        new_vector = path_vector + direction_tensor[batch_idx, current, next_point]
+                        backtrack(next_point, visited, new_vector)
+                        visited.remove(next_point)
+            
+            backtrack(start_point, {start_point}, torch.zeros(D, device=direction_tensor.device))
+            
+            # 将当前batch的所有路径向量堆叠
+            if batch_paths:
+                all_batch_paths.append(torch.stack(batch_paths))
+            else:
+                all_batch_paths.append(torch.zeros((0, D), device=direction_tensor.device))
+        
+        # Align num of direction vector thus being available for tensor stacking.
+        max_paths = max(p.shape[0] for p in all_batch_paths)
+        padded_paths = []
+        
+        for paths in all_batch_paths:
+            if paths.shape[0] < max_paths:
+                padding = torch.zeros((max_paths - paths.shape[0], D), device=paths.device)
+                padded_paths.append(torch.cat([paths, padding], dim=0))
+            else:
+                padded_paths.append(paths)
+        
+        # 返回形状为 [B,N,D] 的tensor
+        return torch.stack(padded_paths)
+
     def loss(self, nir:Tensor, coord:Tensor) -> Tensor:
-        ...
+        dire_vect = self.forward(nir)  # (N, num_volume, num_volume)
+        route_sum = self.find_all_paths_batched(dire_vect)
+        loss = torch.linalg.vector_norm(route_sum, ord=2).mean()
+        return loss
 
 
 class SimPairDiscriminator(BaseModule):
