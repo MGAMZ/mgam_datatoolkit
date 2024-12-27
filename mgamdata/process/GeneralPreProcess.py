@@ -22,41 +22,66 @@ NOTE
 """
 
 
-class PadVolume(BaseTransform):
+class AutoPad(BaseTransform):
     def __init__(
-        self, size: tuple[int, int, int], pad_val: int = 0, pad_label_val: int = 0
+        self, 
+        size: tuple[int, ...], 
+        dim: Literal["1d", "2d", "3d"],
+        pad_val: int = 0, 
+        pad_label_val: int = 0
     ):
+        self.dim = dim
+        self.dim_map = {"1d": 1, "2d": 2, "3d": 3}
+        if len(size) != self.dim_map[dim]:
+            raise ValueError(f"Size tuple length {len(size)} does not match dim {dim}")
         self.size = size
         self.pad_val = pad_val
         self.pad_label_val = pad_label_val
 
+    def _get_pad_params(self, current_shape: tuple) -> tuple[tuple[int, int], ...]:
+        pad_params = []
+        # 只处理最后n个维度，n由dim决定
+        dims_to_pad = self.dim_map[self.dim]
+        
+        # 确保current_shape维度足够
+        if len(current_shape) < dims_to_pad:
+            raise ValueError(f"Input shape {current_shape} has fewer dimensions than required {dims_to_pad}")
+            
+        # 处理不需要padding的前置维度
+        for _ in range(len(current_shape) - dims_to_pad):
+            pad_params.append((0, 0))
+            
+        # 处理需要padding的维度
+        for target_size, curr_size in zip(self.size, current_shape[-dims_to_pad:]):
+            if curr_size >= target_size:
+                pad_params.append((0, 0))
+            else:
+                pad = target_size - curr_size
+                pad_1 = pad // 2
+                pad_2 = pad - pad_1
+                pad_params.append((pad_1, pad_2))
+                
+        return tuple(pad_params)
+
     def transform(self, results: dict):
-        # center pad
         img = results["img"]
-
-        pad_z = self.size[0] - img.shape[0]
-        pad_y = self.size[1] - img.shape[1]
-        pad_x = self.size[2] - img.shape[2]
-        pad_z1 = pad_z // 2
-        pad_z2 = pad_z - pad_z1
-        pad_y1 = pad_y // 2
-        pad_y2 = pad_y - pad_y1
-        pad_x1 = pad_x // 2
-        pad_x2 = pad_x - pad_x1
-
-        results["img"] = np.pad(
-            img,
-            ((pad_z1, pad_z2), (pad_y1, pad_y2), (pad_x1, pad_x2)),
-            mode="constant",
-            constant_values=self.pad_val,
-        )
-        if "gt_seg_map" in results:
-            results["gt_seg_map"] = np.pad(
-                results["gt_seg_map"],
-                ((pad_z1, pad_z2), (pad_y1, pad_y2), (pad_x1, pad_x2)),
+        pad_params = self._get_pad_params(img.shape)
+        
+        if any(p[0] > 0 or p[1] > 0 for p in pad_params):
+            results["img"] = np.pad(
+                img,
+                pad_params,
                 mode="constant",
-                constant_values=self.pad_label_val,
+                constant_values=self.pad_val,
             )
+            
+            if "gt_seg_map" in results:
+                results["gt_seg_map"] = np.pad(
+                    results["gt_seg_map"],
+                    pad_params,
+                    mode="constant",
+                    constant_values=self.pad_label_val,
+                )
 
         return results
 
