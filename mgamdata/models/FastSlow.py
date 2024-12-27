@@ -381,7 +381,6 @@ class NormalizeCoord(BaseTransform):
         return results
 
 
-
 class RelativeSimilaritySelfSup(AutoEncoderSelfSup):
     def __init__(
         self, 
@@ -417,6 +416,22 @@ class RelativeSimilaritySelfSup(AutoEncoderSelfSup):
         rel_gap = abs_gap / rel_base[:, None, None, ...]  # normalize the gap matrix
         return coords, abs_gap, rel_gap
 
+    def extract_nir(self, sv_main: Tensor, sv_aux:Tensor) -> Tensor:
+        """
+        Args:
+            nir_main (Tensor): [N, C, Z, Y, X]
+            nir_aux (Tensor): [N, sub-view, C, Z, Y, X]
+        
+        Returns:
+            nir (Tensor): [N, sub-view, C, Z, Y, X]
+        """
+        # sv: sub view
+        nir_main = self.whole_model_(sv_main)[0]
+        # nir_sv: neural implicit representation of sub-sub_view
+        nir_aux = [self.momentum_encoder(sub_view)[0] for sub_view in sv_aux.transpose(0, 1)]
+        nir = torch.stack([nir_main, *nir_aux], dim=1)  # [N, sub_view, C, Z, Y, X]
+        return nir
+
     def loss(
         self, inputs: Tensor, data_samples: list[DataSample], **kwargs
     ) -> dict[str, Tensor]:
@@ -436,11 +451,8 @@ class RelativeSimilaritySelfSup(AutoEncoderSelfSup):
         sv_aux = inputs[:, 1:]
         coords, abs_gap, rel_gap = self.parse_target(data_samples)
         
-        # nir_sv: neural implicit representation of sub-sub_view
-        nir_main = self.whole_model_(sv_main)[0]
-        nir_aux = [self.momentum_encoder(sub_view)[0] 
-                   for sub_view in sv_aux.transpose(0, 1)]
-        nir = torch.stack([nir_main, *nir_aux], dim=1)  # [N, sub_view, C, Z, Y, X]
+        # neural implicit representation forward
+        nir = self.extract_nir(sv_main, sv_aux)
         
         losses = {}
         # relative gap self-supervision
@@ -461,8 +473,71 @@ class RelativeSimilaritySelfSup(AutoEncoderSelfSup):
         
         return losses
 
+    @torch.inference_mode()
+    def predict(self, inputs: Tensor, data_samples: list[DataSample], **kwargs
+    ) -> list[DataSample]:
+        """
+        Args:
+            inputs (Tensor): [N, sub-view, C, *]
+            data_samples (list[DataSample]): 
+                DataSample:
+                    - view_coords (Tensor): [sub-view, 3]
+        
+        Returns:
+            list[DataSample]:
+                DataSample:
+                    - nir (Tensor): [N, sub-view, C, Z, Y, X]
+                    - rel_gap_gt (Tensor): [N, sub-view (start from), sub-view (point to), 3]
+                    - abs_gap_gt (Tensor): [N, sub-view (start from), sub-view (point to), 3]
+                    - coords_gt (Tensor): [N, sub-view, 3]
+                    - view_coords (Tensor): [sub-view, 3]
+                    
+                    - gap_pred (Tensor): [N, sub-view, sub-view]
+                    - sim_pred (Tensor): [N, sub-view, sub-view]
+                    - vec_pred (Tensor): [N, sub-view, sub-view, 3]
+        """
+        coords, abs_gap, rel_gap = self.parse_target(data_samples)
+
+        # 提取特征
+        sv_main = inputs[:, 0]
+        sv_aux = inputs[:, 1:]
+        # neural implicit representation forward
+        nir = self.extract_nir(sv_main, sv_aux)
+
+        # 分别调用三个子模块的predict方法
+        gap_pred = self.gap_head.predict(nir)  # [N, sub-view, sub-view]
+        sim_pred = self.sim_head.predict(nir, abs_gap)  # [N, num_pairs, 2]
+        vec_pred = self.vec_head.predict(nir)  # [N, sub-view, sub-view, 3]
+
+        # 保存预测结果
+        for i in range(len(data_samples)):
+            data_samples[i].nir = nir[i]
+            data_samples[i].rel_gap_gt = rel_gap[i]
+            data_samples[i].abs_gap_gt = abs_gap[i]
+            data_samples[i].coords_gt = coords[i]
+            data_samples[i].gap_pred = gap_pred[i]
+            data_samples[i].sim_pred = sim_pred[i]
+            data_samples[i].vec_pred = vec_pred[i]
+
+        return data_samples
+    
+    def forward(self,
+                inputs: torch.Tensor|list[torch.Tensor],
+                data_samples: list[DataSample],
+                mode: str = 'tensor'):
+        if mode == 'tensor':
+            feats = self.extract_feat(inputs)
+            return feats
+        elif mode == 'loss':
+            return self.loss(inputs, data_samples)
+        elif mode == 'predict':
+            return self.predict(inputs, data_samples)
+        else:
+            raise RuntimeError(f'Invalid mode "{mode}".')
+
 
 class GlobalAvgPool(torch.nn.Module):
+    
     def __init__(self, dim: Literal["1d", "2d", "3d"]):
         super().__init__()
         self.dim = dim
@@ -547,100 +622,16 @@ class GapPredictor(BaseVolumeWisePredictor):
         loss = self.cri(similarity, rel_gap.norm(dim=-1))
         return {"loss_gap": loss}
 
-
-class VecAngConstraint(BaseVolumeWisePredictor):
-    def __init__(self, dim:Literal["1d","2d","3d"], *args, **kwargs):
-        super().__init__(dim=dim, *args, **kwargs)
-        num_channel_from_super = self.proj[-1].out_channels
-        self.proj_direction_vector = torch.nn.Linear(num_channel_from_super, int(dim.replace('d','')))
-        torch.nn.init.ones_(self.proj_direction_vector.weight)
-        self.cri = torch.nn.SmoothL1Loss()
-
-    def forward(self, nir:Tensor) -> Tensor:
+    def predict(self, nir:Tensor) -> Tensor:
         """
         Args:
-            nir (Tensor): Size [N, num_views, C, Z, Y, X]
-            rel_gap (Tensor): Size [N, num_views (start from), num_views (point to), coord-dim-length]
-        
+            nir (Tensor): [N, num_views, C, Z, Y, X]
+            
         Returns:
-            vector gap sort loss (Tensor): [N, ]
+            gap_pred (Tensor): [N, num_views, num_views]
         """
-        nir = super().forward(nir)  # [N, num_views, C]
-        dire_vect = self.proj_direction_vector(nir)  # [N, num_views, coord-dim-length]
-        dire_vect_diff = dire_vect.unsqueeze(2) - dire_vect.unsqueeze(1)  # (N, num_views, num_views, C)
-        return dire_vect_diff  # (N, num_views, num_views, C)
-
-    def find_all_paths_batched(self, direction_tensor: Tensor) -> Tensor:
-        B, L, _, D = direction_tensor.shape
-        all_batch_paths = []
-        
-        for batch_idx in range(B):
-            # 存储格式: {(start, end): [path_vectors]}
-            paths_dict = {(i,j):[] for i in range(L) for j in range(L) if i != j}
-            
-            def backtrack(current: int, start: int, visited: set, path_vector: Tensor):
-                if len(visited) == L:
-                    paths_dict[(start, current)].append(path_vector)
-                    return
-                for next_point in range(L):
-                    if next_point not in visited:
-                        visited.add(next_point)
-                        new_vector = path_vector + direction_tensor[batch_idx, current, next_point]
-                        backtrack(next_point, start, visited, new_vector)
-                        visited.remove(next_point)
-            
-            for start_point in range(L):
-                backtrack(start_point, start_point, {start_point}, 
-                        torch.zeros(D, device=direction_tensor.device))
-            
-            # 整理数据为张量形式 [L, L, max_paths, D]
-            batch_paths = []
-            for i in range(L):
-                end_paths = []
-                for j in range(L):
-                    if i != j:
-                        paths = paths_dict[(i,j)]
-                        if paths:
-                            end_paths.append(torch.stack(paths))
-                        else:
-                            end_paths.append(torch.zeros((1, D), device=direction_tensor.device))
-                    else:
-                        # 对角线位置(起点=终点)填充零向量
-                        end_paths.append(torch.zeros((1, D), device=direction_tensor.device))
-                
-                # 确保每个终点的路径数量一致
-                max_paths = max(p.shape[0] for p in end_paths)
-                padded_end_paths = []
-                for paths in end_paths:
-                    if paths.shape[0] < max_paths:
-                        padding = torch.zeros((max_paths - paths.shape[0], D), device=paths.device)
-                        padded_end_paths.append(torch.cat([paths, padding], dim=0))
-                    else:
-                        padded_end_paths.append(paths)
-                batch_paths.append(torch.stack(padded_end_paths))
-            
-            all_batch_paths.append(torch.stack(batch_paths))
-        
-        return torch.stack(all_batch_paths)  # [B, L, L, num_paths, D]
-
-    def loss(self, nir: Tensor, abs_gap: Tensor) -> dict[str, Tensor]:
-        """
-        Args:
-            nir (Tensor): [N, num_views, C, ...]
-            abs_gap (absolute distance): [N, 3 (start from), 3 (point to), 3(coord-dim)]
-        """
-        dire_vect = self.forward(nir)  # [N, L, L, D]
-        loss_vect = self.cri(dire_vect, abs_gap)
-        
-        path_vectors = self.find_all_paths_batched(dire_vect)  # [N, L, L, num_paths, D]
-        
-        # 计算所有路径与对应GT的L2距离
-        loss_loop = torch.linalg.vector_norm(
-            path_vectors - abs_gap.unsqueeze(3), 
-            dim=-1
-        ).mean()
-        
-        return {"loss_vect": loss_vect, "loss_loop": loss_loop}
+        with torch.no_grad():
+            return self.forward(nir)
 
 
 class SimPairDiscriminator(BaseModule):
@@ -809,6 +800,128 @@ class SimPairDiscriminator(BaseModule):
 
         # execute loss calculation
         return {"loss_sim": self.cri(dist_preds, target)}
+
+    def predict(self, nir:Tensor, abs_gap:Tensor) -> Tensor:
+        """
+        Args:
+            nir (Tensor): [N, num_views, C, Z, Y, X]
+            abs_gap (Tensor): [N, num_views, num_views, 3]
+            
+        Returns:
+            sim_pred (Tensor): [N, num_pairs, 2]
+        """
+        with torch.no_grad():
+            sub_volume_indices = self._get_subvolume_indices(
+                abs_gap, [nir.shape[0], *nir.shape[3:]])
+            sub_volumes = self._sub_volume_selector(nir, sub_volume_indices)
+            dist_preds = self.forward(sub_volumes)
+            return self._binarize_preds(dist_preds)
+
+
+class VecAngConstraint(BaseVolumeWisePredictor):
+    def __init__(self, dim:Literal["1d","2d","3d"], *args, **kwargs):
+        super().__init__(dim=dim, *args, **kwargs)
+        num_channel_from_super = self.proj[-1].out_channels
+        self.proj_direction_vector = torch.nn.Linear(num_channel_from_super, int(dim.replace('d','')))
+        torch.nn.init.ones_(self.proj_direction_vector.weight)
+        self.cri = torch.nn.SmoothL1Loss()
+
+    def forward(self, nir:Tensor) -> Tensor:
+        """
+        Args:
+            nir (Tensor): Size [N, num_views, C, Z, Y, X]
+            rel_gap (Tensor): Size [N, num_views (start from), num_views (point to), coord-dim-length]
+        
+        Returns:
+            vector gap sort loss (Tensor): [N, ]
+        """
+        nir = super().forward(nir)  # [N, num_views, C]
+        dire_vect = self.proj_direction_vector(nir)  # [N, num_views, coord-dim-length]
+        dire_vect_diff = dire_vect.unsqueeze(2) - dire_vect.unsqueeze(1)  # (N, num_views, num_views, C)
+        return dire_vect_diff  # (N, num_views, num_views, C)
+
+    def find_all_paths_batched(self, direction_tensor: Tensor) -> Tensor:
+        B, L, _, D = direction_tensor.shape
+        all_batch_paths = []
+        
+        for batch_idx in range(B):
+            # 存储格式: {(start, end): [path_vectors]}
+            paths_dict = {(i,j):[] for i in range(L) for j in range(L) if i != j}
+            
+            def backtrack(current: int, start: int, visited: set, path_vector: Tensor):
+                if len(visited) == L:
+                    paths_dict[(start, current)].append(path_vector)
+                    return
+                for next_point in range(L):
+                    if next_point not in visited:
+                        visited.add(next_point)
+                        new_vector = path_vector + direction_tensor[batch_idx, current, next_point]
+                        backtrack(next_point, start, visited, new_vector)
+                        visited.remove(next_point)
+            
+            for start_point in range(L):
+                backtrack(start_point, start_point, {start_point}, 
+                        torch.zeros(D, device=direction_tensor.device))
+            
+            # 整理数据为张量形式 [L, L, max_paths, D]
+            batch_paths = []
+            for i in range(L):
+                end_paths = []
+                for j in range(L):
+                    if i != j:
+                        paths = paths_dict[(i,j)]
+                        if paths:
+                            end_paths.append(torch.stack(paths))
+                        else:
+                            end_paths.append(torch.zeros((1, D), device=direction_tensor.device))
+                    else:
+                        # 对角线位置(起点=终点)填充零向量
+                        end_paths.append(torch.zeros((1, D), device=direction_tensor.device))
+                
+                # 确保每个终点的路径数量一致
+                max_paths = max(p.shape[0] for p in end_paths)
+                padded_end_paths = []
+                for paths in end_paths:
+                    if paths.shape[0] < max_paths:
+                        padding = torch.zeros((max_paths - paths.shape[0], D), device=paths.device)
+                        padded_end_paths.append(torch.cat([paths, padding], dim=0))
+                    else:
+                        padded_end_paths.append(paths)
+                batch_paths.append(torch.stack(padded_end_paths))
+            
+            all_batch_paths.append(torch.stack(batch_paths))
+        
+        return torch.stack(all_batch_paths)  # [B, L, L, num_paths, D]
+
+    def loss(self, nir: Tensor, abs_gap: Tensor) -> dict[str, Tensor]:
+        """
+        Args:
+            nir (Tensor): [N, num_views, C, ...]
+            abs_gap (absolute distance): [N, 3 (start from), 3 (point to), 3(coord-dim)]
+        """
+        dire_vect = self.forward(nir)  # [N, L, L, D]
+        loss_vect = self.cri(dire_vect, abs_gap)
+        
+        path_vectors = self.find_all_paths_batched(dire_vect)  # [N, L, L, num_paths, D]
+        
+        # 计算所有路径与对应GT的L2距离
+        loss_loop = torch.linalg.vector_norm(
+            path_vectors - abs_gap.unsqueeze(3), 
+            dim=-1
+        ).mean()
+        
+        return {"loss_vect": loss_vect, "loss_loop": loss_loop}
+
+    def predict(self, nir:Tensor) -> Tensor:
+        """
+        Args:
+            nir (Tensor): [N, num_views, C, Z, Y, X]
+            
+        Returns:
+            vec_pred (Tensor): [N, num_views, num_views, 3] 
+        """
+        with torch.no_grad():
+            return self.forward(nir)
 
 
 
