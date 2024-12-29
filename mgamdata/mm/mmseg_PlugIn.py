@@ -216,13 +216,15 @@ class SegViser(SegLocalVisualizer):
         self,
         name,
         draw_heatmap: bool = False,
-        draw_others: bool = True,
+        draw_others: bool = False,
+        amplify: float = 1.0,
         *args,
         **kwargs,
     ):
         super().__init__(name=name, *args, **kwargs)
         self.draw_heatmap = draw_heatmap
         self.draw_others = draw_others
+        self.amplify = amplify
 
     def _draw_heatmap(
         self,
@@ -230,8 +232,8 @@ class SegViser(SegLocalVisualizer):
         gt_seg: mmengine.structures.PixelData,
         seg_logit: mmengine.structures.PixelData,
     ) -> np.ndarray:
-        gt_seg_array = gt_seg.data.squeeze().cpu().numpy()
-        seg_logit_array = seg_logit.data.squeeze().cpu().numpy()
+        gt_seg_array = gt_seg.data.squeeze().cpu().numpy() / self.amplify
+        seg_logit_array = seg_logit.data.squeeze().cpu().numpy() / self.amplify
         assert (
             gt_seg_array.shape == seg_logit_array.shape
         ), f"Shape mismatch: gt_seg_array {gt_seg_array.shape} != sem_seg_array {seg_logit_array.shape}"

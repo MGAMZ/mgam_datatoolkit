@@ -728,7 +728,6 @@ class SimPairDiscriminator(BaseModule):
         NOTE
             The third dimension 4 equals to [adj1, adj2, dist1, dist2]
         """
-        
         ori_shape = sub_vols.shape
         # sub_vols: [N, num_pairs*2, 2C, ...]
         sub_vols = sub_vols.reshape(ori_shape[0], ori_shape[1]*2, 2*ori_shape[3], *ori_shape[4:])
@@ -743,10 +742,12 @@ class SimPairDiscriminator(BaseModule):
             v = self.discriminator(v).squeeze(-1)  # [N, ]
             dist_preds.append(v)
         
-        # dist_preds: [N, num_pairs, 2]
-        dist_preds = torch.stack(dist_preds, dim=-1).reshape(ori_shape[0], ori_shape[1], 2)
-        
-        return dist_preds # [N, num_pairs, 2]
+        # [N, num_pairs*2]
+        dist_preds = torch.stack(dist_preds, dim=-1)
+        # [N, num_pairs, 2 (adj, dist)]
+        dist_preds = dist_preds.reshape(ori_shape[0], ori_shape[1], 2)
+        # [N, num_pairs, 2]
+        return dist_preds.argsort(dim=-1).float()
 
     def _generate_target(self, dist_preds:Tensor) -> Tensor:
         """Generate pseudo-labels for discriminator predictions
@@ -763,19 +764,7 @@ class SimPairDiscriminator(BaseModule):
             target[..., 0] = self.LABEL_ADJA_PAIR  # adjacent pairs
             target[..., 1] = self.LABEL_DIST_PAIR  # distant pairs
             setattr(self, "pseudo_label", target)  # [N, num_pairs, 2]
-
         return getattr(self, "pseudo_label")  # [N, num_pairs, 2]
-
-    def _binarize_preds(self, dist_preds: Tensor) -> Tensor:
-        """Binarize predictions based on comparison along last dimension
-        
-        Args:
-            dist_preds (Tensor): shape [N, num_pairs, 2]
-            
-        Returns:
-            binary_preds (Tensor): shape [N, num_pairs, 2]
-        """
-        return torch.argsort(dist_preds, dim=-1).float()
 
     def loss(self, nir:Tensor, abs_gap:Tensor) -> dict[str, Tensor]:
         """
@@ -783,21 +772,15 @@ class SimPairDiscriminator(BaseModule):
             neural implicit representation (Tensor): [N, num_views, C, Z, Y, X]
             abs_gap (Tensor): [N, num_views (start from), num_views (point to), coord-dim-length]
         """
-        
         # determine the adjacent and distant sub-volumes' position
         sub_volume_indices = self._get_subvolume_indices(abs_gap, [nir.shape[0], *nir.shape[3:]])
-        
-        # get view of these positions
-        sub_volumes = self._sub_volume_selector(nir, sub_volume_indices)  # [N, num_pairs, 4, C, ...]
-        
+        # get view of these positions 
+        # [N, num_pairs, 4 (v_from_adj, v_to_adj, v_from_dist, v_to_dist), C, ...]
+        sub_volumes = self._sub_volume_selector(nir, sub_volume_indices)
         # execute prediction forward
         dist_preds = self.forward(sub_volumes)  # [N, num_pairs, 2 (adja, dist)]
-        # binarize the prediction
-        dist_preds = self._binarize_preds(dist_preds)  # [N, num_pairs, 2 (adja, dist)]
-        
         # generate pseudo-label using adjacent and distant contexts
-        target = self._generate_target(dist_preds)
-
+        target = self._generate_target(dist_preds)  # [N, num_pairs, 2]
         # execute loss calculation
         return {"loss_sim": self.cri(dist_preds, target)}
 

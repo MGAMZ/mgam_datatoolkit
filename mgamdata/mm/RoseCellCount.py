@@ -56,8 +56,8 @@ class AccuCount(BaseMetric):
             data_samples (Sequence[dict]): A batch of outputs from the model.
         """
         for data_sample in data_samples:
-            pred = data_sample["seg_logits"]["data"].sum().cpu().numpy() / self.amplify
-            label = data_sample["gt_sem_seg"]["data"].sum().cpu().numpy()
+            pred = data_sample["seg_logits"]["data"].sum().cpu().numpy()
+            label = data_sample["gt_sem_seg"]["data"].sum().cpu().numpy() / self.amplify
             product_met = self._patchwise_product_met_rate(pred, label)
             self.results.append(
                 {"pred_count": pred, "gt_count": label, "product_met": product_met}
@@ -91,6 +91,17 @@ class CellCounter(EncoderDecoder):
     def __init__(self, amplify:int, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.amplify = amplify
+        # # The ratio of the number of the pixels between input and output.
+        # # The final count relies on the pixel value accumulation.
+        # # During training, some backbone's output has smaller feature map
+        # # output than label map, the MMSeg framework will resize the output to 
+        # # align with the label map, resulting in an modification on total 
+        # # counting.
+        # # In other words, the model will only have to output a relatively 
+        # # small number of pixels, and the final count will be amplified by
+        # # resize operation.
+        # # So, such amplify must be done during inference too.
+        # self.px_ratio_in_out = px_ratio_in_out
 
     def postprocess_result(self, seg_logits, data_samples):
         """Delete post-process sigmoid activation when C=1"""
