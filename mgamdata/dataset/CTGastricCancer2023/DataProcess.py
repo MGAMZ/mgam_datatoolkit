@@ -1,9 +1,7 @@
 import os
 import pdb
 import os.path as osp
-from typing import Dict
-from typing import Sequence
-from typing import List
+from typing_extensions import Sequence
 
 
 import torch
@@ -29,7 +27,7 @@ class LoadCTImage(BaseTransform):
             lmdb_backend_proxy = LMDB_MP_Proxy.get_current_instance()
             self.lmdb_service:LMDB_DataBackend = lmdb_backend_proxy()
 
-    def transform(self, results: Dict) -> Dict:
+    def transform(self, results: dict) -> dict:
         if isinstance(results['img_path'], np.ndarray):
             img = results['img_path']
             if hasattr(self, 'lmdb_service'):
@@ -59,7 +57,7 @@ class LoadCTLabel(BaseTransform):
             self.lmdb_service:LMDB_DataBackend = lmdb_backend_proxy()
             self.EmptyLabel = np.zeros((512,512), dtype=np.uint8)
 
-    def transform(self, results: Dict) -> Dict:
+    def transform(self, results: dict) -> dict:
         if results['seg_map_path'] is None:
             gt_seg_map = self.EmptyLabel
         else:

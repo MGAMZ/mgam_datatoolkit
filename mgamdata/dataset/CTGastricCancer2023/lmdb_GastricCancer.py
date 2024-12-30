@@ -1,15 +1,14 @@
 import logging
 import os
 import pickle
+import pdb
 from collections.abc import Callable
 from io import BytesIO
 from multiprocessing import Pool, cpu_count
 from multiprocessing.managers import BaseManager
 from tqdm import tqdm
 from pprint import pprint
-from lzma import compress
-from lzma import decompress
-from lzma import FORMAT_XZ
+from lzma import compress, decompress, FORMAT_XZ
 from typing import Any
 
 import lmdb
@@ -17,7 +16,6 @@ import pydicom
 import nrrd
 import numpy as np
 
-from mmengine.registry import TRANSFORMS
 from mmengine.utils import ManagerMixin
 
 
@@ -279,6 +277,7 @@ class LMDB_DataBackend:
 				meta_buffer = txn.get(meta_key, None)
 			if pixel:
 				pixel_buffer = txn.get(pixel_key, None)
+		pdb.set_trace()
 		return (path, meta_buffer, pixel_buffer)
 
 
