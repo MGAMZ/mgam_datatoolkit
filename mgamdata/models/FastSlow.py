@@ -1,16 +1,20 @@
-from abc import abstractmethod
-from functools import partial
 import os
 import pdb
+import pytest
+from abc import abstractmethod
+from functools import partial
 from typing_extensions import Literal, OrderedDict
+from itertools import product
 
+import numpy as np
 import torch
 from torch import Tensor
 from torch.nn import PixelUnshuffle as PixelUnshuffle2D
 
-from mmengine.model import MomentumAnnealingEMA
+from mmcv.transforms import BaseTransform
+from mmengine.config import ConfigDict
+from mmengine.model import MomentumAnnealingEMA, BaseModule
 from mmengine.utils.misc import is_list_of
-from mmengine.model.base_module import BaseModule
 from mmengine.dist import all_gather, get_rank, is_main_process
 from mmpretrain.registry import MODELS
 from mmpretrain.structures import DataSample
@@ -18,6 +22,10 @@ from mmpretrain.models.selfsup.base import BaseSelfSupervisor
 from mmpretrain.models.selfsup.mocov3 import CosineEMA
 
 from mgamdata.mm.mmseg_Dev3D import PixelUnshuffle1D, PixelUnshuffle3D
+
+
+DIM_MAP = {"1d": 1, "2d": 2, "3d": 3}
+
 
 
 class MoCoV3Head_WithAcc(BaseModule):
@@ -291,9 +299,103 @@ class AutoEncoder_Recon(AutoEncoderSelfSup):
         return losses
 
 
+class RandomSubView(BaseTransform):
+    """
+        Get random sub-view from the original image.
+        
+        Required fields:
+            - img: [C, *]
+            - seg: [*] (Optional)
+            - seg_fields
+        
+        Modified fields:
+            - img: [num_views, C, *]
+            - seg: [num_views, *] (Optional)
+        
+        Added fields:
+            - view_coords: [num_views, num_spatial_dims]
+    """
+    def __init__(self, num_views: int, dim: Literal["1d", "2d", "3d"], size: tuple[int]):
+        self.num_views = num_views
+        self.dim = dim
+        self.size = size
+    
+    def _determine_slices(self, shape: tuple[int]) -> tuple[list[slice], list[int]]:
+        full_slices = [slice(None)] * len(shape)
+        center_coords = []
+        
+        for i, s in enumerate(self.size):
+            dim_idx = -(i + 1)
+            start = np.random.randint(0, shape[dim_idx] - s)
+            full_slices[dim_idx] = slice(start, start + s)
+            center_coords.insert(0, start + s // 2)
+            
+        return full_slices, center_coords
+    
+    def _get_sub_view(self, array: np.ndarray, slices: list[slice]) -> np.ndarray:
+        return array[tuple(slices)]
+    
+    def transform(self, results):
+        img = results["img"]
+        segs = {seg_field: [] for seg_field in results.get("seg_fields", [])}
+        coords = []
+        img_views = []
+        
+        for _ in range(self.num_views):
+            slices, center_coord = self._determine_slices(img.shape)
+            
+            sub_img_view = self._get_sub_view(img, slices)
+            img_views.append(sub_img_view)
+            coords.append(center_coord)
+            
+            for seg_field in results.get("seg_fields", []):
+                seg_slices = slices[1:] if len(slices) > 1 else slices
+                sub_seg = self._get_sub_view(results[seg_field], seg_slices)
+                segs[seg_field].append(sub_seg)
+        
+        results["img"] = np.stack(img_views)  # [num_views, *]
+        # [num_views, num_spatial_dims]
+        results["view_coords"] = torch.from_numpy(np.array(coords)).float()
+        for seg_field in results.get("seg_fields", []):
+            results[seg_field] = np.stack(segs[seg_field])
+        
+        return results
+
+
+class NormalizeCoord(BaseTransform):
+    """
+        Required fields:
+            - view_coords: [num_views, num_spatial_dims]
+        
+        Modified fields:
+            - view_coords: [num_views, num_spatial_dims]
+    """
+    def __init__(self, div: list[int]):
+        self.div = div
+    
+    def transform(self, results):
+        coords = results["view_coords"]
+        for i, s in enumerate(self.div):
+            coords[:, i] = coords[:, i] / self.div[i]
+        results["view_coords"] = coords
+        return results
+
+
 class RelativeSimilaritySelfSup(AutoEncoderSelfSup):
-    def __init__(self, momentum=1e-4, gamma=100, update_interval=1, *args, **kwargs):
+    def __init__(
+        self, 
+        gap_head:ConfigDict, 
+        sim_head:ConfigDict, 
+        vec_head:ConfigDict, 
+        momentum=1e-4, 
+        gamma=100, 
+        update_interval=1, 
+        *args, **kwargs
+    ):
         super().__init__(*args, **kwargs)
+        self.gap_head:GapPredictor          = MODELS.build(gap_head)
+        self.sim_head:SimPairDiscriminator  = MODELS.build(sim_head)
+        self.vec_head:VecAngConstraint      = MODELS.build(vec_head)
         self.momentum_encoder = MomentumAnnealingEMA(
             self.whole_model_,
             momentum=momentum,
@@ -303,77 +405,675 @@ class RelativeSimilaritySelfSup(AutoEncoderSelfSup):
 
     def parse_target(self, data_samples: list[DataSample]):
         # coords (coordinates):        [N, 3 (sub-volume), 3 (coord-dim)]
-        coords = torch.stack([sample.coord for sample in data_samples])
+        coords = torch.stack([sample.view_coords for sample in data_samples])
         # abs_gap (absolute distance): [N, 3 (start from), 3 (point to), 3(coord-dim)]
-        abs_gap = torch.stack([sample.abs_gap for sample in data_samples])
+        abs_gap = coords.unsqueeze(1) - coords.unsqueeze(2)
         # rel_gap (relative distance): [N, 3 (start from), 3 (point to), 3(coord-dim)]
-        rel_gap = abs_gap / torch.triu(abs_gap, diagonal=1).sum(dim=(1,2))
+        # The gap matrix is symmetric, so we can use the upper triangle part.
+        # The following implementation is a trick, which will get relative value 
+        # when comparing with the max gap value on each dimension.
+        rel_base = abs_gap.max(dim=1).values.max(dim=1).values  # determine the max gap for each dimension
+        rel_gap = abs_gap / rel_base[:, None, None, ...]  # normalize the gap matrix
         return coords, abs_gap, rel_gap
 
-    def loss(
-        self, inputs: list[Tensor], data_samples: list[DataSample], **kwargs
-    ) -> dict[str, Tensor]:
+    def extract_nir(self, sv_main: Tensor, sv_aux:Tensor) -> Tensor:
+        """
+        Args:
+            nir_main (Tensor): [N, C, Z, Y, X]
+            nir_aux (Tensor): [N, sub-view, C, Z, Y, X]
         
-        assert isinstance(inputs, list)
+        Returns:
+            nir (Tensor): [N, sub-view, C, Z, Y, X]
+        """
+        # sv: sub view
+        nir_main = self.whole_model_(sv_main)[0]
+        # nir_sv: neural implicit representation of sub-sub_view
+        nir_aux = [self.momentum_encoder(sub_view)[0] for sub_view in sv_aux.transpose(0, 1)]
+        nir = torch.stack([nir_main, *nir_aux], dim=1)  # [N, sub_view, C, Z, Y, X]
+        return nir
+
+    def loss(
+        self, inputs: Tensor, data_samples: list[DataSample], **kwargs
+    ) -> dict[str, Tensor]:
+        """
+        Args:
+            inputs (Tensor): [N, sub-view, C, *]
+            data_samples (list[DataSample]): 
+                DataSample:
+                    - view_coords (Tensor): [sub-view, 3]
+        """
+        
         self.backbone: BaseModule
         self.head: BaseModule
         
-        # sv: sub volume
-        sv1 = inputs[0]
-        sv2 = inputs[1]
-        sv3 = inputs[2]
+        # sv: sub view
+        sv_main = inputs[:, 0]
+        sv_aux = inputs[:, 1:]
         coords, abs_gap, rel_gap = self.parse_target(data_samples)
         
-        # nir_sv: neural implicit representation of sub-volume
-        nir_sv1 = self.whole_model_(sv1)[0]
-        nir_sv2 = self.momentum_encoder(sv2)[0]
-        nir_sv3 = self.momentum_encoder(sv3)[0]
-        nir = torch.stack([nir_sv1, nir_sv2, nir_sv3], dim=1) # [N, 3, C, Z, Y, X]
+        # neural implicit representation forward
+        nir = self.extract_nir(sv_main, sv_aux)
         
+        losses = {}
         # relative gap self-supervision
-        rel_gap_loss = self.gap_head.loss(nir, rel_gap)
+        gap_losses = self.gap_head.loss(nir, abs_gap)
+        for k, v in gap_losses.items():
+            losses[k] = v
         # similarity self-supervision (Opposite nir has larger difference, namely negative label)
-        nir_sim_loss = self.sim_head.loss(nir, coords)
+        sim_losses = self.sim_head.loss(nir, abs_gap)
+        for k, v in sim_losses.items():
+            losses[k] = v
         # vector angle self-supervision (Add Sum 180°)
-        vec_ang_loss = self.vec_head.loss(nir, abs_gap)
+        vec_losses = self.vec_head.loss(nir, abs_gap)
+        for k, v in vec_losses.items():
+            losses[k] = v
         
         # update momentum model
         self.momentum_encoder.update_parameters(self.whole_model_)
-
-        return {
-            "loss_rel_gap": rel_gap_loss,
-            "loss_nir_sim": nir_sim_loss,
-            "loss_vec_ang": vec_ang_loss,
-        }
-
-
-class GapPredictor(BaseModule):
-    def __init__(self, in_channels:int, dim:Literal["1d","2d","3d"]):
-        self.in_channels = in_channels
-        self.dim = dim
-        if dim == "1d":
-            self.avg_pool = torch.nn.AdaptiveAvgPool1d((1))
-            downsample_conv = torch.nn.Conv1d
-        elif dim == "2d":
-            self.avg_pool = torch.nn.AdaptiveMaxPool2d((1,1))
-            downsample_conv = torch.nn.Conv2d
-        elif dim == "3d":
-            self.avg_pool = torch.nn.AdaptiveMaxPool3d((1,1,1))
-            downsample_conv = torch.nn.Conv3d
-        else:
-            raise TypeError(f"Invalid dimension {dim}")
         
-        self.proj = torch.nn.ModuleList([
-            torch.nn.Linear(in_channels//(2**i), in_channels//(2**(i+1)))
-            for i in range(4)
-        ])
-    
-    def forward(self, nir:Tensor, rel_gap:Tensor) -> Tensor:
+        return losses
+
+    @torch.inference_mode()
+    def predict(self, inputs: Tensor, data_samples: list[DataSample], **kwargs
+    ) -> list[DataSample]:
         """
         Args:
-            nir (Tensor): Size [N, 3, C, Z, Y, X]
-            rel_gap (Tensor): Size [N, 3 (start from), 3 (point to), 3(coord-dim)]
+            inputs (Tensor): [N, sub-view, C, *]
+            data_samples (list[DataSample]): 
+                DataSample:
+                    - view_coords (Tensor): [sub-view, 3]
+        
+        Returns:
+            list[DataSample]:
+                DataSample:
+                    - nir (Tensor): [N, sub-view, C, Z, Y, X]
+                    - rel_gap_gt (Tensor): [N, sub-view (start from), sub-view (point to), 3]
+                    - abs_gap_gt (Tensor): [N, sub-view (start from), sub-view (point to), 3]
+                    - coords_gt (Tensor): [N, sub-view, 3]
+                    - view_coords (Tensor): [sub-view, 3]
+                    
+                    - gap_pred (Tensor): [N, sub-view, sub-view]
+                    - sim_pred (Tensor): [N, sub-view, sub-view]
+                    - vec_pred (Tensor): [N, sub-view, sub-view, 3]
+        """
+        coords, abs_gap, rel_gap = self.parse_target(data_samples)
+
+        # 提取特征
+        sv_main = inputs[:, 0]
+        sv_aux = inputs[:, 1:]
+        # neural implicit representation forward
+        nir = self.extract_nir(sv_main, sv_aux)
+
+        # 分别调用三个子模块的predict方法
+        gap_pred = self.gap_head.predict(nir)  # [N, sub-view, sub-view]
+        sim_pred = self.sim_head.predict(nir, abs_gap)  # [N, num_pairs, 2]
+        vec_pred = self.vec_head.predict(nir)  # [N, sub-view, sub-view, 3]
+
+        # 保存预测结果
+        for i in range(len(data_samples)):
+            data_samples[i].nir = nir[i]
+            data_samples[i].rel_gap_gt = rel_gap[i]
+            data_samples[i].abs_gap_gt = abs_gap[i]
+            data_samples[i].coords_gt = coords[i]
+            data_samples[i].gap_pred = gap_pred[i]
+            data_samples[i].sim_pred = sim_pred[i]
+            data_samples[i].vec_pred = vec_pred[i]
+
+        return data_samples
+    
+    def forward(self,
+                inputs: torch.Tensor|list[torch.Tensor],
+                data_samples: list[DataSample],
+                mode: str = 'tensor'):
+        if mode == 'tensor':
+            feats = self.extract_feat(inputs)
+            return feats
+        elif mode == 'loss':
+            return self.loss(inputs, data_samples)
+        elif mode == 'predict':
+            return self.predict(inputs, data_samples)
+        else:
+            raise RuntimeError(f'Invalid mode "{mode}".')
+
+
+class GlobalAvgPool(torch.nn.Module):
+    
+    def __init__(self, dim: Literal["1d", "2d", "3d"]):
+        super().__init__()
+        self.dim = dim
+
+    def forward(self, x: Tensor) -> Tensor:
+        if self.dim == "1d":
+            return torch.nn.functional.adaptive_avg_pool1d(x, 1).squeeze(-1)
+        elif self.dim == "2d":
+            return torch.nn.functional.adaptive_avg_pool2d(x, (1,1)).squeeze(-1).squeeze(-1)
+        elif self.dim == "3d":
+            return torch.nn.functional.adaptive_avg_pool3d(x, (1,1,1)).squeeze(-1).squeeze(-1).squeeze(-1)
+        else:
+            raise NotImplementedError(f"Invalid Dim Setting: {self.dim}")
+
+
+class BaseVolumeWisePredictor(BaseModule):
+    def __init__(self, dim:Literal["1d","2d","3d"], in_channels:int, num_views:int=3):
+        super().__init__()
+        self.dim = dim
+        self.num_views = num_views
+        self.act = torch.nn.GELU()
+        self.proj = torch.nn.ModuleList([
+            eval(f"torch.nn.Conv{dim}")(in_channels//(2**i), in_channels//(2**(i+1)), 3, 2)
+            for i in range(3)
+        ])
+        self.avg_pool = GlobalAvgPool(dim)
+    
+    def forward(self, x:Tensor) -> Tensor:
+        """
+        Args:
+            x (Tensor): [N, num_views, C, Z, Y, X]
+        
+        Returns:
+            x (Tensor): [N, num_views, C]
+        """
+        x = x.transpose(1,0)
+        extreacted = []
+        for batch in x:
+            for proj in self.proj:
+                batch = proj(batch)
+                batch = self.act(batch)
+            batch = self.avg_pool(batch)
+            extreacted.append(batch)
+        
+        return torch.stack(extreacted, dim=1)  # [N, num_views, C]
+
+
+class GapPredictor(BaseVolumeWisePredictor):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.cri = torch.nn.SmoothL1Loss()
+    
+    def forward(self, nir:Tensor) -> Tensor:
+        """
+        Args:
+            nir (Tensor): Size [N, num_views, C, Z, Y, X]
+            rel_gap (Tensor): Size [N, num_views (start from), num_views (point to), coord-dim-length]
         
         Returns:
             vector gap sort loss (Tensor): [N, ]
         """
+        nir = super().forward(nir)  # [N, num_views, C]
+        
+        # Relative Positional Representation of Each Sub-Volume
+        # The origin may align with the mean value of all samples' world coordinate systems'origin.
+        # diff equals to the relative distance between each `nir`.
+        rel_pos_rep_diff = nir.unsqueeze(2) - nir.unsqueeze(1)  # (N, num_views, num_views, C)
+        # calculate the distance of `rel_pos_rep_diff`
+        similarity = rel_pos_rep_diff.norm(dim=-1)  # (N, num_views, num_views)
+        
+        return similarity  # (N, num_views, num_views)
+    
+    def loss(self, nir:Tensor, rel_gap:Tensor) -> dict[str, Tensor]:
+        """
+        Args:
+            nir (Tensor): Size [N, num_views, C, ...]
+            abs_gap (Tensor): Size [N, num_views (start from), num_views (point to), coord-dim-length]
+        """
+        # (N, num_views, num_views)
+        similarity = self.forward(nir)
+        # (N, num_views, num_views)
+        loss = self.cri(similarity, rel_gap.norm(dim=-1))
+        return {"loss_gap": loss}
+
+    def predict(self, nir:Tensor) -> Tensor:
+        """
+        Args:
+            nir (Tensor): [N, num_views, C, Z, Y, X]
+            
+        Returns:
+            gap_pred (Tensor): [N, num_views, num_views]
+        """
+        with torch.no_grad():
+            return self.forward(nir)
+
+
+class SimPairDiscriminator(BaseModule):
+    LABEL_ADJA_PAIR = 0
+    LABEL_DIST_PAIR = 1
+    
+    def __init__(self, sub_view_size:int|list[int], dim:Literal["1d","2d","3d"], in_channels:int):
+        super().__init__()
+        # 统一sub_volume_size格式并根据dim检查维度
+        
+        self.s = ([sub_view_size] * DIM_MAP[dim] if isinstance(sub_view_size, int) 
+                 else sub_view_size)
+        
+        if len(self.s) != DIM_MAP[dim]:
+            raise ValueError(f"sub_volume_size length {len(self.s)} does not match dim {dim}")
+            
+        self.dim = dim
+        self.in_channels = in_channels
+        
+        self.pair_encoder = torch.nn.ModuleList([
+            eval(f"torch.nn.Conv{dim}")(2*in_channels*(2**i), 2*in_channels*(2**(i+1)), 3, 2)
+            for i in range(4)
+        ])
+        self.act = torch.nn.GELU()
+        self.avg_pool = GlobalAvgPool(dim)
+        self.discriminator = torch.nn.Linear(2 * in_channels*(2**4), 1, bias=False)
+        self.cri = torch.nn.BCEWithLogitsLoss()
+    
+    def _get_subvolume_indices(self, diff_vectors, volume_shape:list[int]):
+        N = volume_shape[0]
+        dims = volume_shape[1:]  # D1, D2, ..., Dd
+        shape_diff = diff_vectors.shape
+        assert len(dims) == shape_diff[-1], f"The last dimension of diff_vectors ({shape_diff[-1]}) should be equal to the length of `volume_shape` - 1 ({len(dims)})"
+        extra_dims = shape_diff[1:-1]
+
+        indices = [dict() for _ in range(N)]
+
+        for n in range(N):
+            for idx in product(*(range(s) for s in extra_dims)):
+                diff = diff_vectors[(n,) + idx]
+                adjacent_slices = []
+                distant_slices = []
+                
+                for dim_i, size in enumerate(dims):
+                    # 使用对应维度的size值
+                    s = self.s[dim_i]
+                    adjacent_slice_part = slice(None, s) if diff[dim_i].item() < 0 else slice(size-s, None)
+                    distant_slice_part = slice(size-s, None) if diff[dim_i].item() < 0 else slice(None, s)
+                    adjacent_slices.append(adjacent_slice_part)
+                    distant_slices.append(distant_slice_part)
+                
+                indices[n][idx] = (n, adjacent_slices, distant_slices)
+
+        return indices
+
+    def _sub_volume_selector(self, nir:Tensor, sub_volume_indices):
+        batched_samples = []
+        for n in range(len(sub_volume_indices)):
+            processed_pairs = set()
+            samples = []
+            for (vol_from, vol_to) in sub_volume_indices[n].keys():
+                if (vol_from, vol_to) in processed_pairs or (vol_to, vol_from) in processed_pairs:
+                    continue
+                    
+                # fetch index
+                _, adj_from_to, dist_from_to = sub_volume_indices[n][(vol_from, vol_to)]
+                _, adj_to_from, dist_to_from = sub_volume_indices[n][(vol_to, vol_from)]
+                
+                # select adjacent sub-nir
+                v_from_adj = nir[n, vol_from, :, *adj_from_to]
+                v_to_adj = nir[n, vol_to, :, *adj_to_from]
+                
+                # select distant sub-nir
+                v_from_dist = nir[n, vol_from, :, *dist_from_to]
+                v_to_dist = nir[n, vol_to, :, *dist_to_from]
+                
+                # encode, sample: [4, C, ...]
+                sample = torch.stack([v_from_adj, v_to_adj, v_from_dist, v_to_dist], dim=0)
+                samples.append(sample)
+                processed_pairs.add((vol_from, vol_to))  # mark as processed
+            
+            batched_samples.append(torch.stack(samples, dim=0)) # [num_pairs, 4, C, ...]
+            
+        return torch.stack(batched_samples, dim=0)  # [N, num_pairs, 4, C, ...]
+
+    def forward(self, sub_vols:Tensor) -> Tensor:
+        """
+        Args: 
+            sub_vols (Tensor): [N, num_pairs, 4, C, ...]
+            
+        Returns:
+            encoded_vols (Tensor): [N, num_pairs, 2 (adjacent, distant)]
+        
+        NOTE
+            The third dimension 4 equals to [adj1, adj2, dist1, dist2]
+        """
+        ori_shape = sub_vols.shape
+        # sub_vols: [N, num_pairs*2, 2C, ...]
+        sub_vols = sub_vols.reshape(ori_shape[0], ori_shape[1]*2, 2*ori_shape[3], *ori_shape[4:])
+        dist_preds = []
+        
+        for pair in range(sub_vols.size(1)):
+            v = sub_vols[:, pair]  # [N, 2C, ...]
+            for enc_layer in self.pair_encoder:
+                v = enc_layer(v)
+                v = self.act(v)
+            v = self.avg_pool(v)  # [N, 2C]
+            v = self.discriminator(v).squeeze(-1)  # [N, ]
+            dist_preds.append(v)
+        
+        # [N, num_pairs*2]
+        dist_preds = torch.stack(dist_preds, dim=-1)
+        # [N, num_pairs, 2 (adj, dist)]
+        dist_preds = dist_preds.reshape(ori_shape[0], ori_shape[1], 2)
+        # [N, num_pairs, 2]
+        return dist_preds.argsort(dim=-1).float()
+
+    def _generate_target(self, dist_preds:Tensor) -> Tensor:
+        """Generate pseudo-labels for discriminator predictions
+        
+        Args:
+            dist_preds (Tensor): shape [N, num_pairs, 2]
+            
+        Returns:
+            target (Tensor): shape [N, num_pairs, 2]
+        """
+        assert dist_preds.size(-1) == 2, f"dist_preds should have 2 channels, but got {dist_preds.size(-1)}"
+        if not hasattr(self, "pseudo_label"):
+            target = torch.empty_like(dist_preds)
+            target[..., 0] = self.LABEL_ADJA_PAIR  # adjacent pairs
+            target[..., 1] = self.LABEL_DIST_PAIR  # distant pairs
+            setattr(self, "pseudo_label", target)  # [N, num_pairs, 2]
+        return getattr(self, "pseudo_label")  # [N, num_pairs, 2]
+
+    def loss(self, nir:Tensor, abs_gap:Tensor) -> dict[str, Tensor]:
+        """
+        Args:
+            neural implicit representation (Tensor): [N, num_views, C, Z, Y, X]
+            abs_gap (Tensor): [N, num_views (start from), num_views (point to), coord-dim-length]
+        """
+        # determine the adjacent and distant sub-volumes' position
+        sub_volume_indices = self._get_subvolume_indices(abs_gap, [nir.shape[0], *nir.shape[3:]])
+        # get view of these positions 
+        # [N, num_pairs, 4 (v_from_adj, v_to_adj, v_from_dist, v_to_dist), C, ...]
+        sub_volumes = self._sub_volume_selector(nir, sub_volume_indices)
+        # execute prediction forward
+        dist_preds = self.forward(sub_volumes)  # [N, num_pairs, 2 (adja, dist)]
+        # generate pseudo-label using adjacent and distant contexts
+        target = self._generate_target(dist_preds)  # [N, num_pairs, 2]
+        # execute loss calculation
+        return {"loss_sim": self.cri(dist_preds, target)}
+
+    def predict(self, nir:Tensor, abs_gap:Tensor) -> Tensor:
+        """
+        Args:
+            nir (Tensor): [N, num_views, C, Z, Y, X]
+            abs_gap (Tensor): [N, num_views, num_views, 3]
+            
+        Returns:
+            sim_pred (Tensor): [N, num_pairs, 2]
+        """
+        with torch.no_grad():
+            sub_volume_indices = self._get_subvolume_indices(
+                abs_gap, [nir.shape[0], *nir.shape[3:]])
+            sub_volumes = self._sub_volume_selector(nir, sub_volume_indices)
+            dist_preds = self.forward(sub_volumes)
+            return self._binarize_preds(dist_preds)
+
+
+class VecAngConstraint(BaseVolumeWisePredictor):
+    def __init__(self, dim:Literal["1d","2d","3d"], *args, **kwargs):
+        super().__init__(dim=dim, *args, **kwargs)
+        num_channel_from_super = self.proj[-1].out_channels
+        self.proj_direction_vector = torch.nn.Linear(num_channel_from_super, int(dim.replace('d','')))
+        torch.nn.init.ones_(self.proj_direction_vector.weight)
+        self.cri = torch.nn.SmoothL1Loss()
+
+    def forward(self, nir:Tensor) -> Tensor:
+        """
+        Args:
+            nir (Tensor): Size [N, num_views, C, Z, Y, X]
+            rel_gap (Tensor): Size [N, num_views (start from), num_views (point to), coord-dim-length]
+        
+        Returns:
+            vector gap sort loss (Tensor): [N, ]
+        """
+        nir = super().forward(nir)  # [N, num_views, C]
+        dire_vect = self.proj_direction_vector(nir)  # [N, num_views, coord-dim-length]
+        dire_vect_diff = dire_vect.unsqueeze(2) - dire_vect.unsqueeze(1)  # (N, num_views, num_views, C)
+        return dire_vect_diff  # (N, num_views, num_views, C)
+
+    def find_all_paths_batched(self, direction_tensor: Tensor) -> Tensor:
+        B, L, _, D = direction_tensor.shape
+        all_batch_paths = []
+        
+        for batch_idx in range(B):
+            # 存储格式: {(start, end): [path_vectors]}
+            paths_dict = {(i,j):[] for i in range(L) for j in range(L) if i != j}
+            
+            def backtrack(current: int, start: int, visited: set, path_vector: Tensor):
+                if len(visited) == L:
+                    paths_dict[(start, current)].append(path_vector)
+                    return
+                for next_point in range(L):
+                    if next_point not in visited:
+                        visited.add(next_point)
+                        new_vector = path_vector + direction_tensor[batch_idx, current, next_point]
+                        backtrack(next_point, start, visited, new_vector)
+                        visited.remove(next_point)
+            
+            for start_point in range(L):
+                backtrack(start_point, start_point, {start_point}, 
+                        torch.zeros(D, device=direction_tensor.device))
+            
+            # 整理数据为张量形式 [L, L, max_paths, D]
+            batch_paths = []
+            for i in range(L):
+                end_paths = []
+                for j in range(L):
+                    if i != j:
+                        paths = paths_dict[(i,j)]
+                        if paths:
+                            end_paths.append(torch.stack(paths))
+                        else:
+                            end_paths.append(torch.zeros((1, D), device=direction_tensor.device))
+                    else:
+                        # 对角线位置(起点=终点)填充零向量
+                        end_paths.append(torch.zeros((1, D), device=direction_tensor.device))
+                
+                # 确保每个终点的路径数量一致
+                max_paths = max(p.shape[0] for p in end_paths)
+                padded_end_paths = []
+                for paths in end_paths:
+                    if paths.shape[0] < max_paths:
+                        padding = torch.zeros((max_paths - paths.shape[0], D), device=paths.device)
+                        padded_end_paths.append(torch.cat([paths, padding], dim=0))
+                    else:
+                        padded_end_paths.append(paths)
+                batch_paths.append(torch.stack(padded_end_paths))
+            
+            all_batch_paths.append(torch.stack(batch_paths))
+        
+        return torch.stack(all_batch_paths)  # [B, L, L, num_paths, D]
+
+    def loss(self, nir: Tensor, abs_gap: Tensor) -> dict[str, Tensor]:
+        """
+        Args:
+            nir (Tensor): [N, num_views, C, ...]
+            abs_gap (absolute distance): [N, 3 (start from), 3 (point to), 3(coord-dim)]
+        """
+        dire_vect = self.forward(nir)  # [N, L, L, D]
+        loss_vect = self.cri(dire_vect, abs_gap)
+        
+        path_vectors = self.find_all_paths_batched(dire_vect)  # [N, L, L, num_paths, D]
+        
+        # 计算所有路径与对应GT的L2距离
+        loss_loop = torch.linalg.vector_norm(
+            path_vectors - abs_gap.unsqueeze(3), 
+            dim=-1
+        ).mean()
+        
+        return {"loss_vect": loss_vect, "loss_loop": loss_loop}
+
+    def predict(self, nir:Tensor) -> Tensor:
+        """
+        Args:
+            nir (Tensor): [N, num_views, C, Z, Y, X]
+            
+        Returns:
+            vec_pred (Tensor): [N, num_views, num_views, 3] 
+        """
+        with torch.no_grad():
+            return self.forward(nir)
+
+
+
+
+
+"""MGAM TEST"""
+
+def generate_test_data(batch_size:int=2, 
+                      num_views:int=3,
+                      channels:int=4,
+                      volume_size:int=64) -> tuple[torch.Tensor, torch.Tensor]:
+    """生成测试数据
+    
+    Returns:
+        nir: [N, num_views, C, Z, Y, X]
+        abs_gap: [N, num_views, num_views, 3]
+    """
+    # 生成随机体积数据
+    nir = torch.randn(batch_size, num_views, channels, 
+                     volume_size, volume_size, volume_size)
+    
+    # 生成随机距离向量
+    abs_gap = torch.randn(batch_size, num_views, num_views, 3)
+    
+    return nir, abs_gap
+
+class TestSimPairDiscriminator:
+    @pytest.fixture
+    def discriminator(self):
+        return SimPairDiscriminator(
+            sub_volume_size=48,
+            dim="3d",
+            in_channels=4
+        )
+    
+    def test_initialization(self, discriminator):
+        assert discriminator.s == 48
+        assert discriminator.dim == "3d"
+        assert discriminator.in_channels == 4
+        assert len(discriminator.pair_encoder) == 4
+    
+    def test_forward(self, discriminator):
+        batch_size, num_pairs = 2, 3
+        num_sub_vols, channels = 4, 4
+        vol_size = 48
+        
+        # 创建输入tensor
+        sub_vols = torch.randn(batch_size, num_pairs, num_sub_vols, 
+                             channels, vol_size, vol_size, vol_size)
+        
+        # 执行forward
+        output = discriminator.forward(sub_vols)
+        
+        # 检查输出维度
+        assert output.shape == (batch_size, num_pairs, 2)
+    
+    def test_loss_calculation(self, discriminator):
+        # 生成测试数据
+        nir, abs_gap = generate_test_data()
+        
+        # 计算损失
+        loss = discriminator.loss(nir, abs_gap)
+        
+        # 检查损失是否为标量
+        assert loss.dim() == 0
+        assert not torch.isnan(loss)
+        assert not torch.isinf(loss)
+    
+    def test_sub_volume_selector(self, discriminator):
+        # 生成测试数据
+        nir, abs_gap = generate_test_data()
+        
+        # 获取子体积索引
+        indices = discriminator._get_subvolume_indices(abs_gap, [nir.shape[0], *nir.shape[3:]])
+        
+        # 选择子体积
+        sub_vols = discriminator._sub_volume_selector(nir, indices)
+        
+        # 检查输出维度
+        assert len(sub_vols.shape) == 7  # [N, num_pairs, 4, C, s, s, s]
+        assert sub_vols.shape[2] == 4    # 4个子体积
+        assert all(s == 48 for s in sub_vols.shape[-3:])  # 子体积大小
+    
+    def test_generate_target(self, discriminator):
+        batch_size, num_pairs = 2, 3
+        dist_preds = torch.randn(batch_size, num_pairs, 2)
+        
+        target = discriminator._generate_target(dist_preds)
+        
+        assert target.shape == (batch_size, num_pairs, 2)
+        assert torch.all(target[..., 0] == discriminator.LABEL_ADJA_PAIR)
+        assert torch.all(target[..., 1] == discriminator.LABEL_DIST_PAIR)
+
+def test_gap_predictor():
+    # 测试3D情况
+    batch_size = 2
+    num_views = 3
+    channels = 16
+    spatial_size = 64
+    
+    predictor = GapPredictor(
+        dim="3d",
+        in_channels=channels,
+        num_views=num_views
+    )
+    
+    # 创建模拟输入
+    nir = torch.randn(
+        batch_size, 
+        num_views,
+        channels,
+        spatial_size,
+        spatial_size,
+        spatial_size
+    )
+    
+    # 测试forward方法
+    similarity = predictor.forward(nir)
+    
+    # 验证输出形状
+    assert similarity.shape == (batch_size, num_views, num_views)
+    
+    # 测试loss方法
+    abs_gap = torch.randn(batch_size, num_views, num_views)
+    loss = predictor.loss(nir, abs_gap)
+    assert isinstance(loss, Tensor)
+    assert loss.ndim == 0  # 标量损失值
+
+def test_gap_predictor_different_dims():
+    dims = ["1d", "2d", "3d"]
+    spatial_sizes = {
+        "1d": (64,),
+        "2d": (64, 64),
+        "3d": (64, 64, 64)
+    }
+    
+    for dim in dims:
+        batch_size = 2
+        num_views = 3
+        channels = 16
+        
+        predictor = GapPredictor(
+            dim=dim,
+            in_channels=channels,
+            num_views=num_views
+        )
+        
+        # 创建对应维度的输入
+        input_shape = (batch_size, num_views, channels) + spatial_sizes[dim]
+        nir = torch.randn(*input_shape)
+        
+        # 测试forward
+        similarity = predictor.forward(nir)
+        assert similarity.shape == (batch_size, num_views, num_views)
+
+def test_gap_predictor_edge_cases():
+    # 测试单batch情况
+    predictor = GapPredictor("3d", 16, 3)
+    nir = torch.randn(1, 3, 16, 48, 48, 48)
+    similarity = predictor.forward(nir)
+    assert similarity.shape == (1, 3, 3)
+    
+    # 测试最小volume数
+    predictor = GapPredictor("3d", 16, 2)
+    nir = torch.randn(2, 2, 16, 48, 48, 48)
+    similarity = predictor.forward(nir)
+    assert similarity.shape == (2, 2, 2)
+
+
+
+if __name__ == "__main__":
+    pytest.main([__file__])

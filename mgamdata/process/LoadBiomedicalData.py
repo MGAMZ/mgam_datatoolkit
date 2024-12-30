@@ -160,13 +160,15 @@ class LoadSampleFromNpz(BaseTransform):
             results["ori_shape"] = results["img"].shape[:-1]
 
         if "anno" in self.load_type:
-            mask = sample["gt_seg_map"]
+            point_mask = sample["heatmap"]
+            cluster_cls = sample["clustered"]
             # Support mmseg dataset rule
             if results.get("label_map", None) is not None:
-                mask_copy = mask.copy()
+                mask_copy = point_mask.copy()
                 for old_id, new_id in results["label_map"].items():
-                    mask[mask_copy == old_id] = new_id
-            results["gt_seg_map"] = mask
+                    point_mask[mask_copy == old_id] = new_id
+            results["gt_seg_map"] = point_mask
+            results["gt_label"] = cluster_cls
             results["seg_fields"].append("gt_seg_map")
 
         return results
