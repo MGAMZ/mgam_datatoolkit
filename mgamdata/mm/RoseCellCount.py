@@ -161,6 +161,7 @@ class CellCounter(EncoderDecoder):
         return data_samples
 
 
+
 class CellCounterClassifier(CellCounter):
     def __init__(self, amplify, ClasterClassifier, *args, **kwargs):
         super().__init__(amplify=amplify, *args, **kwargs)
