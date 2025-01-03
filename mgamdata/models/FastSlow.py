@@ -661,19 +661,25 @@ class SimPairDiscriminator(BaseModule):
     LABEL_ADJA_PAIR = 0
     LABEL_DIST_PAIR = 1
     
-    def __init__(self, sub_view_size:int|list[int], dim:Literal["1d","2d","3d"], in_channels:int):
+    def __init__(self, view_size:int|list[int], sub_view_size:int|list[int], dim:Literal["1d","2d","3d"], in_channels:int):
         super().__init__()
-        # 统一sub_volume_size格式并根据dim检查维度
         
-        self.s = ([sub_view_size] * DIM_MAP[dim] if isinstance(sub_view_size, int) 
-                 else sub_view_size)
+        self.sub_view_size = np.array(
+            [sub_view_size] * DIM_MAP[dim] 
+            if isinstance(sub_view_size, int) 
+            else sub_view_size)
+        self.view_size = np.array(
+            [view_size] * DIM_MAP[dim] 
+            if isinstance(view_size, int) 
+            else view_size)
         
-        if len(self.s) != DIM_MAP[dim]:
-            raise ValueError(f"sub_volume_size length {len(self.s)} does not match dim {dim}")
-            
+        if len(self.sub_view_size) != DIM_MAP[dim]:
+            raise ValueError(f"sub_volume_size length {len(self.sub_view_size)} does not match dim {dim}")
+        if np.any(self.sub_view_size > self.view_size):
+            raise ValueError("Sub-view size cannot be larger than view size")
+        
         self.dim = dim
         self.in_channels = in_channels
-        torch.nn.Conv1d
         self.encoder = torch.nn.ModuleList([
             eval(f"torch.nn.Conv{dim}")(
                 in_channels=in_channels*(2**i), 
@@ -687,59 +693,123 @@ class SimPairDiscriminator(BaseModule):
         self.avg_pool = GlobalAvgPool(dim)
         self.sim_cri = torch.nn.CosineSimilarity()
         self.gt = torch.arange(4).float()[None, None]  # [1 (batch), 1 (num_pairs), 4]
-    
-    def _get_subvolume_indices(self, abs_gap:Tensor, coords:Tensor, volume_shape:list[int]):
+
+    def _get_AdjDst_indices(self, abs_gap: Tensor, coords: Tensor):
         """
         Args:
-            abs_gap (Tensor): [N, num_views (start from), num_views (point to), coord-dims]
-            coords (Tensor): [N, num_views, 3]
+            abs_gap (Tensor): [N, num_views, num_views, coord-dims]
+            coords (Tensor): [N, num_views, coord-dims]
             volume_shape (list[int]): [N, ...]
         Returns:
-            indices (list[dict]): [N, num_pairs, 4, *slice]
+            tuple[list[list[tuple]], Tensor]: 
+                - indices: [N, num_pairs, 4, slice(view_idx, *coord-dims)]
+                - centers: [N, num_pairs, 4, coord-dims]
         """
+        N, num_views, cdims = coords.shape
+        pairs = [(i, j) for i in range(num_views) for j in range(i+1, num_views)]
+        num_pairs = len(pairs)
+        indices = [[None]*num_pairs for _ in range(N)]
+        centers = torch.zeros(N, num_pairs, 4, cdims)  # 新增：记录中心点坐标
         
+        def get_max_offset(center: Tensor, direction: Tensor, view_shape: list[int]) -> Tensor:
+            """计算在给定方向上的最大可能偏移量"""
+            max_offset = torch.ones_like(direction)
+            half_s = self.sub_view_size // 2
+            for d in range(cdims):
+                if direction[d] > 0:
+                    max_offset[d] = min(
+                        (view_shape[d] - half_s[d] - center[d]) / direction[d],
+                        1.0
+                    )
+                elif direction[d] < 0:
+                    max_offset[d] = min(
+                        (half_s[d] - center[d]) / direction[d],
+                        1.0
+                    )
+            return torch.min(max_offset)  # 取所有维度中最小的偏移量
+    
+        def make_slices(volume_center: Tensor, view_idx: int, batch_idx: int, coords: Tensor) -> tuple:
+            """
+            Args:
+                volume_center: volume坐标系下的中心点坐标
+                view_idx: view的索引
+                batch_idx: 批次中的样本索引
+                coords: [N, num_views, coord-dims] 所有view的中心坐标
+            Returns:
+                tuple: (view_idx, *slices)
+            """
+            # 转换到view局部坐标系
+            view_center = volume_center - coords[batch_idx, view_idx]
+            center_i = [int(view_center[d].item()) for d in range(cdims)]
+            
+            sl = [view_idx]
+            for d in range(cdims):
+                start = max(0, center_i[d] - self.sub_view_size[d]//2)
+                end = min(self.view_size[d], center_i[d] + self.sub_view_size[d]//2)
+                sl.append(slice(start, end))
+            return tuple(sl)
+        
+        for n in range(N):
+            for idx_pair, (i, j) in enumerate(pairs):
+                direction = F.normalize(abs_gap[n, i, j], dim=0)
+                
+                # 使用view的形状而不是volume的形状
+                max_offset_i = get_max_offset(coords[n, i], direction, self.view_size)
+                max_offset_j = get_max_offset(coords[n, j], -direction, self.view_size)
+                
+                offset = min(max_offset_i, max_offset_j)
+                
+                # 计算并存储中心点坐标
+                centers[n, idx_pair, 0] = closest_i_center = coords[n, i] + offset * direction
+                centers[n, idx_pair, 1] = closest_j_center = coords[n, j] - offset * direction
+                centers[n, idx_pair, 2] = farthest_i_center = coords[n, i] - offset * direction
+                centers[n, idx_pair, 3] = farthest_j_center = coords[n, j] + offset * direction
+                
+                indices[n][idx_pair] = [
+                    make_slices(closest_i_center, i, n, coords),
+                    make_slices(closest_j_center, j, n, coords),
+                    make_slices(farthest_i_center, i, n, coords),
+                    make_slices(farthest_j_center, j, n, coords),
+                ]
+    
+        return indices, centers
 
-    def _sub_volume_selector(self, nir:Tensor, sub_volume_indices):
-        """
+    def _sub_volume_selector(self, nir: Tensor, indices: list[list[tuple]]) -> Tensor:
+        """根据indices从nir中选择子区域
+        
         Args:
             nir (Tensor): [N, num_views, C, ...]
-            sub_volume_indices (list[dict]): [N, num_pairs, 3]
+            indices (list[list[tuple]]): [N, num_pairs, 4, (view_idx, *slices)]
         Returns:
-            Samples (Tensor): [N, num_pairs, 4, C, ...]
+            Tensor: [N, num_pairs, 4, C, ...]
         """
-        batched_samples = []
-        for n in range(len(sub_volume_indices)):
-            processed_pairs = set()
-            samples = []
-            coords = []
-            
-            for (vol_from, vol_to) in sub_volume_indices[n].keys():
-                if (vol_from, vol_to) in processed_pairs or (vol_to, vol_from) in processed_pairs:
-                    continue
+        N = len(indices)
+        num_pairs = len(indices[0])
+        samples = []
+        
+        for n in range(N):
+            pair_samples = []
+            for idx_pair in range(num_pairs):
+                # 每对视图有4个子区域
+                sub_volumes = []
+                for idx_area in range(4):
+                    # 获取索引元组
+                    index = indices[n][idx_pair][idx_area]
+                    view_idx = index[0]  # 第一个元素是view索引
+                    slices = index[1:]   # 剩余元素是空间维度的切片
                     
-                # fetch index
-                _, adj_from_to, dist_from_to, coord_adj_from_to, coord_dst_from_to = sub_volume_indices[n][(vol_from, vol_to)]
-                _, adj_to_from, dist_to_from, coord_adj_to_from, coord_dst_to_from = sub_volume_indices[n][(vol_to, vol_from)]
+                    # 从nir中提取子区域
+                    sub_vol = nir[n, view_idx, :, *slices]  
+                    sub_volumes.append(sub_vol)
                 
-                # select adjacent sub-nir
-                v_from_adj = nir[n, vol_from, :, *adj_from_to]
-                v_to_adj = nir[n, vol_to, :, *adj_to_from]
+                # 堆叠当前pair的4个子区域
+                pair_samples.append(torch.stack(sub_volumes, dim=0))  # [4, C, ...]
                 
-                # select distant sub-nir
-                v_from_dist = nir[n, vol_from, :, *dist_from_to]
-                v_to_dist = nir[n, vol_to, :, *dist_to_from]
-                
-                # sample: [4, C, ...]
-                sample = torch.stack([v_from_adj, v_to_adj, v_from_dist, v_to_dist], dim=0)
-                samples.append(sample)
-                # coord: [4, 3]
-                coord = torch.stack([coord_adj_from_to, coord_dst_from_to, coord_adj_to_from, coord_dst_to_from], dim=0)
-                
-                processed_pairs.add((vol_from, vol_to))  # mark as processed
-            
-            batched_samples.append(torch.stack(samples, dim=0)) # [num_pairs, 4, C, ...]
-            
-        return torch.stack(batched_samples, dim=0)  # [N, num_pairs, 4, C, ...]
+            # 堆叠当前样本的所有pairs
+            samples.append(torch.stack(pair_samples, dim=0))  # [num_pairs, 4, C, ...]
+        
+        # 堆叠所有样本
+        return torch.stack(samples, dim=0)  # [N, num_pairs, 4, C, ...]
 
     def forward(self, sub_vols:Tensor) -> Tensor:
         """
@@ -773,30 +843,38 @@ class SimPairDiscriminator(BaseModule):
             neural implicit representation (Tensor): [N, num_views, C, ...]
             abs_gap (Tensor): [N, num_views (start from), num_views (point to), coord-dim-length]
             coords (Tensor): [N, num_views, 3]
+        Returns:
+            dict[str, Tensor]: 包含邻近和远离子区域的相似度损失
         """
-        # determine the adjacent and distant chunks' position
-        sub_volume_indices, _ = self._get_subvolume_indices(abs_gap, [nir.shape[0], *nir.shape[3:]])
-        # get view of these positions 
+        # 获取子区域索引
+        sub_area_indices, _ = self._get_AdjDst_indices(abs_gap, coords)  # 修正函数名
+        
+        # 获取子区域表示
         # [N, num_pairs, 4 (v_from_adj, v_to_adj, v_from_dist, v_to_dist), C, ...]
-        sub_volumes = self._sub_volume_selector(nir, sub_volume_indices)
+        sub_areas = self._sub_volume_selector(nir, sub_area_indices)
         
-        f = self.forward(sub_volumes)  # [N, num_pairs, 4, C, ...]
+        # 编码子区域
+        f = self.forward(sub_areas)  # [N, num_pairs, 4, C, ...]
         
-        # calculate similarity loss
+        # 计算相似度损失
         adja_losses = []
         dist_losses = []
         for pair in range(f.size(1)):
             p = f[:, pair]  # [N, 4, C, ...]
-            adja_sim_loss = self.sim_cri(p[:,0], p[:,1])
-            dist_sim_loss = self.sim_cri(p[:,2], p[:,3])
+            adja_sim_loss = self.sim_cri(p[:,0], p[:,1])  # 计算邻近对的相似度
+            dist_sim_loss = self.sim_cri(p[:,2], p[:,3])  # 计算远离对的相似度
             adja_losses.append(adja_sim_loss)
             dist_losses.append(dist_sim_loss)
-        adja_losses = torch.stack(adja_losses, dim=1).mean()  # mean of [N, num_pairs]
-        dist_losses = torch.stack(dist_losses, dim=1).mean()  # mean of [N, num_pairs]
         
-        return {"loss_sim_adja": -adja_losses,
-                "loss_sim_dist": dist_losses,}
-
+        # 计算平均损失
+        adja_losses = torch.stack(adja_losses, dim=1).mean()  # [N, num_pairs] → scalar
+        dist_losses = torch.stack(dist_losses, dim=1).mean()  # [N, num_pairs] → scalar
+        
+        return {
+            "loss_sim_adja": -adja_losses,  # 邻近对应该更相似
+            "loss_sim_dist": dist_losses,   # 远离对应该更不相似
+        }
+    
     def _find_closest_farthest_pairs(self, f) -> tuple[Tensor, Tensor]:
         """
         Args:
