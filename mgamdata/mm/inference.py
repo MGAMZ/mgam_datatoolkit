@@ -1,8 +1,8 @@
-from abc import abstractmethod
 import os
-import os.path as osp
 import pdb
 from tqdm import tqdm
+from collections import defaultdict
+from abc import abstractmethod
 
 import torch
 import numpy as np
@@ -11,6 +11,7 @@ import SimpleITK as sitk
 from torch import Tensor
 from torch.nn import functional as F
 
+from mmcv.transforms import Compose
 from mmseg.models.segmentors import BaseSegmentor
 from mmseg.apis.inference import init_model, _preprare_data
 
@@ -23,6 +24,8 @@ INFERENCER_WORK_DIR = "/fileser51/zhangyiqin.sx/mmseg/work_dirs_inferencer/"
 class Inferencer:
     def __init__(self, cfg_path, ckpt_path):
         self.model:BaseSegmentor = init_model(cfg_path, ckpt_path)
+        pipeline_without_loading = self.model.cfg.test_pipeline[1:]
+        self.pipeline = Compose(pipeline_without_loading)
         self.model.eval()
         self.model.requires_grad_(False)
 
@@ -30,6 +33,25 @@ class Inferencer:
     @torch.inference_mode()
     def Inference_FromNDArray(self, image_array) -> Tensor:
         ...
+    
+    def _preprocess(self, imgs:np.ndarray|list[np.ndarray]) -> tuple[Tensor, dict]:
+        is_batch = True
+        if not isinstance(imgs, (list, tuple)):
+            imgs = [imgs]
+            is_batch = False
+
+        data = defaultdict(list)
+        for img in imgs:
+            initial_dict = {
+                'img': img,
+                'img_shape': img.shape,
+                'ori_shape': img.shape,
+            }
+            data_:dict[str, Tensor|dict] = self.pipeline(initial_dict)
+            data['inputs'].append(data_['inputs'])
+            data['data_samples'].append(data_['data_samples'])
+
+        return data, is_batch
 
     def Inference_FromITK(self, itk_image:sitk.Image) -> tuple[sitk.Image, sitk.Image]:
         image_array = sitk.GetArrayFromImage(itk_image) # [D, H, W]
@@ -50,14 +72,14 @@ class Inferencer:
             for file in files:
                 if file.endswith('.mha'):
                     if check_exist_path is not None:
-                        if os.path.exists(osp.join(check_exist_path, file)):
+                        if os.path.exists(os.path.join(check_exist_path, file)):
                             print(f"Already inferenced: {file}.")
                             continue
-                    mha_files.append(osp.join(root, file))
+                    mha_files.append(os.path.join(root, file))
         
         print(f"\nInferencing from Folder: {folder}, Total {len(mha_files)} mha files.\n")
         
-        for mha_path in tqdm(mha_files,
+        for mha_path in tqdm(sorted(mha_files),
                              desc='Inference_FromITKFolder',
                              leave=False,
                              dynamic_ncols=True):
