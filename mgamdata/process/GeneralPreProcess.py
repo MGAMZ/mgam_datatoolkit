@@ -189,12 +189,12 @@ class TypeConvert(BaseTransform):
     - img
     - gt_seg_map
     """
-
+    def __init__(self, key:str, dtype:type):
+        self.key = key
+        self.dtype = dtype
+    
     def transform(self, results):
-        if "img" in results:
-            results["img"] = results["img"].astype(np.float32)
-        if "gt_seg_map" in results:
-            results["gt_seg_map"] = results["gt_seg_map"].astype(np.uint8)
+        results[self.key] = results[self.key].astype(self.dtype)
         return results
 
 
@@ -725,3 +725,20 @@ class Resample(BaseTransform):
         results[self.field] = F.interpolate(results[self.field][None, None], size=self.size, mode=self.mode).squeeze()
         return results
 
+
+class device_to(BaseTransform):
+    def __init__(self, key:str|list[str], device:str, non_blocking:bool=False):
+        self.key = key if isinstance(key, list) else [key]
+        self.device = torch.device(device)
+        self.non_blocking = non_blocking
+        
+    def transform(self, results: dict):
+        for key in self.key:
+            d = results[key]
+            if isinstance(d, torch.Tensor):
+                results[key] = d.to(self.device, non_blocking=self.non_blocking)
+            elif isinstance(d, np.ndarray):
+                results[key] = torch.from_numpy(d).to(self.device, non_blocking=self.non_blocking)
+            else:
+                raise ValueError(f"Unsupported type {type(d)}")
+        return results

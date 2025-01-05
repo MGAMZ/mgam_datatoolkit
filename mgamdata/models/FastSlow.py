@@ -196,13 +196,13 @@ class AutoEncoderSelfSup(BaseSelfSupervisor):
     def parse_losses(
         self,
         losses: dict,
-    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    ) -> tuple[Tensor, dict[str, Tensor]]:
         log_vars = []
         for loss_name, loss_value in losses.items():
             if "loss" in loss_name:
-                if isinstance(loss_value, torch.Tensor):
+                if isinstance(loss_value, Tensor):
                     log_vars.append([loss_name, loss_value.mean()])
-                elif is_list_of(loss_value, torch.Tensor):
+                elif is_list_of(loss_value, Tensor):
                     log_vars.append(
                         [loss_name, sum(_loss.mean() for _loss in loss_value)]
                     )
@@ -368,7 +368,7 @@ class RandomSubView(BaseTransform):
         
         results["img"] = np.stack(img_views)  # [num_views, *]
         # [num_views, num_spatial_dims]
-        results["view_coords"] = torch.from_numpy(np.array(coords)).float()
+        results["view_coords"] = np.array(coords).astype(np.int32)
         for seg_field in results.get("seg_fields", []):
             results[seg_field] = np.stack(segs[seg_field])
         
@@ -386,11 +386,140 @@ class NormalizeCoord(BaseTransform):
     def __init__(self, div: list[int]):
         self.div = div
     
-    def transform(self, results):
-        coords = results["view_coords"]
+    def _normalize(self, coords: np.ndarray) -> np.ndarray:
         for i, s in enumerate(self.div):
-            coords[:, i] = coords[:, i] / self.div[i]
-        results["view_coords"] = coords
+            coords[:, i] = coords[:, i] / s
+        return coords
+    
+    def transform(self, results:dict):
+        results["normed_view_coords"] = self._normalize(results["view_coords"].copy().astype(np.float32))
+        return results
+
+
+class ParseCoords(BaseTransform):
+    def __init__(self, view_size: tuple[int], sub_view_size: tuple[int]):
+        self.view_size = np.array(view_size)
+        self.sub_view_size = np.array(sub_view_size)
+    
+    def _get_AdjDst_indices(self, abs_gap:np.ndarray, coords:np.ndarray) -> tuple:
+        """
+        Locate the adjacent pair and distant pair of two sub-view.
+        The results contain view indexs and volume absolute coords.
+        
+        Args:
+            abs_gap (Tensor): [N, num_views, num_views, coord-dims]
+            coords (Tensor): [N, num_views, coord-dims]
+            volume_shape (list[int]): [N, ...]
+        Returns:
+            tuple[list[list[tuple]], Tensor]: 
+                - indices: [N, num_pairs, 4, index (tuple) (view_idx, *coord-dim-slices)]
+                - centers: [N, num_pairs, 4, coord-dims]
+        """
+        # prepare for the calculation
+        num_views, cdims = coords.shape
+        pairs = [(i, j) for i in range(num_views) for j in range(i+1, num_views)]
+        num_pairs = len(pairs)
+        indices = [None] * num_pairs
+        centers = np.zeros((num_pairs, 4, cdims))
+        
+        def sub_area_center(direction:Tensor) -> Tensor:
+            """
+            Given the sub-view size and the direction vector.
+            It is possible to determine the maximum center offset along the direction,
+            before the sub-view touches the view's boundary.
+            
+            Args:
+                direction (Tensor): [..., coord-dims]
+            Return:
+                offset (Tensor): [..., coord-dims]
+            """
+            # The absolute gap available for the center to move 
+            # before touching the boundary on each dimension.
+            avail_gap = (self.view_size - self.sub_view_size) / 2
+            # Calculate the relative gap corresponding to direction vector
+            rel_direction_ratio = avail_gap / (direction + 1e-5)
+            # Determine the maximum relative ratio.
+            # The minimum value of all dimensions are used,
+            # because it will be the first dimension to hit the boundary.
+            max_direction_ratio = np.abs(rel_direction_ratio).min(axis=0)
+            # Return the absolute maximum offset on each dimension.
+            return max_direction_ratio * direction
+
+        offsets = np.round(sub_area_center(abs_gap)).astype(np.int32)
+
+        # Traverse all possible view pairs among all views.
+        for idx_pair, (i, j) in enumerate(pairs):
+            # Get the maximum offset of the pair.
+            # offset = torch.round(sub_area_center(abs_gap[i, j])).int()
+            offset = offsets[i, j]
+            
+            # Calculate the center of the adjacent pair and the distant pair.
+            # Volume coordinate system here.
+            centers[idx_pair, 0] = coords[i] + offset  # adj1
+            centers[idx_pair, 1] = coords[j] - offset  # adj2
+            centers[idx_pair, 2] = coords[i] - offset  # dst1
+            centers[idx_pair, 3] = coords[j] + offset  # dst2
+            
+            # Calculate the sub-view index of the adjacent pair and the distant pair.
+            # View coordinate system here. (namely patch)
+            v_c = self.view_size//2  # view center
+            sub_v_c = self.sub_view_size//2  # sub-view center
+            # v_c +/- derterimines the sub-view center
+            # and the center +/- sub_v_c determines the sub-view boundary,
+            # then slice index is available to directly sample from view array.
+            indices[idx_pair] = [
+                # adj1
+                (i, ) + tuple(slice(v_c[x] + offset[x] - sub_v_c[x], 
+                                    v_c[x] + offset[x] + sub_v_c[x]
+                        ) for x in range(cdims)),
+                # adj2
+                (j, ) + tuple(slice(v_c[x] - offset[x] - sub_v_c[x], 
+                                    v_c[x] - offset[x] + sub_v_c[x]
+                        ) for x in range(cdims)),
+                # dst1
+                (i, ) + tuple(slice(v_c[x] - offset[x] - sub_v_c[x], 
+                                    v_c[x] - offset[x] + sub_v_c[x]
+                        ) for x in range(cdims)),
+                # dst2
+                (j, ) + tuple(slice(v_c[x] + offset[x] - sub_v_c[x], 
+                                    v_c[x] + offset[x] + sub_v_c[x]
+                        ) for x in range(cdims)),
+            ]
+
+        return indices, centers
+
+    def _parse_gap(self, coords:np.ndarray):
+        # coords (coordinates):        [3 (sub-volume), 3 (coord-dim)]
+        # abs_gap (absolute distance): [3 (start from), 3 (point to), 3(coord-dim)]
+        abs_gap = coords[None] - coords[:, None]
+        # rel_gap (relative distance): [3 (start from), 3 (point to), 3(coord-dim)]
+        # The gap matrix is symmetric, so we can use the upper triangle part.
+        # The following implementation is a trick, which will get relative value 
+        # when comparing with the max gap value on each dimension.
+        rel_base = abs_gap.max(axis=(0,1))  # determine the max gap for each dimension
+        rel_gap = abs_gap / (rel_base[None, None, ...] + 1e-5)  # normalize the gap matrix
+        
+        return coords, abs_gap.astype(np.float32), rel_gap.astype(np.float32)
+
+    def transform(self, results:dict):
+        # [num_views, coord-dims]
+        coords = results["view_coords"]
+        normed_coords = results["normed_view_coords"]
+        
+        # gap: [3 (start from), 3 (point to), 3(coord-dim)]
+        coords, abs_gap, rel_gap = self._parse_gap(coords)
+        results["abs_gap"] = torch.from_numpy(abs_gap)
+        results["rel_gap"] = torch.from_numpy(rel_gap)
+        
+        normed_coords, normed_abs_gap, normed_rel_gap = self._parse_gap(normed_coords)
+        results["normed_abs_gap"] = torch.from_numpy(normed_abs_gap)
+        results["normed_rel_gap"] = torch.from_numpy(normed_rel_gap)
+        
+        # indices: [num_pairs, 4, index (tuple) (view_idx, *coord-dim-slices)]
+        # centers: [num_pairs, 4, coord-dims]
+        results["sim_pair_indices"], results["sim_pair_centers"] = self._get_AdjDst_indices(abs_gap, coords)
+        results["normed_sim_pair_indices"], results["normed_sim_pair_centers"] = self._get_AdjDst_indices(normed_abs_gap, normed_coords)
+        
         return results
 
 
@@ -403,9 +532,14 @@ class RelativeSimilaritySelfSup(AutoEncoderSelfSup):
         momentum=1e-4, 
         gamma=100, 
         update_interval=1, 
+        extra_keys:list[str]=[
+            "view_coords", "abs_gap", "rel_gap", "sim_pair_indices", 
+            "sim_pair_centers", "normed_view_coords", "normed_abs_gap", "normed_rel_gap", 
+            "normed_sim_pair_indices", "normed_sim_pair_centers"],
         *args, **kwargs
     ):
         super().__init__(*args, **kwargs)
+        self.extra_keys = extra_keys
         self.gap_head:GapPredictor          = MODELS.build(gap_head)
         self.sim_head:SimPairDiscriminator  = MODELS.build(sim_head)
         self.vec_head:VecAngConstraint      = MODELS.build(vec_head)
@@ -416,20 +550,16 @@ class RelativeSimilaritySelfSup(AutoEncoderSelfSup):
             interval=update_interval,
         )
 
-    def parse_target(self, data_samples: list[DataSample]):
-        # coords (coordinates):        [N, 3 (sub-volume), 3 (coord-dim)]
-        coords = torch.stack([sample.view_coords for sample in data_samples])
-        # abs_gap (absolute distance): [N, 3 (start from), 3 (point to), 3(coord-dim)]
-        abs_gap = coords.unsqueeze(1) - coords.unsqueeze(2)
-        # rel_gap (relative distance): [N, 3 (start from), 3 (point to), 3(coord-dim)]
-        # The gap matrix is symmetric, so we can use the upper triangle part.
-        # The following implementation is a trick, which will get relative value 
-        # when comparing with the max gap value on each dimension.
-        rel_base = abs_gap.max(dim=1).values.max(dim=1).values  # determine the max gap for each dimension
-        rel_gap = abs_gap / rel_base[:, None, None, ...]  # normalize the gap matrix
-        return coords, abs_gap, rel_gap
+    def _stack_coord_info(self, data_samples:list[DataSample]):
+        s = {}
+        for k in self.extra_keys:
+            if isinstance(data_samples[0].get(k), torch.Tensor):
+                s[k] = torch.stack([sample.get(k) for sample in data_samples])
+            else:
+                s[k] = np.stack([sample.get(k) for sample in data_samples])
+        return s
 
-    def extract_nir(self, sv_main: Tensor, sv_aux:Tensor) -> Tensor:
+    def extract_nir(self, sv_main:Tensor, sv_aux:Tensor) -> Tensor:
         """
         Args:
             nir_main (Tensor): [N, C, Z, Y, X]
@@ -446,7 +576,7 @@ class RelativeSimilaritySelfSup(AutoEncoderSelfSup):
         return nir  # [N, sub-view, C, ...]
 
     def loss(
-        self, inputs: Tensor, data_samples: list[DataSample], **kwargs
+        self, inputs:Tensor, data_samples:list[DataSample], **kwargs
     ) -> dict[str, Tensor]:
         """
         Args:
@@ -461,22 +591,22 @@ class RelativeSimilaritySelfSup(AutoEncoderSelfSup):
         # sv: sub view
         sv_main = inputs[:, 0]
         sv_aux = inputs[:, 1:]
-        coords, abs_gap, rel_gap = self.parse_target(data_samples)
+        coord_info = self._stack_coord_info(data_samples)
         
         # neural implicit representation forward
         nir = self.extract_nir(sv_main, sv_aux)  # [N, sub-view, C, ...]
         
         losses = {}
         # relative gap self-supervision
-        gap_losses = self.gap_head.loss(nir, abs_gap)
+        gap_losses = self.gap_head.loss(nir, coord_info["normed_abs_gap"])
         for k, v in gap_losses.items():
             losses[k] = v
         # similarity self-supervision (Opposite nir has larger difference, namely negative label)
-        sim_losses = self.sim_head.loss(nir, abs_gap, coords)
+        sim_losses = self.sim_head.loss(nir, coord_info["sim_pair_indices"])
         for k, v in sim_losses.items():
             losses[k] = v
         # vector self-supervision
-        vec_losses = self.vec_head.loss(nir, abs_gap)
+        vec_losses = self.vec_head.loss(nir, coord_info["normed_abs_gap"])
         for k, v in vec_losses.items():
             losses[k] = v
         
@@ -500,15 +630,15 @@ class RelativeSimilaritySelfSup(AutoEncoderSelfSup):
             list[DataSample]:
                 DataSample:
                     - volume (np.ndarray): [sub-view, C, ...]
-                    - rel_gap_gt (Tensor): [sub-view (start from), sub-view (point to), 3]
-                    - abs_gap_gt (Tensor): [sub-view (start from), sub-view (point to), 3]
+                    - rel_gap (Tensor): [sub-view (start from), sub-view (point to), 3]
+                    - abs_gap (Tensor): [sub-view (start from), sub-view (point to), 3]
                     - coords_gt (Tensor): [sub-view, 3]
                     - view_coords (Tensor): [sub-view, 3]
                     - gap_pred (Tensor): [sub-view, sub-view]
                     - sim_pred (Tensor): [sub-view, sub-view]
                     - vec_pred (Tensor): [sub-view, sub-view, 3]
         """
-        coords, abs_gap, rel_gap = self.parse_target(data_samples)
+        coord_info = self._stack_coord_info(data_samples)
 
         sv_main = inputs[:, 0]
         sv_aux = inputs[:, 1:]
@@ -516,22 +646,19 @@ class RelativeSimilaritySelfSup(AutoEncoderSelfSup):
         nir = self.extract_nir(sv_main, sv_aux)  # [N, sub-view, C, ...]
 
         # [N, sub-view, sub-view]
-        gap_pred, gap_loss = self.gap_head.predict(nir)
+        gap_pred, gap_loss = self.gap_head.predict(nir, coord_info["normed_abs_gap"])
         # [N, num_pairs, 4 (i_adj1, i_adj2, i_dist1, i_dist2)]
-        sim_pred, sim_loss = self.sim_head.predict(nir, abs_gap)
+        sim_pred, sim_loss = self.sim_head.predict(nir, coord_info["sim_pair_indices"], coord_info["sim_pair_centers"])
         # [N, sub-view, sub-view, 3]
-        vec_pred, vec_loss = self.vec_head.predict(nir)
-
+        vec_pred, vec_loss = self.vec_head.predict(nir, coord_info["normed_abs_gap"])
+        
         for i in range(len(data_samples)):
             data_samples[i].sub_views = inputs[i]
             data_samples[i].nir = nir[i]
-            data_samples[i].rel_gap_gt = rel_gap[i]
-            data_samples[i].abs_gap_gt = abs_gap[i]
-            data_samples[i].coords = coords[i]
             data_samples[i].gap_pred = gap_pred[i]
             data_samples[i].sim_pred = sim_pred[i]
             data_samples[i].vec_pred = vec_pred[i]
-            data_samples[i].sim_chunk_size = self.sim_head.s
+            data_samples[i].sim_chunk_size = self.sim_head.sub_view_size
             data_samples[i].gap_loss = gap_loss
             data_samples[i].sim_loss = sim_loss
             data_samples[i].vec_loss = vec_loss
@@ -539,7 +666,7 @@ class RelativeSimilaritySelfSup(AutoEncoderSelfSup):
         return data_samples
     
     def forward(self,
-                inputs: torch.Tensor|list[torch.Tensor],
+                inputs: Tensor|list[Tensor],
                 data_samples: list[DataSample],
                 mode: str = 'tensor'):
         if mode == 'tensor':
@@ -627,7 +754,7 @@ class GapPredictor(BaseVolumeWisePredictor):
         
         return similarity  # (N, num_views, num_views)
     
-    def loss(self, nir:Tensor, rel_gap:Tensor) -> dict[str, Tensor]:
+    def loss(self, nir:Tensor, gap:Tensor) -> dict[str, Tensor]:
         """
         Args:
             nir (Tensor): Size [N, num_views, C, ...]
@@ -636,11 +763,11 @@ class GapPredictor(BaseVolumeWisePredictor):
         # (N, num_views, num_views)
         similarity = self.forward(nir)
         # (N, num_views, num_views)
-        loss = self.cri(similarity, rel_gap.norm(dim=-1))
+        loss = self.cri(similarity, gap.norm(dim=-1))
         return {"loss_gap": loss}
 
     @torch.inference_mode()
-    def predict(self, nir:Tensor, rel_gap:Tensor|None=None) -> tuple[Tensor, Tensor|None]:
+    def predict(self, nir:Tensor, gap:Tensor|None=None) -> tuple[Tensor, Tensor|None]:
         """
         Args:
             nir (Tensor): [N, num_views, C, ...]
@@ -650,8 +777,8 @@ class GapPredictor(BaseVolumeWisePredictor):
             gap_pred (Tensor): [N, num_views, num_views]
         """
         pred = self.forward(nir)
-        if rel_gap is not None:
-            loss = self.cri(pred, rel_gap.norm(dim=-1))
+        if gap is not None:
+            loss = self.cri(pred, gap.norm(dim=-1))
         else:
             loss = None
         return pred, loss
@@ -661,7 +788,11 @@ class SimPairDiscriminator(BaseModule):
     LABEL_ADJA_PAIR = 0
     LABEL_DIST_PAIR = 1
     
-    def __init__(self, view_size:int|list[int], sub_view_size:int|list[int], dim:Literal["1d","2d","3d"], in_channels:int):
+    def __init__(self, 
+                 view_size:int|list[int], 
+                 sub_view_size:int|list[int], 
+                 dim:Literal["1d","2d","3d"], 
+                 in_channels:int):
         super().__init__()
         
         self.sub_view_size = np.array(
@@ -694,84 +825,92 @@ class SimPairDiscriminator(BaseModule):
         self.sim_cri = torch.nn.CosineSimilarity()
         self.gt = torch.arange(4).float()[None, None]  # [1 (batch), 1 (num_pairs), 4]
 
-    def _get_AdjDst_indices(self, abs_gap: Tensor, coords: Tensor):
+    def _get_AdjDst_indices(self, abs_gap: Tensor, coords: Tensor) -> tuple:
         """
+        Locate the adjacent pair and distant pair of two sub-view.
+        The results contain view indexs and volume absolute coords.
+        
         Args:
             abs_gap (Tensor): [N, num_views, num_views, coord-dims]
             coords (Tensor): [N, num_views, coord-dims]
             volume_shape (list[int]): [N, ...]
         Returns:
             tuple[list[list[tuple]], Tensor]: 
-                - indices: [N, num_pairs, 4, slice(view_idx, *coord-dims)]
+                - indices: [N, num_pairs, 4, index (tuple) (view_idx, *coord-dim-slices)]
                 - centers: [N, num_pairs, 4, coord-dims]
         """
+        # prepare for the calculation
         N, num_views, cdims = coords.shape
         pairs = [(i, j) for i in range(num_views) for j in range(i+1, num_views)]
         num_pairs = len(pairs)
         indices = [[None]*num_pairs for _ in range(N)]
-        centers = torch.zeros(N, num_pairs, 4, cdims)  # 新增：记录中心点坐标
+        centers = torch.zeros(N, num_pairs, 4, cdims)
         
-        def get_max_offset(center: Tensor, direction: Tensor, view_shape: list[int]) -> Tensor:
-            """计算在给定方向上的最大可能偏移量"""
-            max_offset = torch.ones_like(direction)
-            half_s = self.sub_view_size // 2
-            for d in range(cdims):
-                if direction[d] > 0:
-                    max_offset[d] = min(
-                        (view_shape[d] - half_s[d] - center[d]) / direction[d],
-                        1.0
-                    )
-                elif direction[d] < 0:
-                    max_offset[d] = min(
-                        (half_s[d] - center[d]) / direction[d],
-                        1.0
-                    )
-            return torch.min(max_offset)  # 取所有维度中最小的偏移量
-    
-        def make_slices(volume_center: Tensor, view_idx: int, batch_idx: int, coords: Tensor) -> tuple:
+        def sub_area_center(direction:Tensor) -> Tensor:
             """
-            Args:
-                volume_center: volume坐标系下的中心点坐标
-                view_idx: view的索引
-                batch_idx: 批次中的样本索引
-                coords: [N, num_views, coord-dims] 所有view的中心坐标
-            Returns:
-                tuple: (view_idx, *slices)
-            """
-            # 转换到view局部坐标系
-            view_center = volume_center - coords[batch_idx, view_idx]
-            center_i = [int(view_center[d].item()) for d in range(cdims)]
+            Given the sub-view size and the direction vector.
+            It is possible to determine the maximum center offset along the direction,
+            before the sub-view touches the view's boundary.
             
-            sl = [view_idx]
-            for d in range(cdims):
-                start = max(0, center_i[d] - self.sub_view_size[d]//2)
-                end = min(self.view_size[d], center_i[d] + self.sub_view_size[d]//2)
-                sl.append(slice(start, end))
-            return tuple(sl)
-        
+            Args:
+                direction (Tensor): [..., coord-dims]
+            Return:
+                offset (Tensor): [..., coord-dims]
+            """
+            # The absolute gap available for the center to move 
+            # before touching the boundary on each dimension.
+            avail_gap = (self.view_size - self.sub_view_size) / 2
+            # Calculate the relative gap corresponding to direction vector
+            rel_direction_ratio = avail_gap / direction
+            # Determine the maximum relative ratio.
+            # The minimum value of all dimensions are used,
+            # because it will be the first dimension to hit the boundary.
+            max_direction_ratio = rel_direction_ratio.abs().min(dim=0).values
+            # Return the absolute maximum offset on each dimension.
+            return max_direction_ratio * direction
+
+        offsets = torch.round(sub_area_center(abs_gap.cpu())).int().numpy()
+
         for n in range(N):
+            # Traverse all possible view pairs among all views.
             for idx_pair, (i, j) in enumerate(pairs):
-                direction = F.normalize(abs_gap[n, i, j], dim=0)
+                # Get the maximum offset of the pair.
+                # offset = torch.round(sub_area_center(abs_gap[n, i, j])).int()
+                offset = offsets[n, i, j]
                 
-                # 使用view的形状而不是volume的形状
-                max_offset_i = get_max_offset(coords[n, i], direction, self.view_size)
-                max_offset_j = get_max_offset(coords[n, j], -direction, self.view_size)
+                # Calculate the center of the adjacent pair and the distant pair.
+                # Volume coordinate system here.
+                centers[n, idx_pair, 0] = coords[n, i] + offset  # adj1
+                centers[n, idx_pair, 1] = coords[n, j] - offset  # adj2
+                centers[n, idx_pair, 2] = coords[n, i] - offset  # dst1
+                centers[n, idx_pair, 3] = coords[n, j] + offset  # dst2
                 
-                offset = min(max_offset_i, max_offset_j)
-                
-                # 计算并存储中心点坐标
-                centers[n, idx_pair, 0] = closest_i_center = coords[n, i] + offset * direction
-                centers[n, idx_pair, 1] = closest_j_center = coords[n, j] - offset * direction
-                centers[n, idx_pair, 2] = farthest_i_center = coords[n, i] - offset * direction
-                centers[n, idx_pair, 3] = farthest_j_center = coords[n, j] + offset * direction
-                
+                # Calculate the sub-view index of the adjacent pair and the distant pair.
+                # View coordinate system here. (namely patch)
+                v_c = self.view_size//2  # view center
+                sub_v_c = self.sub_view_size//2  # sub-view center
+                # v_c +/- derterimines the sub-view center
+                # and the center +/- sub_v_c determines the sub-view boundary,
+                # then slice index is available to directly sample from view array.
                 indices[n][idx_pair] = [
-                    make_slices(closest_i_center, i, n, coords),
-                    make_slices(closest_j_center, j, n, coords),
-                    make_slices(farthest_i_center, i, n, coords),
-                    make_slices(farthest_j_center, j, n, coords),
+                    # adj1
+                    (i, ) + tuple(slice(v_c[x] + offset[x] - sub_v_c[x], 
+                                        v_c[x] + offset[x] + sub_v_c[x]
+                            ) for x in range(cdims)),
+                    # adj2
+                    (j, ) + tuple(slice(v_c[x] - offset[x] - sub_v_c[x], 
+                                        v_c[x] - offset[x] + sub_v_c[x]
+                            ) for x in range(cdims)),
+                    # dst1
+                    (i, ) + tuple(slice(v_c[x] - offset[x] - sub_v_c[x], 
+                                        v_c[x] - offset[x] + sub_v_c[x]
+                            ) for x in range(cdims)),
+                    # dst2
+                    (j, ) + tuple(slice(v_c[x] + offset[x] - sub_v_c[x], 
+                                        v_c[x] + offset[x] + sub_v_c[x]
+                            ) for x in range(cdims)),
                 ]
-    
+
         return indices, centers
 
     def _sub_volume_selector(self, nir: Tensor, indices: list[list[tuple]]) -> Tensor:
@@ -799,8 +938,7 @@ class SimPairDiscriminator(BaseModule):
                     slices = index[1:]   # 剩余元素是空间维度的切片
                     
                     # 从nir中提取子区域
-                    sub_vol = nir[n, view_idx, :, *slices]  
-                    sub_volumes.append(sub_vol)
+                    sub_volumes.append(nir[n, view_idx, :, *slices])
                 
                 # 堆叠当前pair的4个子区域
                 pair_samples.append(torch.stack(sub_volumes, dim=0))  # [4, C, ...]
@@ -837,7 +975,7 @@ class SimPairDiscriminator(BaseModule):
         f = torch.stack(f, dim=1) # [N, num_pairs*4, C, ...]
         return f.reshape(*ori_shape[0:3], *f.shape[2:])  # [N, num_pairs, 4, C, ...]
 
-    def loss(self, nir:Tensor, abs_gap:Tensor, coords:Tensor,) -> dict[str, Tensor]:
+    def loss(self, nir:Tensor, sub_area_indices:np.ndarray) -> dict[str, Tensor]:
         """
         Args:
             neural implicit representation (Tensor): [N, num_views, C, ...]
@@ -846,9 +984,6 @@ class SimPairDiscriminator(BaseModule):
         Returns:
             dict[str, Tensor]: 包含邻近和远离子区域的相似度损失
         """
-        # 获取子区域索引
-        sub_area_indices, _ = self._get_AdjDst_indices(abs_gap, coords)  # 修正函数名
-        
         # 获取子区域表示
         # [N, num_pairs, 4 (v_from_adj, v_to_adj, v_from_dist, v_to_dist), C, ...]
         sub_areas = self._sub_volume_selector(nir, sub_area_indices)
@@ -896,40 +1031,62 @@ class SimPairDiscriminator(BaseModule):
         mask = torch.eye(4, device=f.device)[None, None, :, :]
         similarity = similarity.masked_fill(mask.bool(), float('-inf'))
         
-        # adjacent index
-        values, indices = similarity.reshape(N, num_pairs, -1).sort(dim=-1, descending=True)
-        closest_pairs = torch.div(indices[:, :, :2], 4, rounding_mode='floor')  # 取最高的两个相似度对应的行索引
-        
-        # distant index
-        farthest_pairs = torch.div(indices[:, :, -2:], 4, rounding_mode='floor')  # 取最低的两个相似度对应的行索引
-
+        # determine the closest and farthest pairs
+        values, indices = similarity.norm(dim=-1).sort(dim=-1, descending=True)
+        closest_pairs = indices[:, :, :2]
+        farthest_pairs = indices[:, :, 2:]
         # [N, num_pairs, 2], [N, num_pairs, 2]
         return closest_pairs, farthest_pairs
 
     @torch.inference_mode()
-    def predict(self, nir:Tensor, abs_gap:Tensor) -> tuple[Tensor, Tensor]:
+    def predict(self, 
+                nir:Tensor, 
+                sub_area_indices:np.ndarray, 
+                gt_pair_coords:np.ndarray
+    ) -> tuple[Tensor, Tensor]:
         """
         Args:
             nir (Tensor): [N, num_views, C, ...]
-            abs_gap (Tensor): [N, num_views, num_views, 3]
+            sub_area_indices (np.ndarray): [N, num_pairs, 4, index (tuple) (view_idx, *coord-dim-slices)]
+            pair_coords (np.ndarray): [N, num_pairs, 4, coord-dims]
             
         Returns:
-            sim_pred (Tensor): [N, num_pairs, 4 (adj1, adj2, dist1, dist2)]
+            pred_pair_coords (Tensor): [N, num_pairs, 4, 3]
+            loss (Tensor): scalar
         """
-        sub_volume_indices, sub_volume_centers = self._get_subvolume_indices(
-            abs_gap, [nir.shape[0], *nir.shape[3:]])
-        sub_volumes = self._sub_volume_selector(nir, sub_volume_indices)
+        # [N, num_pairs, 4 (v_from_adj, v_to_adj, v_from_dist, v_to_dist), C, ...]
+        sub_areas = self._sub_volume_selector(nir, sub_area_indices)
         
-        f = self.forward(sub_volumes)  # [N, num_pairs, 4, C, ...]
+        f = self.forward(sub_areas)  # [N, num_pairs, 4, C, ...]
         closest_pairs, farthest_pairs = self._find_closest_farthest_pairs(f)
         
         # [N, num_pairs, 4]
-        pred_index = torch.cat([closest_pairs, farthest_pairs], dim=-1)
-        # index from sub_volume_indices
+        pred_pair_idx = torch.cat([closest_pairs, farthest_pairs], dim=-1)
         
+        loss = F.l1_loss(pred_pair_idx, self.gt.cuda().expand_as(pred_pair_idx))
         
-        loss = F.l1_loss(pred_index, self.gt.cuda())
-        return pred_index, loss
+        def gather_by_indices(source, indices):
+            """
+            resample on dim=2 from source according to indices
+            
+            source: [N, num_pairs, 4, coord_dims]
+            indices: [N, num_pairs, 4]
+            returns: [N, num_pairs, 4, coord_dims]
+            """
+            N, num_pairs, _, coord_dims = source.shape
+            # [N, num_pairs, 4] -> [N, num_pairs, 4, 1]
+            indices = indices[..., None]
+            # [N, num_pairs, 4, 1] -> [N, num_pairs, 4, coord_dims]
+            indices = indices.expand(-1, -1, -1, coord_dims)
+            if isinstance(indices, Tensor):
+                indices = indices.cpu().numpy()
+            # execute gather
+            return np.take_along_axis(source, indices, 2)
+        
+        # resample using sub_volume_indices
+        pred_pair_coords = gather_by_indices(gt_pair_coords, pred_pair_idx)
+
+        return pred_pair_coords, loss
 
 
 class VecAngConstraint(BaseVolumeWisePredictor):
@@ -1007,37 +1164,38 @@ class VecAngConstraint(BaseVolumeWisePredictor):
         
         return torch.stack(all_batch_paths)  # [B, L, L, num_paths, D]
 
-    def loss(self, nir: Tensor, abs_gap: Tensor) -> dict[str, Tensor]:
+    def loss(self, nir: Tensor, gap: Tensor) -> dict[str, Tensor]:
         """
         Args:
             nir (Tensor): [N, num_views, C, ...]
-            abs_gap (absolute distance): [N, 3 (start from), 3 (point to), 3(coord-dim)]
+            gap (Tensor): [N, 3 (start from), 3 (point to), 3(coord-dim)]
         """
         dire_vect = self.forward(nir)  # [N, L, L, D]
-        loss_vect = self.cri(dire_vect, abs_gap)
+        loss_vect = self.cri(dire_vect, gap)
         
         path_vectors = self.find_all_paths_batched(dire_vect)  # [N, L, L, num_paths, D]
         
         # 计算所有路径与对应GT的L2距离
         loss_loop = torch.linalg.vector_norm(
-            path_vectors - abs_gap.unsqueeze(3), 
+            path_vectors - gap.unsqueeze(3), 
             dim=-1
         ).mean()
         
         return {"loss_vect": loss_vect, "loss_loop": loss_loop}
 
     @torch.inference_mode()
-    def predict(self, nir:Tensor, abs_gap: Tensor|None=None) -> tuple[Tensor, Tensor|None]:
+    def predict(self, nir:Tensor, gap: Tensor|None=None) -> tuple[Tensor, Tensor|None]:
         """
         Args:
             nir (Tensor): [N, num_views, C, Z, Y, X]
+            gap (Tensor): [N, 3 (start from), 3 (point to), 3(coord-dim)]
             
         Returns:
             vec_pred (Tensor): [N, num_views, num_views, 3] 
         """
         pred = self.forward(nir)
-        if abs_gap is not None:
-            loss = self.cri(pred, abs_gap)
+        if gap is not None:
+            loss = self.cri(pred, gap)
         else:
             loss = None
         return pred, loss
@@ -1057,8 +1215,8 @@ class RelSim_Metric(BaseMetric):
                 - volume: [C, ...]
                 - sub_views: [num_views, C, ...]
                 - nir (Neural Implicit Representation): [num_views, C, ...]
-                - abs_gap_gt (Absolute Gap): [num_views, num_views, 3 (coord-dims)]
-                - rel_gap_gt (Relative Gap): [num_views, num_views, 3 (coord-dims)]
+                - abs_gap (Absolute Gap): [num_views, num_views, 3 (coord-dims)]
+                - rel_gap (Relative Gap): [num_views, num_views, 3 (coord-dims)]
                 - gap_pred (Gap Prediction): [num_views, num_views]
                 - sim_pred (Similarity): [num_pairs, 4 (i_adj1, i_adj2, i_dist1, i_dist2)]
                 - vec_pred (Vector): [num_views, num_views, 3]
@@ -1083,7 +1241,7 @@ class RelSim_Metric(BaseMetric):
             "sim_loss": c("sim_loss", results),
             "vec_loss": c("vec_loss", results),
         }
-        print_log(context, logger='current')
+        context["all_loss"] = sum(context.values())
         return context
 
 
@@ -1108,73 +1266,80 @@ class RelSim_VisHook(Hook):
             outputs (Sequence, optional): Outputs from model.
         """
         if outputs is not None and (batch_idx % self.interval == 0 or batch_idx == 0):
-            self._visualizer.add_datasample(outputs[0], batch_idx)
+            self._visualizer.add_datasample(outputs[0], runner.iter)
 
 
 class RelSim_Viser(Visualizer):
+    def __init__(self, coord_norm:list[int], name="SimViser" , *args, **kwargs):
+        super().__init__(name=name, *args, **kwargs)
+        self.coord_norm = np.array(coord_norm)
+    
     def _plt2array(self, fig: plt.Figure) -> np.ndarray:
         fig.canvas.draw()
         return np.frombuffer(fig.canvas.tostring_rgb(), dtype='uint8').reshape(
             fig.canvas.get_width_height()[::-1] + (3,)
         )
     
-    def _vis_gap(self, gap: torch.Tensor, rel_gap: torch.Tensor):
+    def _vis_gap(self, gap: Tensor, gt_gap: Tensor):
         """
         Args:
             gap (Tensor): [num_views, num_views]
-            rel_gap (Tensor): [num_views, num_views, coord_dims]
+            gt_gap (Tensor): [num_views, num_views, coord_dims]
         """
-        rel_gap = rel_gap.norm(dim=-1)  # [num_views, num_views]
+        gt_gap = gt_gap.norm(dim=-1)  # [num_views, num_views]
         
         # 获取上三角矩阵的掩码
         mask = torch.triu(torch.ones_like(gap), diagonal=1).bool()
         
         # 提取上三角矩阵的值
         gap_values = gap[mask].cpu().numpy()
-        rel_gap_values = rel_gap[mask].cpu().numpy()
+        gt_gap_values = gt_gap[mask].cpu().numpy()
+        
+        # denorm
+        gap_values *= np.linalg.norm(self.coord_norm)
+        
+        lower_bound = min(gap_values.min(), gt_gap_values.min())
+        upper_bound = max(gap_values.max(), gt_gap_values.max())
         
         # 创建散点图
-        plt.figure(figsize=(2, 2))
-        plt.plot([0, 1], [0, 1], color=CMAP_COLOR[1], linestyle='--', zorder=0, alpha=0.7)
-        plt.scatter(gap_values, rel_gap_values, color=CMAP_COLOR[0], alpha=0.6)
+        plt.figure(figsize=(3, 3))
+        plt.plot([lower_bound, upper_bound], 
+                 [lower_bound, upper_bound], 
+                 color=CMAP_COLOR[1], 
+                 linestyle='--', 
+                 zorder=0, 
+                 alpha=0.7)
+        plt.scatter(gap_values, gt_gap_values, color=CMAP_COLOR[0], alpha=0.6)
         
         # 设置图表属性
         plt.xlabel('Gap Prediction')
         plt.ylabel('Ground Truth')
-        plt.xlim([0,1])
-        plt.ylim([0,1])
-        plt.xticks([0, 0.5, 1])
-        plt.yticks([0, 0.5, 1])
         
         # to ndarray
+        plt.tight_layout()
         img_arr = self._plt2array(plt.gcf())
         plt.close()
         return img_arr
     
     def _vis_sim(self, 
-                entire_volume: np.ndarray, 
-                sub_views: torch.Tensor, 
-                sub_view_coords: torch.Tensor, 
-                adja_coords: torch.Tensor, 
-                dist_coords: torch.Tensor, 
-                sim_chunk_size: torch.Tensor):
+                entire_volume:np.ndarray, 
+                views:Tensor, 
+                view_coords:np.ndarray, 
+                adja_coords:np.ndarray, 
+                dist_coords:np.ndarray, 
+                sim_chunk_size:np.ndarray):
         """
         A simple illustrative 3D example using matplotlib's 3D projection.
         It draws wireframes to approximate bounding boxes.
         Args:
             entire_volume (Tensor): [C, D, H, W]
-            sub_views (Tensor): [num_views, C, subD, subH, subW]
-            sub_view_coords (Tensor): [num_views, 3]
+            views (Tensor): [num_views, C, subD, subH, subW]
+            view_coords (Tensor): [num_views, 3]
             adja_coords (Tensor): [num_pairs, 2, 3]
             dist_coords (Tensor): [num_pairs, 2, 3]
             sim_chunk_size (Tensor): [3 (coord_dims)]
         """
-        
-        pdb.set_trace()
-        sub_views = sub_views.cpu()
-        sub_view_coords = sub_view_coords.cpu()
-        adja_coords = adja_coords.cpu()
-        dist_coords = dist_coords.cpu()
+        views = views.cpu()
         
         fig = plt.figure(figsize=(5, 5))
         ax = fig.add_subplot(111, projection='3d')
@@ -1251,11 +1416,11 @@ class RelSim_Viser(Visualizer):
                 collection.set_facecolor(kwargs.get('color', 'blue'))
                 ax.add_collection3d(collection)
 
-        # 绘制所有sub_view
-        _, _, subD, subH, subW = sub_views.shape
-        for coord in sub_view_coords:
+        # 绘制所有view
+        _, _, vD, vH, vW = views.shape
+        for coord in view_coords:
             draw_bbox(coord, 
-                    (subD, subH, subW), 
+                    (vD, vH, vW), 
                     fill=True, 
                     fill_alpha=0.1, 
                     color='black', 
@@ -1271,10 +1436,22 @@ class RelSim_Viser(Visualizer):
             dist_centers = dist_coords[i]
             # 两个adja
             for ac in adja_centers:
-                draw_bbox(ac, sim_chunk_size, color=DEFAULT_CMAP(32), alpha=0.9)
+                draw_bbox(
+                    ac, 
+                    sim_chunk_size, 
+                    color=DEFAULT_CMAP(32), 
+                    alpha=0.9, 
+                    linewidth=1, 
+                    zorder=2)
             # 两个dist
             for dc in dist_centers:
-                draw_bbox(dc, sim_chunk_size, color=DEFAULT_CMAP(224), alpha=0.9)
+                draw_bbox(
+                    dc, 
+                    sim_chunk_size, 
+                    color=DEFAULT_CMAP(224), 
+                    alpha=0.9, 
+                    linewidth=1.5, 
+                    zorder=1)
         
         # 图例
         legend_elements = [
@@ -1288,9 +1465,10 @@ class RelSim_Viser(Visualizer):
                 frameon=False)
         
         def draw_surface(ax:Axes, entire_volume):
-            front_slice = entire_volume[0, :, :, -1]  # y-z平面 (x最大)
-            top_slice = entire_volume[0, -1, :, :]    # x-y平面 (z最大)
-            right_slice = entire_volume[0, :, -1, :]  # x-z平面 (y最大)
+            C, Z, Y, X = entire_volume.shape
+            front_slice = entire_volume[0, :, :, X//2]  # y-z平面
+            top_slice   = entire_volume[0, Z//2, :, :]    # x-y平面
+            right_slice = entire_volume[0, :, Y//2, :]  # x-z平面
             
             def normalize(x):
                 return (x - x.min()) / (x.max() - x.min())
@@ -1318,13 +1496,19 @@ class RelSim_Viser(Visualizer):
         plt.close(fig)
         return img_arr
 
-    def _vis_vec(self, vec:Tensor, coords:Tensor, abs_gap:Tensor):
+    def _vis_vec(self, vec:Tensor, coords:np.ndarray, gt_vec:Tensor):
         """
         Args:
-            coords (Tensor): [sub-view, 3 (coord-dim)]
-            vec (Tensor): [num_views, num_views, 3]
-            abs_gap (Tensor): [num_views, num_views, 3]
+            coords (np.ndarray): [sub-view, 3 (coord-dim)]
+            vec (np.ndarray): [num_views, num_views, 3]
+            gt_vec (np.ndarray): [num_views, num_views, 3]
         """
+        vec = vec.cpu()
+        gt_vec = gt_vec.cpu()
+        
+        # denorm
+        vec *= torch.from_numpy(self.coord_norm)[None, None]
+        
         fig = plt.figure(figsize=(7, 6))
         gs = fig.add_gridspec(nrows=1, ncols=2, width_ratios=[4,1])
         n = coords.shape[0]
@@ -1332,22 +1516,27 @@ class RelSim_Viser(Visualizer):
 
         # 主图坐标
         ax_main = fig.add_subplot(gs[0,0], projection='3d')
-        ax_main.scatter(coords[:,0], coords[:,1], coords[:,2], 
-                    marker='x', 
-                    c=colors)  # 使用colormap
+        ax_main.scatter3D(
+            coords[:,0], coords[:,1], coords[:,2], 
+            s=70,
+            marker='x', 
+            c=colors,
+            linewidths=2)  # 使用colormap
 
         # 主图向量
         for i in range(n-1):
             source = coords[i]
             pred = vec[i, i+1]
-            ax_main.quiver(*source, *pred, 
-                        color=colors[i+1],  # 使用目标点的颜色
-                        alpha=0.8, 
-                        length=1, 
-                        arrow_length_ratio=0.1)
+            ax_main.quiver(
+                *source, *pred, 
+                color=colors[i+1],  # 使用目标点的颜色
+                alpha=0.8, 
+                length=1, 
+                arrow_length_ratio=0.1,
+                linewidths=2)
 
         # 右侧三张子图
-        def draw_subfig(gs: SubplotSpec, vec: Tensor, abs_gap: Tensor):
+        def draw_subfig(gs: SubplotSpec, vec: Tensor, gt_vec: Tensor):
             """绘制三个维度上的预测vs实际差距散点图
             
             Args:
@@ -1364,14 +1553,14 @@ class RelSim_Viser(Visualizer):
             for dim in range(3):
                 ax = axes[dim]
                 pred = vec[triu_indices[0], triu_indices[1], dim].cpu().numpy()
-                gt = abs_gap[triu_indices[0], triu_indices[1], dim].cpu().numpy()
+                gt = gt_vec[triu_indices[0], triu_indices[1], dim].cpu().numpy()
                 
                 # 散点图
                 ax.scatter(pred, gt, alpha=0.5, s=20, color=CMAP_COLOR[1])
                 # 对角线
                 lims = [
-                    min(ax.get_xlim()[0], ax.get_ylim()[0]),
-                    max(ax.get_xlim()[1], ax.get_ylim()[1]),
+                    min(pred.min(), gt.min()),
+                    max(pred.max(), gt.max()),
                 ]
                 ax.plot(lims, lims, 'k--', alpha=0.7, zorder=0)
 
@@ -1379,7 +1568,7 @@ class RelSim_Viser(Visualizer):
                 ax.set_aspect('equal')
         
         # 绘制子图
-        draw_subfig(gs[0,1], vec, abs_gap)
+        draw_subfig(gs[0,1], vec, gt_vec)
 
         fig.tight_layout()
         img_arr = self._plt2array(fig)
@@ -1394,8 +1583,8 @@ class RelSim_Viser(Visualizer):
                 - volume: [C, ...]
                 - sub_views: [num_views, C, ...]
                 - coords: [num_views, 3]
-                - abs_gap_gt (Absolute Gap): [num_views, num_views, 3 (coord-dims)]
-                - rel_gap_gt (Relative Gap): [num_views, num_views, 3 (coord-dims)]
+                - abs_gap (Absolute Gap): [num_views, num_views, 3 (coord-dims)]
+                - rel_gap (Relative Gap): [num_views, num_views, 3 (coord-dims)]
                 - nir (Neural Implicit Representation): [num_views, C, ...]
 
                 - gap_pred (Gap Prediction): [num_views, num_views]
@@ -1404,16 +1593,16 @@ class RelSim_Viser(Visualizer):
                 - sim_chunk_size (Tensor): [num_pairs, 3]
         """
         gap_vis_img = self._vis_gap(data_sample.gap_pred, 
-                                    data_sample.rel_gap_gt)
+                                    data_sample.abs_gap)
         sim_vis_img = self._vis_sim(data_sample.volume, 
                                     data_sample.sub_views, 
-                                    data_sample.coords, 
+                                    data_sample.view_coords, 
                                     data_sample.sim_pred[:, :2], 
                                     data_sample.sim_pred[:, 2:], 
                                     data_sample.sim_chunk_size)
         vec_vis_img = self._vis_vec(data_sample.vec_pred,
-                                    data_sample.coords,
-                                    data_sample.abs_gap_gt)
+                                    data_sample.view_coords,
+                                    data_sample.abs_gap)
         self.add_image('Gap Prediction', gap_vis_img, step)
         self.add_image('Similarity Prediction', sim_vis_img, step)
         self.add_image('Vector Prediction', vec_vis_img, step)
@@ -1428,7 +1617,7 @@ class RelSim_Viser(Visualizer):
 def generate_test_data(batch_size:int=2, 
                       num_views:int=3,
                       channels:int=4,
-                      volume_size:int=64) -> tuple[torch.Tensor, torch.Tensor]:
+                      volume_size:int=64) -> tuple[Tensor, Tensor]:
     """生成测试数据
     
     Returns:
