@@ -1,10 +1,11 @@
 import os
 import pdb
 import pytest
+import math
 from abc import abstractmethod
 from functools import partial
 from typing_extensions import Literal, OrderedDict, Sequence
-from itertools import product
+from itertools import product, permutations
 
 import numpy as np
 import torch
@@ -500,6 +501,96 @@ class ParseCoords(BaseTransform):
         rel_gap = abs_gap / (rel_base[None, None, ...] + 1e-5)  # normalize the gap matrix
         
         return coords, abs_gap.astype(np.float32), rel_gap.astype(np.float32)
+
+
+
+    def _find_all_paths(self, direction: np.ndarray) -> np.ndarray:
+        """
+        Args:
+            direction (np.ndarray): [L, L, D]
+                L: number of points
+                D: number of dimensions
+        Returns:
+            np.ndarray: [L, L, num_paths, D]
+        """
+        
+        L, L, D = direction.shape
+        
+        # 存储格式: {(start, end): [path_vectors]}
+        paths_dict = {(i,j):[] for i in range(L) for j in range(L) if i != j}
+        
+        def backtrack(current: int, start: int, visited: set, path_vector: np.ndarray):
+            if len(visited) == L:
+                paths_dict[(start, current)].append(path_vector)
+                return
+            for next_point in range(L):
+                if next_point not in visited:
+                    visited.add(next_point)
+                    new_vector = path_vector + direction[current, next_point]
+                    backtrack(next_point, start, visited, new_vector)
+                    visited.remove(next_point)
+        
+        for start_point in range(L):
+            backtrack(start_point, start_point, {start_point}, np.zeros(D))
+        
+        # 整理数据为张量形式 [L, L, max_paths, D]
+        batch_paths = []
+        for i in range(L):
+            end_paths = []
+            for j in range(L):
+                if i != j:
+                    paths = paths_dict[(i,j)]
+                    if paths:
+                        end_paths.append(np.stack(paths))
+                    else:
+                        end_paths.append(np.zeros((1, D)))
+                else:
+                    # 对角线位置(起点=终点)填充零向量
+                    end_paths.append(np.zeros((1, D)))
+            
+            # 确保每个终点的路径数量一致
+            max_paths = max(p.shape[0] for p in end_paths)
+            padded_end_paths = []
+            for paths in end_paths:
+                if paths.shape[0] < max_paths:
+                    padding = np.zeros((max_paths - paths.shape[0], D))
+                    padded_end_paths.append(np.concatenate([paths, padding], axis=0))
+                else:
+                    padded_end_paths.append(paths)
+            batch_paths.append(np.stack(padded_end_paths))
+        
+        return np.stack(batch_paths)  # [L, L, num_paths, D]
+
+    def _parse_route(self, direction:np.ndarray) -> np.ndarray:
+        
+        def _calc_destination(routes:np.ndarray, 
+                              coords:np.ndarray, 
+                              gapBetweenCoords:np.ndarray):
+            """
+            Determine the route's destination point coord along each specificed
+            mid-point in the routes.
+            
+            Args:
+                routes (np.ndarray): [routes, steps, coord-dims]
+                coords (np.ndarray): [points, coord-dims]
+                gapBetweenCoords (np.ndarray): [points (from), points (to), coord-dims]
+            
+            Returns:
+                routes' destinations (np.ndarray): [routes, coord-dims]
+            """
+            num_paths = routes.shape[0]
+            coord_dims = coords.shape[1]
+            destinations = np.zeros((num_paths, coord_dims), dtype=coords.dtype)
+            
+            for i in range(num_paths):
+                path = routes[i]
+                position = coords[path[0, 0]]  # 初始化为path第一个step的start坐标
+                for step in path:
+                    s, t = step
+                    position += gapBetweenCoords[s, t]
+                destinations[i] = position
+            
+            return destinations  # [routes, coord-dims]
 
     def transform(self, results:dict):
         # [num_views, coord-dims]
@@ -1006,8 +1097,8 @@ class SimPairDiscriminator(BaseModule):
         dist_losses = torch.stack(dist_losses, dim=1).mean()  # [N, num_pairs] → scalar
         
         return {
-            "loss_sim_adja": -adja_losses,  # 邻近对应该更相似
-            "loss_sim_dist": dist_losses,   # 远离对应该更不相似
+            "loss_sim_adja": -adja_losses,  # 邻近对应该更相似（高similarity）
+            "loss_sim_dist": dist_losses,   # 远离对应该更不相似（低similarity）
         }
     
     def _find_closest_farthest_pairs(self, f) -> tuple[Tensor, Tensor]:
@@ -1090,12 +1181,13 @@ class SimPairDiscriminator(BaseModule):
 
 
 class VecAngConstraint(BaseVolumeWisePredictor):
-    def __init__(self, dim:Literal["1d","2d","3d"], *args, **kwargs):
+    def __init__(self, num_views:int, dim:Literal["1d","2d","3d"], *args, **kwargs):
         super().__init__(dim=dim, *args, **kwargs)
         num_channel_from_super = self.proj[-1].out_channels
         self.proj_direction_vector = torch.nn.Linear(num_channel_from_super, int(dim.replace('d','')))
         torch.nn.init.ones_(self.proj_direction_vector.weight)
         self.cri = torch.nn.SmoothL1Loss()
+        self.cycle_route_index = torch.from_numpy(self.generate_all_cycles(num_views))  # [num_views, num_paths, path_steps, 2]
 
     def forward(self, nir:Tensor) -> Tensor:
         """
@@ -1164,6 +1256,51 @@ class VecAngConstraint(BaseVolumeWisePredictor):
         
         return torch.stack(all_batch_paths)  # [B, L, L, num_paths, D]
 
+    @staticmethod
+    def generate_all_cycles(n) -> np.ndarray:
+        """
+        Find all possible cycles from the given coords.
+        
+        Args:
+            Number of Coordinates (int)
+            
+        Returns:
+            found cycle paths (np.ndarray): [start_points, paths, path_steps, 2 (start_point_index, target_point_index)]
+        """
+        num_paths = math.factorial(n - 1)
+        paths = np.zeros((n, num_paths, n, 2), dtype=int)
+        
+        for start in range(n):
+            others = [i for i in range(n) if i != start]
+            for path_idx, perm in enumerate(permutations(others)):
+                # 第一个step
+                paths[start, path_idx, 0] = [start, perm[0]]
+                # 中间step
+                for step in range(1, n-1):
+                    paths[start, path_idx, step] = [perm[step-1], perm[step]]
+                # for循环结束即完成了所有的step，再往下就会回到自身了
+        
+        return np.array(paths)
+
+    @staticmethod
+    def compute_cycle_gap_sum(gap:Tensor, cycle:Tensor):
+        """
+        Args:
+            gap: [N, num_points, num_points, coord_dims]
+            cycle: [num_points, num_paths, path_steps, 2]
+                NOTE No batch dimension, 
+                     because for the same number of points, 
+                     the cycle is the same.
+        Returns:
+            cycle destination which should be zero, because all routes end at self.
+                [N, num_points, num_paths, coord_dims]
+        """
+        s = cycle[..., 0]  # source indexs [num_points, num_paths, path_steps]
+        t = cycle[..., 1]  # target indexs [num_points, num_paths, path_steps]
+        route = gap[:, s, t, :]  # [N, num_points, num_paths, path_steps, coord_dims]
+        # Offset to self. The optimal value should be zero.
+        return route.sum(dim=-2)  # [N, num_points, num_paths, coord_dims]
+
     def loss(self, nir: Tensor, gap: Tensor) -> dict[str, Tensor]:
         """
         Args:
@@ -1173,15 +1310,13 @@ class VecAngConstraint(BaseVolumeWisePredictor):
         dire_vect = self.forward(nir)  # [N, L, L, D]
         loss_vect = self.cri(dire_vect, gap)
         
-        path_vectors = self.find_all_paths_batched(dire_vect)  # [N, L, L, num_paths, D]
+        # [N, num_points, num_paths, coord_dims]
+        route_pred_dest = self.compute_cycle_gap_sum(dire_vect, self.cycle_route_index)
+        # [N, num_points, num_paths, coord_dims]
+        route_gt_dest = self.compute_cycle_gap_sum(gap, self.cycle_route_index)
+        loss_route = self.cri(route_pred_dest, route_gt_dest)
         
-        # 计算所有路径与对应GT的L2距离
-        loss_loop = torch.linalg.vector_norm(
-            path_vectors - gap.unsqueeze(3), 
-            dim=-1
-        ).mean()
-        
-        return {"loss_vect": loss_vect, "loss_loop": loss_loop}
+        return {"loss_vect": loss_vect, "loss_route": loss_route}
 
     @torch.inference_mode()
     def predict(self, nir:Tensor, gap: Tensor|None=None) -> tuple[Tensor, Tensor|None]:
@@ -1513,15 +1648,18 @@ class RelSim_Viser(Visualizer):
         gs = fig.add_gridspec(nrows=1, ncols=2, width_ratios=[4,1])
         n = coords.shape[0]
         colors = [DEFAULT_CMAP(i/(n-1)) for i in range(n)]
+        ax_main = fig.add_subplot(gs[0,0], projection='3d')
 
         # 主图坐标
-        ax_main = fig.add_subplot(gs[0,0], projection='3d')
         ax_main.scatter3D(
             coords[:,0], coords[:,1], coords[:,2], 
             s=70,
             marker='x', 
             c=colors,
             linewidths=2)  # 使用colormap
+        ax_main.set_xlabel('X')
+        ax_main.set_ylabel('Y')
+        ax_main.set_zlabel('Z')
 
         # 主图向量
         for i in range(n-1):
