@@ -821,9 +821,10 @@ class BaseVolumeWisePredictor(BaseModule):
 
 
 class GapPredictor(BaseVolumeWisePredictor):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, loss_weight:float=1., *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.cri = torch.nn.SmoothL1Loss()
+        self.loss_weight = loss_weight
     
     def forward(self, nir:Tensor) -> Tensor:
         """
@@ -836,12 +837,11 @@ class GapPredictor(BaseVolumeWisePredictor):
         """
         nir = super().forward(nir)  # [N, num_views, C]
         
-        # Relative Positional Representation of Each Sub-Volume
         # The origin may align with the mean value of all samples' world coordinate systems'origin.
         # diff equals to the relative distance between each `nir`.
-        rel_pos_rep_diff = nir.unsqueeze(2) - nir.unsqueeze(1)  # (N, num_views, num_views, C)
+        rep_diff = nir.unsqueeze(2) - nir.unsqueeze(1)  # (N, num_views, num_views, C)
         # calculate the distance of `rel_pos_rep_diff`
-        similarity = rel_pos_rep_diff.norm(dim=-1)  # (N, num_views, num_views)
+        similarity = rep_diff.norm(dim=-1)  # (N, num_views, num_views)
         
         return similarity  # (N, num_views, num_views)
     
@@ -849,13 +849,13 @@ class GapPredictor(BaseVolumeWisePredictor):
         """
         Args:
             nir (Tensor): Size [N, num_views, C, ...]
-            rel_gap (Tensor): Size [N, num_views (start from), num_views (point to), coord-dim-length]
+            gap (Tensor): Size [N, num_views (start from), num_views (point to), coord-dim-length]
         """
         # (N, num_views, num_views)
         similarity = self.forward(nir)
         # (N, num_views, num_views)
         loss = self.cri(similarity, gap.norm(dim=-1))
-        return {"loss_gap": loss}
+        return {"loss_gap": loss*self.loss_weight}
 
     @torch.inference_mode()
     def predict(self, nir:Tensor, gap:Tensor|None=None) -> tuple[Tensor, Tensor|None]:
@@ -883,7 +883,8 @@ class SimPairDiscriminator(BaseModule):
                  view_size:int|list[int], 
                  sub_view_size:int|list[int], 
                  dim:Literal["1d","2d","3d"], 
-                 in_channels:int):
+                 in_channels:int,
+                 loss_weight:float=1., ):
         super().__init__()
         
         self.sub_view_size = np.array(
@@ -900,6 +901,7 @@ class SimPairDiscriminator(BaseModule):
         if np.any(self.sub_view_size > self.view_size):
             raise ValueError("Sub-view size cannot be larger than view size")
         
+        self.loss_weight = loss_weight
         self.dim = dim
         self.in_channels = in_channels
         self.encoder = torch.nn.ModuleList([
@@ -1097,8 +1099,8 @@ class SimPairDiscriminator(BaseModule):
         dist_losses = torch.stack(dist_losses, dim=1).mean()  # [N, num_pairs] → scalar
         
         return {
-            "loss_sim_adja": -adja_losses,  # 邻近对应该更相似（高similarity）
-            "loss_sim_dist": dist_losses,   # 远离对应该更不相似（低similarity）
+            "loss_sim_adja": -adja_losses * self.loss_weight,  # 邻近对应该更相似（高similarity）
+            "loss_sim_dist": dist_losses * self.loss_weight,   # 远离对应该更不相似（低similarity）
         }
     
     def _find_closest_farthest_pairs(self, f) -> tuple[Tensor, Tensor]:
@@ -1110,31 +1112,45 @@ class SimPairDiscriminator(BaseModule):
             closest_pairs (Tensor): [N, num_pairs, 2]
             farthest_pairs (Tensor): [N, num_pairs, 2]
         """
-        
         N, num_pairs, _, C, *rest = f.shape
         vectors = f.reshape(N, num_pairs, 4, -1)  # [N, num_pairs, 4, C*...]
         
         # cosine similarity matrix
-        normalized = F.normalize(vectors, dim=-1)  # [N, num_pairs, 4, C*...]
+        normalized = F.normalize(vectors, dim=-1)  # [N, num_pairs, 4]
         similarity = torch.matmul(normalized, normalized.transpose(-2, -1))  # [N, num_pairs, 4, 4]
         
-        # avoid self-similarity
-        mask = torch.eye(4, device=f.device)[None, None, :, :]
-        similarity = similarity.masked_fill(mask.bool(), float('-inf'))
+        # select the upper triangle matrix
+        N, num_pairs = similarity.shape[:2]
+        mask = torch.triu(torch.ones(4, 4), diagonal=1).bool()
+        mask = mask.unsqueeze(0).unsqueeze(0)  # [1, 1, 4, 4]
+        similarity_masked = similarity.clone()
+        similarity_masked[~mask.expand_as(similarity)] = float('-inf')
         
-        # determine the closest and farthest pairs
-        values, indices = similarity.norm(dim=-1).sort(dim=-1, descending=True)
-        closest_pairs = indices[:, :, :2]
-        farthest_pairs = indices[:, :, 2:]
-        # [N, num_pairs, 2], [N, num_pairs, 2]
-        return closest_pairs, farthest_pairs
+        # find min max sim pair
+        max_values, max_indices = similarity_masked.reshape(N, num_pairs, -1).max(dim=-1)  # 最大值
+        min_values, min_indices = similarity_masked.reshape(N, num_pairs, -1).min(dim=-1)  # 最小值
+        
+        # 获取上三角矩阵中True值的位置映射
+        rows, cols = torch.where(mask[0, 0])
+        
+        # 转换为原始矩阵的索引对
+        max_pairs = torch.stack([
+            rows[max_indices.flatten()].reshape(N, num_pairs),
+            cols[max_indices.flatten()].reshape(N, num_pairs)
+        ], dim=-1)
+        min_pairs = torch.stack([
+            rows[min_indices.flatten()].reshape(N, num_pairs),
+            cols[min_indices.flatten()].reshape(N, num_pairs)
+        ], dim=-1)
+        
+        return max_pairs, min_pairs
 
     @torch.inference_mode()
     def predict(self, 
                 nir:Tensor, 
                 sub_area_indices:np.ndarray, 
                 gt_pair_coords:np.ndarray
-    ) -> tuple[Tensor, Tensor]:
+    ) -> tuple:
         """
         Args:
             nir (Tensor): [N, num_views, C, ...]
@@ -1181,8 +1197,13 @@ class SimPairDiscriminator(BaseModule):
 
 
 class VecAngConstraint(BaseVolumeWisePredictor):
-    def __init__(self, num_views:int, dim:Literal["1d","2d","3d"], *args, **kwargs):
+    def __init__(self, 
+                 num_views:int, 
+                 dim:Literal["1d","2d","3d"], 
+                 loss_weight:float=1., 
+                 *args, **kwargs):
         super().__init__(dim=dim, *args, **kwargs)
+        self.loss_weight = loss_weight
         num_channel_from_super = self.proj[-1].out_channels
         self.proj_direction_vector = torch.nn.Linear(num_channel_from_super, int(dim.replace('d','')))
         torch.nn.init.ones_(self.proj_direction_vector.weight)
@@ -1316,7 +1337,8 @@ class VecAngConstraint(BaseVolumeWisePredictor):
         route_gt_dest = self.compute_cycle_gap_sum(gap, self.cycle_route_index)
         loss_route = self.cri(route_pred_dest, route_gt_dest)
         
-        return {"loss_vect": loss_vect, "loss_route": loss_route}
+        return {"loss_vect": loss_vect * self.loss_weight, 
+                "loss_route": loss_route * self.loss_weight}
 
     @torch.inference_mode()
     def predict(self, nir:Tensor, gap: Tensor|None=None) -> tuple[Tensor, Tensor|None]:
