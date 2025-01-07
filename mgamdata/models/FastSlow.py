@@ -1130,10 +1130,10 @@ class SimPairDiscriminator(BaseModule):
         max_values, max_indices = similarity_masked.reshape(N, num_pairs, -1).max(dim=-1)  # 最大值
         min_values, min_indices = similarity_masked.reshape(N, num_pairs, -1).min(dim=-1)  # 最小值
         
-        # 获取上三角矩阵中True值的位置映射
+        # Get the row and column indices of the max values
         rows, cols = torch.where(mask[0, 0])
         
-        # 转换为原始矩阵的索引对
+        # Convert these indices into pairs of coordinates
         max_pairs = torch.stack([
             rows[max_indices.flatten()].reshape(N, num_pairs),
             cols[max_indices.flatten()].reshape(N, num_pairs)
