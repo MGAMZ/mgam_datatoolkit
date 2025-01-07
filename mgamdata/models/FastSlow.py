@@ -917,6 +917,8 @@ class SimPairDiscriminator(BaseModule):
         self.avg_pool = GlobalAvgPool(dim)
         self.sim_cri = torch.nn.CosineSimilarity()
         self.gt = torch.arange(4).float()[None, None]  # [1 (batch), 1 (num_pairs), 4]
+        
+        self._init_pair_mask()
 
     def _get_AdjDst_indices(self, abs_gap: Tensor, coords: Tensor) -> tuple:
         """
@@ -1103,6 +1105,12 @@ class SimPairDiscriminator(BaseModule):
             "loss_sim_dist": dist_losses * self.loss_weight,   # 远离对应该更不相似（低similarity）
         }
     
+    def _init_pair_mask(self):
+        """Initialize and cache the upper triangle mask for pair finding."""
+        self.pair_mask = torch.triu(torch.ones(4, 4), diagonal=1).bool()
+        self.pair_mask = self.pair_mask.unsqueeze(0).unsqueeze(0)  # [1, 1, 4, 4]
+        self.pair_rows, self.pair_cols = torch.where(self.pair_mask[0, 0])
+    
     def _find_closest_farthest_pairs(self, f) -> tuple[Tensor, Tensor]:
         """
         Args:
@@ -1113,34 +1121,25 @@ class SimPairDiscriminator(BaseModule):
             farthest_pairs (Tensor): [N, num_pairs, 2]
         """
         N, num_pairs, _, C, *rest = f.shape
-        vectors = f.reshape(N, num_pairs, 4, -1)  # [N, num_pairs, 4, C*...]
+        vectors = f.reshape(N, num_pairs, 4, -1)
         
-        # cosine similarity matrix
-        normalized = F.normalize(vectors, dim=-1)  # [N, num_pairs, 4]
-        similarity = torch.matmul(normalized, normalized.transpose(-2, -1))  # [N, num_pairs, 4, 4]
+        normalized = F.normalize(vectors, dim=-1)
+        similarity = torch.matmul(normalized, normalized.transpose(-2, -1))
         
-        # select the upper triangle matrix
-        N, num_pairs = similarity.shape[:2]
-        mask = torch.triu(torch.ones(4, 4), diagonal=1).bool()
-        mask = mask.unsqueeze(0).unsqueeze(0)  # [1, 1, 4, 4]
-        similarity_masked = similarity.clone()
-        similarity_masked[~mask.expand_as(similarity)] = float('-inf')
+        similarity_masked = similarity.cpu()
+        valid_vals = similarity_masked[self.pair_mask.expand_as(similarity_masked)]
+        valid_vals = valid_vals.view(N, num_pairs, -1)
         
-        # find min max sim pair
-        max_values, max_indices = similarity_masked.reshape(N, num_pairs, -1).max(dim=-1)  # 最大值
-        min_values, min_indices = similarity_masked.reshape(N, num_pairs, -1).min(dim=-1)  # 最小值
+        max_values, max_idx = valid_vals.max(dim=-1)
+        min_values, min_idx = valid_vals.min(dim=-1)
         
-        # Get the row and column indices of the max values
-        rows, cols = torch.where(mask[0, 0])
-        
-        # Convert these indices into pairs of coordinates
         max_pairs = torch.stack([
-            rows[max_indices.flatten()].reshape(N, num_pairs),
-            cols[max_indices.flatten()].reshape(N, num_pairs)
+            self.pair_rows[max_idx],
+            self.pair_cols[max_idx]
         ], dim=-1)
         min_pairs = torch.stack([
-            rows[min_indices.flatten()].reshape(N, num_pairs),
-            cols[min_indices.flatten()].reshape(N, num_pairs)
+            self.pair_rows[min_idx],
+            self.pair_cols[min_idx]
         ], dim=-1)
         
         return max_pairs, min_pairs
@@ -1170,7 +1169,7 @@ class SimPairDiscriminator(BaseModule):
         # [N, num_pairs, 4]
         pred_pair_idx = torch.cat([closest_pairs, farthest_pairs], dim=-1)
         
-        loss = F.l1_loss(pred_pair_idx, self.gt.cuda().expand_as(pred_pair_idx))
+        loss = F.l1_loss(pred_pair_idx, self.gt.expand_as(pred_pair_idx))
         
         def gather_by_indices(source, indices):
             """

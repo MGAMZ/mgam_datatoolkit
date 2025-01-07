@@ -26,9 +26,19 @@ class ParseID(BaseTransform):
 class mgam_BaseSegDataset(BaseSegDataset):
     SPLIT_RATIO = [0.7, 0.15, 0.15]
 
-    def __init__(self, split: str, debug: bool = False, *args, **kwargs) -> None:
+    def __init__(
+        self,
+        split: str,
+        debug: bool = False,
+        dataset_name: str | None = None,
+        *args,
+        **kwargs,
+    ) -> None:
         self.split = split
         self.debug = debug
+        self.dataset_name = (dataset_name 
+                             if dataset_name is not None 
+                             else self.__class__.__name__)
         super().__init__(*args, **kwargs)
         self.data_root: str
 
@@ -69,7 +79,7 @@ class mgam_BaseSegDataset(BaseSegDataset):
             )
 
         print_log(
-            f"{self.__class__.__name__} dataset {self.split} split loaded {len(data_list)} samples.",
+            f"{self.dataset_name} dataset {self.split} split loaded {len(data_list)} samples.",
             MMLogger.get_current_instance(),
         )
 
@@ -117,6 +127,29 @@ class mgam_Standard_3D_Mha(mgam_BaseSegDataset):
 
 
 class mgam_SemiSup_3D_Mha(mgam_Standard_3D_Mha):
+    def _split(self):
+        all_series = [
+            file.replace(".mha", "")
+            for file in os.listdir(os.path.join(self.data_root_mha, "image"))
+            if file.endswith(".mha")
+        ]
+        all_series = sorted(
+            all_series, key=lambda x: abs(int(re.search(r"\d+", x).group()))
+        )
+        np.random.shuffle(all_series)
+        total = len(all_series)
+        train_end = int(total * self.SPLIT_RATIO[0])
+        val_end = train_end + int(total * self.SPLIT_RATIO[1])
+
+        if self.split == "train":
+            return all_series[:train_end]
+        elif self.split == "val":
+            return all_series[train_end:val_end]
+        elif self.split == "test":
+            return all_series[val_end:]
+        else:
+            raise RuntimeError(f"Unsupported split: {self.split}")
+    
     def sample_iterator(self) -> Generator[tuple[str, str], None, None]:
         for series in self._split():
             image_mha_path = os.path.join(self.data_root, "image", series + ".mha")
