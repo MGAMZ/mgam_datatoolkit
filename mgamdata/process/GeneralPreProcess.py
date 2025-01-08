@@ -12,6 +12,7 @@ from torch.nn import functional as F
 from scipy.ndimage import gaussian_filter
 
 from mmcv.transforms import Resize, BaseTransform
+from mmengine.registry import TRANSFORMS
 
 
 """
@@ -742,3 +743,27 @@ class device_to(BaseTransform):
             else:
                 raise ValueError(f"Unsupported type {type(d)}")
         return results
+
+
+class SampleAugment(BaseTransform):
+    """
+    NOTE
+    The reason to do SampleWiseInTimeAugment is the time comsumption
+    for IO of an entire sample is too expensive, so it's better
+    to augment the sample in time, thus accquiring multiple trainable sub-samples.
+    """
+    def __init__(self, num_samples:int, pipeline: list[dict]):
+        self.num_samples = num_samples
+        self.transforms = [TRANSFORMS.build(t) for t in pipeline]
+    
+    def get_one_sample(self, results: dict):
+        for t in self.transforms:
+            results = t(results)
+        return results
+    
+    def transform(self, results: dict):
+        samples = []
+        for _ in range(self.num_samples):
+            samples.append(self.get_one_sample(results.copy()))
+        return samples
+

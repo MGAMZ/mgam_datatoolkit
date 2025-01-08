@@ -6,12 +6,14 @@ import logging
 import json
 from functools import partial
 from numbers import Number
+from typing_extensions import Sequence, Mapping
 
 import torch
 import pandas as pd
 import numpy as np
 from torch import Tensor
 from torch.distributed.fsdp.wrap import size_based_auto_wrap_policy
+from torch.utils.data._utils.collate import default_collate as torch_default_collate
 
 from mmengine.dataset.sampler import DefaultSampler
 from mmengine.runner import (
@@ -29,6 +31,8 @@ from mmengine.model.wrappers import (
     MMDistributedDataParallel,
     MMFullyShardedDataParallel,
 )
+from mmengine.structures import BaseDataElement
+from mmengine.dataset.utils import default_collate
 
 from ..utils.DevelopUtils import measure_time, InjectVisualize
 
@@ -350,3 +354,26 @@ class RuntimeInfoHook(_RuntimeInfoHook):
             for key, value in outputs.items():
                 if 'loss' in key:
                     runner.message_hub.update_scalar(f"train/{key}", value)
+
+
+def multi_sample_collate(data_batch: Sequence[dict]):
+    """
+    Compatible with `SampleAugment` Transform Class.
+    This collate is to facilitate multi-sub-sample generation
+    from the same sample.
+    
+    NOTE
+    The reason to do SampleWiseInTimeAugment is the time comsumption
+    for IO of an entire sample is too expensive, so it's better
+    to augment the sample in time, thus accquiring multiple trainable sub-samples.
+    """
+    
+    flattened = []
+    for item in data_batch:
+        if isinstance(item, list):
+            flattened.extend(item)
+        else:
+            flattened.append(item)
+    data_batch = flattened
+
+    return default_collate(data_batch)

@@ -5,7 +5,7 @@ import math
 from abc import abstractmethod
 from functools import partial
 from typing_extensions import Literal, OrderedDict, Sequence
-from itertools import product, permutations
+from itertools import permutations
 
 import numpy as np
 import torch
@@ -23,7 +23,7 @@ from mmengine.config import ConfigDict
 from mmengine.runner import Runner
 from mmengine.model import MomentumAnnealingEMA, BaseModule
 from mmengine.utils.misc import is_list_of
-from mmengine.dist import all_gather, get_rank, is_main_process, master_only
+from mmengine.dist import all_gather, get_rank, master_only
 from mmengine.visualization import Visualizer
 from mmengine.hooks import Hook
 from mmengine.evaluator import BaseMetric
@@ -34,6 +34,7 @@ from mmpretrain.models.selfsup.base import BaseSelfSupervisor
 from mmpretrain.models.selfsup.mocov3 import CosineEMA
 
 from mgamdata.mm.mmseg_Dev3D import PixelUnshuffle1D, PixelUnshuffle3D
+from mgamdata.process.LoadBiomedicalData import LoadImageFromMHA
 
 
 DIM_MAP = {"1d": 1, "2d": 2, "3d": 3}
@@ -1122,7 +1123,6 @@ class SimPairDiscriminator(BaseModule):
         """
         N, num_pairs, _, C, *rest = f.shape
         vectors = f.reshape(N, num_pairs, 4, -1)
-        
         normalized = F.normalize(vectors, dim=-1)
         similarity = torch.matmul(normalized, normalized.transpose(-2, -1))
         
@@ -1164,6 +1164,8 @@ class SimPairDiscriminator(BaseModule):
         sub_areas = self._sub_volume_selector(nir, sub_area_indices)
         
         f = self.forward(sub_areas)  # [N, num_pairs, 4, C, ...]
+        
+        # [N, num_pairs, 2], [N, num_pairs, 2]
         closest_pairs, farthest_pairs = self._find_closest_farthest_pairs(f)
         
         # [N, num_pairs, 4]
@@ -1765,8 +1767,6 @@ class RelSim_Viser(Visualizer):
         self.add_image('Gap Prediction', gap_vis_img, step)
         self.add_image('Similarity Prediction', sim_vis_img, step)
         self.add_image('Vector Prediction', vec_vis_img, step)
-
-
 
 
 
