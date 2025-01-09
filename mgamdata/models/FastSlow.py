@@ -1429,9 +1429,15 @@ class RelSim_VisHook(Hook):
 
 
 class RelSim_Viser(Visualizer):
-    def __init__(self, coord_norm:list[int], name="SimViser" , *args, **kwargs):
+    def __init__(self, 
+                 coord_norm:list[int], 
+                 name="SimViser" , 
+                 plt_backend:str="agg",
+                 *args, **kwargs,
+    ):
         super().__init__(name=name, *args, **kwargs)
         self.coord_norm = np.array(coord_norm)
+        plt.switch_backend(plt_backend)
     
     def _plt2array(self, fig: plt.Figure) -> np.ndarray:
         fig.canvas.draw()

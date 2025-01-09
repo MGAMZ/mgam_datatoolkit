@@ -278,6 +278,10 @@ class mgam_concat_dataset(ConcatDataset):
         self._fully_initialized = False
         if not lazy_init:
             self.full_init()
+        
+        print_log(f"ConcatDataset loaded {len(self)} samples.", MMLogger.get_current_instance())
+
+
 
 
 class unsup_base:
