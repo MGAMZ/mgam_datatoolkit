@@ -856,7 +856,7 @@ class GapPredictor(BaseVolumeWisePredictor):
         similarity = self.forward(nir)
         # (N, num_views, num_views)
         loss = self.cri(similarity, gap.norm(dim=-1))
-        return {"loss_gap": loss*self.loss_weight}
+        return {"loss/gap": loss*self.loss_weight}
 
     @torch.inference_mode()
     def predict(self, nir:Tensor, gap:Tensor|None=None) -> tuple[Tensor, Tensor|None]:
@@ -1102,8 +1102,8 @@ class SimPairDiscriminator(BaseModule):
         dist_losses = torch.stack(dist_losses, dim=1).mean()  # [N, num_pairs] → scalar
         
         return {
-            "loss_sim_adja": -adja_losses * self.loss_weight,  # 邻近对应该更相似（高similarity）
-            "loss_sim_dist": dist_losses * self.loss_weight,   # 远离对应该更不相似（低similarity）
+            "loss/sim_adja": -adja_losses * self.loss_weight,  # 邻近对应该更相似（高similarity）
+            "loss/sim_dist": dist_losses * self.loss_weight,   # 远离对应该更不相似（低similarity）
         }
     
     def _init_pair_mask(self):
@@ -1193,6 +1193,7 @@ class SimPairDiscriminator(BaseModule):
         
         # resample using sub_volume_indices
         pred_pair_coords = gather_by_indices(gt_pair_coords, pred_pair_idx)
+        assert pred_pair_coords.shape == gt_pair_coords.shape
 
         return pred_pair_coords, loss
 
@@ -1338,8 +1339,8 @@ class VecAngConstraint(BaseVolumeWisePredictor):
         route_gt_dest = self.compute_cycle_gap_sum(gap, self.cycle_route_index)
         loss_route = self.cri(route_pred_dest, route_gt_dest)
         
-        return {"loss_vect": loss_vect * self.loss_weight, 
-                "loss_route": loss_route * self.loss_weight}
+        return {"loss/vect": loss_vect * self.loss_weight, 
+                "loss/route": loss_route * self.loss_weight}
 
     @torch.inference_mode()
     def predict(self, nir:Tensor, gap: Tensor|None=None) -> tuple[Tensor, Tensor|None]:
@@ -1764,9 +1765,9 @@ class RelSim_Viser(Visualizer):
         vec_vis_img = self._vis_vec(data_sample.vec_pred,
                                     data_sample.view_coords,
                                     data_sample.abs_gap)
-        self.add_image('Gap Prediction', gap_vis_img, step)
-        self.add_image('Similarity Prediction', sim_vis_img, step)
-        self.add_image('Vector Prediction', vec_vis_img, step)
+        self.add_image('PredImg/Gap', gap_vis_img, step)
+        self.add_image('PredImg/Similarity', sim_vis_img, step)
+        self.add_image('PredImg/Vector', vec_vis_img, step)
 
 
 
