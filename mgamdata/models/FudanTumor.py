@@ -1,22 +1,63 @@
+import os
 import pdb
+from collections.abc import Callable
+from typing_extensions import Literal
 
+import numpy as np
 import torch
 from torch import nn
-from mmcv.transforms import BaseTransform
+from torch import Tensor
 
+from mmcv.transforms import BaseTransform
+from mmengine.model import BaseModule
 from mmengine.model.base_model import BaseDataPreprocessor
+from mmengine.evaluator.metric import BaseMetric
+from mmpretrain.registry import MODELS
 from mmpretrain.datasets.transforms.formatting import PackInputs, DataSample
 from mmpretrain.models.backbones.base_backbone import BaseBackbone
-from mmpretrain.models.classifiers.image import ImageClassifier
+from mmpretrain.models.classifiers import ImageClassifier, BaseClassifier
 
 
 NUM_CSV_FEAT = 68
 NUM_CLAM_FEAT_CHANNEL = 1024
 
+# 有两列是中文标注，映射到数字索引
+TISSUE_CLASS_INDEX = {
+    "default": 0,
+    "乳头型": 1,
+    "实性型": 2,
+    "贴壁型": 3,
+    "微乳头型": 4,
+    "腺泡型": 5,
+}
+COMBINATION_LABELS = {
+    (12,14): "标签12+14",
+    (12,16): "标签12+16",
+    (14,16): "标签14+16",
+    (12,14,16): "标签12+14+16",
+}
+EXCLUDE_CLASSES = [
+    "date_dx",
+    "date_lfp",
+    "date_relapse",
+    "date_mt",
+    "id",
+    "蜡块号",
+    *COMBINATION_LABELS.values()
+]
+# 定义标签序号和他们隶属的相关组别
+LABEL_GROUP = {
+    "Immunization": [1,2,3,4,5,6,7],        # 免疫相关标注
+    "Histological": [8,],                   # 组织学形态
+    "TumorNucleus": [9,10,11,12,13,14],     # 肿瘤细胞核
+    "TumorStroma":  [15,16,],               # 肿瘤间质
+    "GenePhenoTp":  [17,18,],               # 基因表型
+}
+
 
 class PathologyPreprocessor(BaseDataPreprocessor):
     def __init__(self, *args, **kwargs):
-        super(PathologyPreprocessor, self).__init__()
+        super(PathologyPreprocessor, self).__init__(*args, **kwargs)
 
     def forward(self, data: dict, training: bool = False) -> dict:
         inputs = torch.stack(self.cast_data(data["inputs"]))
@@ -28,7 +69,7 @@ class PathologyPreprocessor(BaseDataPreprocessor):
 class Classifier(ImageClassifier):
     def forward(
         self,
-        inputs: torch.Tensor,
+        inputs: Tensor,
         data_samples: list[DataSample] | None = None,
         mode: str = "tensor",
     ):
@@ -62,44 +103,18 @@ class Classifier(ImageClassifier):
         ), "No head or the head doesn't implement `pre_logits` method."
         return self.head.pre_logits(x)
 
-    def loss(self, inputs: torch.Tensor, data_samples: list[DataSample]) -> dict:
+    def loss(self, inputs: Tensor, data_samples: list[DataSample]) -> dict:
         feats = self.extract_feat(inputs, data_samples)
         return self.head.loss(feats, data_samples)
 
     def predict(
         self,
-        inputs: torch.Tensor,
+        inputs: Tensor,
         data_samples: list[DataSample] | None = None,
         **kwargs,
     ) -> list[DataSample]:
         feats = self.extract_feat(inputs, data_samples)
         return self.head.predict(feats, data_samples, **kwargs)
-
-
-class PackTwoFeats(PackInputs):
-    def transform(self, results: dict) -> dict:
-        """Method to pack the input data."""
-
-        packed_results = dict()
-        if self.input_key in results:
-            input_ = results[self.input_key]
-            packed_results["inputs"] = self.format_input(input_)
-
-        data_sample = DataSample()
-        data_sample.set_gt_label(results["gt_label"])
-
-        # Set custom algorithm keys
-        for key in self.algorithm_keys:
-            if key in results:
-                data_sample.set_field(results[key], key)
-
-        # Set meta keys
-        for key in self.meta_keys:
-            if key in results:
-                data_sample.set_field(results[key], key, field_type="metainfo")
-
-        packed_results["data_samples"] = data_sample
-        return packed_results
 
 # 第一版模型，用于跑通程序以及简单观察可拟合性
 class MLP(BaseBackbone):
@@ -118,7 +133,7 @@ class MLP(BaseBackbone):
             in_channels = hidden_channels
         return torch.nn.Sequential(*layers)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: Tensor) -> Tensor:
         return (self.layers(x),)
 
 
@@ -236,14 +251,14 @@ class YiQin_WeightedPatch(BaseBackbone):
         )
 
     def forward(
-        self, inputs: torch.Tensor, data_samples: list[DataSample]
-    ) -> torch.Tensor:
+        self, inputs: Tensor, data_samples: list[DataSample]
+    ) -> Tensor:
         """
         Args:
-            CLAM_feat (torch.Tensor): [N, C, 1024]
-            csv_feat  (torch.Tensor): [N, 69]
+            CLAM_feat (Tensor): [N, C, 1024]
+            csv_feat  (Tensor): [N, 69]
         Returns:
-            torch.Tensor: [N, out_CLAM_feat_channels + 69]
+            Tensor: [N, out_CLAM_feat_channels + 69]
         """
         CLAM_feat = inputs
         CSV_feat = torch.stack([i.feat_csv for i in data_samples])
@@ -280,8 +295,8 @@ class SVM(BaseBackbone):
         self.use_CSV_feat = use_CSV_feat
 
     def forward(
-        self, inputs: torch.Tensor, data_samples: list[DataSample]
-    ) -> torch.Tensor:
+        self, inputs: Tensor, data_samples: list[DataSample]
+    ) -> Tensor:
         """
         Identify projection, the svm's Linear is implemented in head module,
         rather in backbone module.
@@ -298,10 +313,316 @@ class SVM(BaseBackbone):
         return (feat,)
 
 
-class Label_for_SVM(BaseTransform):
-    def transform(self, results:dict):
-        l = results["gt_score"]
-        l[l <0.5] = -1
-        l[l >=0.5] = 1
-        results["gt_score"] = l
+class SubGroupSharedExtractor(BaseBackbone):
+    def __init__(self, in_channels: int, *args, **kwargs):
+        super(SubGroupSharedExtractor, self).__init__(*args, **kwargs)
+        self.in_channels = in_channels
+        self.proj = nn.ModuleList([
+            nn.Linear(in_channels, in_channels),
+            nn.GELU(),
+            nn.Linear(in_channels, in_channels),
+            nn.GELU(),
+            nn.Linear(in_channels, in_channels),
+        ])
+    
+    def forward(self, inputs: Tensor):
+        i = inputs
+        for layer in self.proj:
+            i = layer(i)
+        return i
+
+
+class SubGroupLabelClser(BaseClassifier):
+    def __init__(
+        self, 
+        shared:dict, 
+        clser_Immunization:dict,
+        clser_Histological:dict,
+        clser_TumorNucleus:dict,
+        clser_TumorStroma:dict,
+        clser_GenePhenoTp:dict,
+        *args, **kwargs
+    ):
+        super(SubGroupLabelClser, self).__init__(*args, **kwargs)
+        self.shared:SubGroupSharedExtractor = MODELS.build(shared)
+        self.clser_Immunization:SubGroupClsHead = MODELS.build(clser_Immunization)
+        self.clser_Histological:SubGroupClsHead = MODELS.build(clser_Histological)
+        self.clser_TumorNucleus:SubGroupClsHead = MODELS.build(clser_TumorNucleus)
+        self.clser_TumorStroma:SubGroupClsHead = MODELS.build(clser_TumorStroma)
+        self.clser_GenePhenoTp:SubGroupClsHead = MODELS.build(clser_GenePhenoTp)
+    
+    def forward(self,
+                inputs: Tensor,
+                data_samples: list[DataSample],
+                mode: str = 'tensor'
+    ):
+        feat = self.extract_feat(inputs)
+        
+        if mode == "tensor":
+            return self.extract_feat(inputs)
+
+        if mode == "predict":
+            with torch.inference_mode():
+                results = self.predict(feat, data_samples)
+                for i, data_sample in enumerate(data_samples):
+                    for sub_group in LABEL_GROUP.keys():
+                        if sub_group in data_sample.gt_label.keys():
+                            data_sample.set_field(results[sub_group][i], f"pred_label/{sub_group}") 
+            return data_samples
+        
+        if mode == "loss":
+            results = self.loss(feat, data_samples)
+            losses = {}
+            for sub_group in LABEL_GROUP.keys():
+                # SampleWise Sum
+                result = results.get(sub_group, None)
+                if result is None:
+                    continue
+                # Parse loss when available
+                if result.get("loss", None) is not None:
+                    losses[f"loss/{sub_group}"] = result["loss"].mean()
+                # key without `loss` will not be used to calculate loss
+                if result.get("acc", None) is not None:
+                    losses[f"acc/{sub_group}"] = result["acc"].mean()
+            return losses
+
+    def extract_feat(self, inputs: Tensor):
+        return self.shared(inputs)
+    
+    def loss(self, 
+             feat: Literal["loss", "predict"], 
+             data_samples: list[DataSample]):
+        """
+        Args:
+            feat: loss or predict
+            data_samples (list[DataSample]): [N]
+                - gt_label (dict):
+                    - Immunization (Tensor): [num_targets]
+                    - Histological (Tensor): [num_targets]
+                    - TumorNucleus (Tensor): [num_targets]
+                    - TumorStroma  (Tensor): [num_targets]
+                    - GenePhenoTp  (Tensor): [num_targets]
+        
+        Returns:
+            results (dict):
+                - Immunization (list): length N, maybe dict or None
+                - Histological (list): length N, maybe dict or None
+                - TumorNucleus (list): length N, maybe dict or None
+                - TumorStroma  (list): length N, maybe dict or None
+                - GenePhenoTp  (list): length N, maybe dict or None
+                    (If it is a dict)
+                    - loss (Tensor): [1]
+                    - acc  (Tensor): [1]
+        """
+        
+        # 先为每个子分组预先分配结果
+        results = {}
+
+        for sg in LABEL_GROUP.keys():
+            # 收集包含此子分组的样本索引
+            sg_indices = []
+            for i, ds in enumerate(data_samples):
+                if sg in ds.gt_label.keys():
+                    sg_indices.append(i)
+            if not sg_indices:
+                continue
+
+            # 批量收集
+            sub_feats = feat[sg_indices]
+            sub_feat_annos = torch.stack([data_samples[i].feat_anno 
+                                          for i in sg_indices])
+            sub_labels = torch.stack([data_samples[i].gt_label[sg] 
+                                      for i in sg_indices])
+            
+            # 调用对应分类器
+            clser: BaseModule = getattr(self, f"clser_{sg}")
+            batch_results = clser.loss(sub_feats, sub_feat_annos, sub_labels)
+            
+            results[sg] = batch_results
+            
         return results
+    
+    def predict(self, 
+                feat: Literal["loss", "predict"], 
+                data_samples: list[DataSample]):
+        """
+        Args:
+            feat (Tensor): [N, C]
+            data_samples (list[DataSample]): [N]
+                - gt_label (dict):
+                    - Immunization (Tensor): [num_targets]
+                    - Histological (Tensor): [num_targets]
+                    - TumorNucleus (Tensor): [num_targets]
+                    - TumorStroma  (Tensor): [num_targets]
+                    - GenePhenoTp  (Tensor): [num_targets]
+        
+        Returns:
+            results (dict):
+                - Immunization (list): length N, maybe dict or None
+                - Histological (list): length N, maybe dict or None
+                - TumorNucleus (list): length N, maybe dict or None
+                - TumorStroma  (list): length N, maybe dict or None
+                - GenePhenoTp  (list): length N, maybe dict or None
+                    (If it is a dict)
+                    - loss (Tensor): [1]
+                    - acc  (Tensor): [1]
+        """
+        # 先为每个子分组预先分配结果
+        results = {}
+
+        for sg in LABEL_GROUP.keys():
+            # 收集包含此子分组的样本索引
+            sg_indices = []
+            for i, ds in enumerate(data_samples):
+                if ds.get("feat_anno") is not None:
+                    sg_indices.append(i)
+            if not sg_indices:
+                continue
+
+            # 批量收集
+            sub_feats = feat[sg_indices]
+            sub_feat_annos = torch.stack([data_samples[i].feat_anno 
+                                          for i in sg_indices])
+            
+            # 调用对应分类器
+            clser: BaseModule = getattr(self, f"clser_{sg}")
+            batch_results = clser.predict(sub_feats, sub_feat_annos)
+            
+            results[sg] = batch_results
+            
+        return results
+
+
+class SubGroupClsHead(BaseModule):
+    def __init__(self, 
+                 num_classes:tuple[int],
+                 enable_clam_feat:bool=True,
+                 enable_anno_feat:bool=True,
+                 in_clam_channels:int=1024,
+                 in_anno_channels:int=69,
+                 *args, **kwargs
+    ):
+        super(SubGroupClsHead, self).__init__(*args, **kwargs)
+        self.enable_clam_feat = enable_clam_feat
+        self.enable_anno_feat = enable_anno_feat
+        self.num_classes = num_classes
+        in_channels = 0
+        if enable_clam_feat:
+            in_channels += in_clam_channels
+        if enable_anno_feat:
+            in_channels += in_anno_channels
+        
+        self.union_proj = nn.ModuleList([
+            nn.Linear(in_channels, in_channels),
+            nn.GELU(),
+            nn.Linear(in_channels, in_channels),
+        ])
+        for i, c in enumerate(num_classes):
+            setattr(self, f"target_proj_{i}", nn.ModuleList([
+                nn.Linear(in_channels, in_channels//2),
+                nn.GELU(),
+                nn.Linear(in_channels//2, c),
+            ]))
+        self.cri = nn.CrossEntropyLoss()
+
+    def forward(self, inputs:Tensor, anno:Tensor):
+        """
+        Args:
+            inputs (Tensor): [N, C]
+            anno (Tensor): [N, feat_anno_channels]
+        Returns:
+            pred_logits (list[Tensor]): [N, targets, classes]
+        """
+        if inputs.ndim == anno.ndim == 1:
+            inputs = inputs.unsqueeze(0)
+            anno = anno.unsqueeze(0)
+        if self.enable_clam_feat and self.enable_anno_feat:
+            feat = torch.cat((inputs, anno), dim=1)
+        elif self.enable_clam_feat:
+            feat = inputs
+        elif self.enable_anno_feat:
+            feat = anno
+        
+        union_feat = feat
+        for layer in self.union_proj:
+            union_feat = layer(union_feat)
+        
+        logits = []
+        for i in range(len(self.num_classes)):
+            proj = getattr(self, f"target_proj_{i}")
+            feat = union_feat
+            for layer in proj:
+                feat = layer(feat)
+            logits.append(feat)
+        
+        return logits
+
+    def loss(self, inputs:Tensor, anno:Tensor, gt_label:Tensor):
+        """
+        Args:
+            inputs (Tensor): [N, C]
+            anno (Tensor): [N, feat_anno_channels]
+            gt_label (Tensor): [N, targets]
+        
+        Returns:
+            loss (Tensor): [1]
+            acc  (Tensor): [1]
+        """
+        if inputs.ndim == anno.ndim == 1:
+            inputs = inputs.unsqueeze(0)
+            anno = anno.unsqueeze(0)
+            gt_label = gt_label.unsqueeze(0)
+        
+        # [num_targets, N, classes]
+        pred_logits:list[Tensor] = self.forward(inputs, anno)
+        
+        losses = []
+        accs = []
+        for i, logits in enumerate(pred_logits):
+            # logits: [N, classes]
+            # gt_label: [N, targets]
+            loss_one = self.cri(logits, gt_label[:, i])
+            losses.append(loss_one)
+        
+            with torch.inference_mode():
+                acc = (logits.argmax(dim=-1) == gt_label[:, i]).float().mean()
+                accs.append(acc)
+        
+        return {"loss": torch.stack(losses).mean(), 
+                "acc": torch.stack(accs).mean()}
+    
+    def predict(self, inputs:Tensor, anno:Tensor, *args, **kwargs):
+        if inputs.ndim == anno.ndim == 1:
+            inputs = inputs.unsqueeze(0)
+            anno = anno.unsqueeze(0)
+        
+        # [num_targets, N, classes]
+        pred_logits = self.forward(inputs, anno)
+        pred_label = []
+        for i, logits in enumerate(pred_logits):
+            pred_label.append(logits.argmax(dim=-1))
+        # [N, num_targets]
+        return torch.stack(pred_label, dim=-1)
+
+
+class SubGroupMetric(BaseMetric):
+    def process(self, data_batch: dict, data_samples: list[dict]) -> None:
+        losses = {k: [] for k in LABEL_GROUP.keys()}
+        for data_sample in data_samples:
+            for sub_group in LABEL_GROUP.keys():
+                if sub_group in data_sample["gt_label"].keys():
+                    gt_label = data_sample["gt_label"][sub_group]
+                    pred_label = data_sample[f"pred_label/{sub_group}"]
+                    acc = (gt_label == pred_label)
+                    losses[sub_group].append(acc.cpu().numpy())
+        self.results.append(losses)
+
+    def compute_metrics(self, results: list) -> dict:
+        avg_loss = {k:[] for k in LABEL_GROUP.keys()}
+        for loss in results:
+            for k, v in loss.items():
+                avg_loss[k].extend(v)
+        avg_loss = {f"Acc/{k}":np.mean(v) for k,v in avg_loss.items()}
+        avg_loss[f"Acc/Avg"] = np.mean(list(avg_loss.values()))
+        return avg_loss
+
