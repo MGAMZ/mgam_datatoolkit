@@ -1,10 +1,18 @@
+"""
+Author: Yiqin Zhang
+Initiate Time: 2024.11
+Email: 312065559@qq.com
+
+This is the implementation of our research.
+"""
+
+
 import os
 import pdb
 import pytest
 import math
-from abc import abstractmethod
-from functools import partial
-from typing_extensions import Literal, OrderedDict, Sequence
+
+from typing_extensions import Literal, Sequence
 from itertools import permutations
 
 import numpy as np
@@ -12,7 +20,6 @@ import torch
 import mpl_toolkits.mplot3d.art3d as art3d
 from torch import Tensor
 from torch import nn
-from torch.nn import PixelUnshuffle as PixelUnshuffle2D
 from torch.nn import functional as F
 from torch.nn.modules.conv import _ConvNd
 from matplotlib import pyplot as plt
@@ -24,19 +31,15 @@ from mmcv.transforms import BaseTransform
 from mmengine.config import ConfigDict
 from mmengine.runner import Runner
 from mmengine.model import BaseModule
-from mmengine.utils.misc import is_list_of
-from mmengine.dist import all_gather, get_rank, master_only
+from mmengine.dist import master_only
 from mmengine.visualization import Visualizer
 from mmengine.hooks import Hook
 from mmengine.evaluator import BaseMetric
-from mmengine.logging import MMLogger, print_log
 from mmpretrain.registry import MODELS
 from mmpretrain.structures import DataSample
-from mmpretrain.models.selfsup.base import BaseSelfSupervisor
-from mmpretrain.models.selfsup.mocov3 import CosineEMA
 
+from .SelfSup import AutoEncoderSelfSup
 from ..mm.mmeng_PlugIn import MomentumAvgModel
-from ..mm.mmseg_Dev3D import PixelUnshuffle1D, PixelUnshuffle3D
 
 
 DIM_MAP = {"1d": 1, "2d": 2, "3d": 3}
@@ -49,275 +52,6 @@ CONV_MAPPING = {
     "1d": nn.Conv1d
 }
 
-class MoCoV3Head_WithAcc(BaseModule):
-    def __init__(
-        self,
-        embed_dim: int,
-        proj_channel: int,
-        dim: Literal["1d", "2d", "3d"],
-        loss: dict,
-        temperature: float = 1.0,
-    ) -> None:
-        super().__init__()
-        self.embed_dim = embed_dim
-        self.proj_channel = proj_channel
-        self.dim = dim
-        self.loss_module = MODELS.build(loss)
-        self.temperature = temperature
-        self.down_r = 4
-        self.predictor = self._init_proj()
-        self.target_proj = self._init_proj()
-
-    def _init_proj(self):
-        if self.dim == "1d":
-            proj_conv = nn.Conv1d
-            avgpool = partial(nn.AdaptiveAvgPool1d, output_size=(1))
-            pus = PixelUnshuffle1D
-        elif self.dim == "2d":
-            proj_conv = nn.Conv2d
-            avgpool = partial(nn.AdaptiveAvgPool2d, output_size=(1, 1))
-            pus = PixelUnshuffle2D
-        elif self.dim == "3d":
-            proj_conv = nn.Conv3d
-            avgpool = partial(nn.AdaptiveAvgPool3d, output_size=(1, 1, 1))
-            pus = PixelUnshuffle3D
-        else:
-            raise NotImplementedError(f"Invalid Dim Setting: {self.dim}")
-
-        return nn.Sequential(
-            pus(downscale_factor=self.down_r),  # C_out = factor**dim * C_in
-            proj_conv(
-                self.down_r ** int(self.dim[0]) * self.embed_dim, self.proj_channel, 1
-            ),
-            nn.GELU(),
-            avgpool(),
-            nn.Flatten(start_dim=1),
-        )
-
-    def loss(
-        self, base_out: Tensor, momentum_out: Tensor
-    ) -> tuple[Tensor, Tensor, Tensor]:
-        """Generate loss.
-
-        Args:
-            base_out (Tensor): [N, C, ...] features from base_encoder.
-            momentum_out (Tensor): [N, C, ...] features from momentum_encoder.
-
-        Returns:
-            Tensor: The loss tensor.
-        """
-        # predictor computation
-        pred = self.predictor(base_out)  # NxC
-        target = self.target_proj(base_out)  # NxC
-
-        # normalize
-        pred = nn.functional.normalize(pred, dim=1)
-        target = nn.functional.normalize(target, dim=1)
-
-        # get negative samples
-        target = torch.cat(all_gather(target), dim=0)
-
-        # Einstein sum is more intuitive
-        logits = torch.einsum("nc,mc->nm", [pred, target]) / self.temperature
-
-        """
-        使用一个混淆矩阵来表达经过两组不同的变换之后的同batch样本之间的相似度
-        理想情况下，模型应当能识别出同样的样本，因此这个矩阵应当是对角线上有较大值，其他地方为较小值
-        从分类任务混淆矩阵的角度出发，这代表着样本的gt标签就是它们自身的index
-        """
-
-        # generate labels
-        batch_size = logits.shape[0]
-        labels = (
-            torch.arange(batch_size, dtype=torch.long) + batch_size * get_rank()
-        ).to(logits.device)
-
-        loss = self.loss_module(logits, labels)
-        return loss, logits, labels
-
-
-class ReconstructionHead(BaseModule):
-    def __init__(
-        self,
-        model_out_channels: int,
-        recon_channels: int,
-        dim: Literal["1d", "2d", "3d"],
-        reduction: str = "mean",
-        loss_type: Literal["L1", "L2"] = "L1",
-    ):
-        super().__init__()
-        self.model_out_channels = model_out_channels
-        self.recon_channels = recon_channels
-        self.loss_type = loss_type
-        self.dim = dim
-        self.criterion = (
-            nn.L1Loss(reduction=reduction)
-            if loss_type == "L1"
-            else nn.MSELoss(reduction=reduction)
-        )
-        self.conv_proj = eval(f"nn.Conv{dim}")(
-            model_out_channels, recon_channels, 1
-        )
-
-    def loss(self, recon: Tensor, ori: Tensor):
-        proj = self.conv_proj(recon)
-        loss = self.criterion(proj.squeeze(), ori.squeeze())
-        return {f"loss_recon_{self.loss_type}": loss, "reconed": proj}
-
-
-class AutoEncoderSelfSup(BaseSelfSupervisor):
-    def __init__(
-        self,
-        encoder: dict,
-        neck: dict | None = None,
-        decoder: dict | None = None,
-        head: dict | None = None,
-        pretrained: str | None = None,
-        data_preprocessor: dict | None = None,
-        init_cfg: list[dict] | dict | None = None,
-        *args,
-        **kwargs,
-    ) -> None:
-        encoder_decoder = nn.Sequential(
-            MODELS.build(encoder),
-            MODELS.build(neck) if neck is not None else nn.Identity(),
-            MODELS.build(decoder) if decoder is not None else nn.Identity(),
-        )
-        super().__init__(
-            backbone=encoder_decoder,
-            neck=None,
-            head=head,
-            pretrained=pretrained,
-            data_preprocessor=data_preprocessor,
-            init_cfg=init_cfg,
-            *args,
-            **kwargs,
-        )
-
-    @property
-    def whole_model_(self) -> nn.Module:
-        if self.with_neck:
-            return nn.Sequential(self.backbone, self.neck)
-        else:
-            return self.backbone
-
-    def parse_losses(
-        self,
-        losses: dict,
-    ) -> tuple[Tensor, dict[str, Tensor]]:
-        log_vars = []
-        for loss_name, loss_value in losses.items():
-            if "loss" in loss_name:
-                if isinstance(loss_value, Tensor):
-                    log_vars.append([loss_name, loss_value.mean()])
-                elif is_list_of(loss_value, Tensor):
-                    log_vars.append(
-                        [loss_name, sum(_loss.mean() for _loss in loss_value)]
-                    )
-                else:
-                    raise TypeError(f"{loss_name} is not a tensor or list of tensors")
-            else:
-                log_vars.append([loss_name, loss_value])
-
-        loss = sum(value for key, value in log_vars if "loss" in key)
-        log_vars.insert(0, ["loss", loss])
-        log_vars = OrderedDict(log_vars)  # type: ignore
-        return loss, log_vars  # type: ignore
-
-    @abstractmethod
-    def loss(
-        self, inputs: list[Tensor], data_samples: list[DataSample], **kwargs
-    ) -> dict[str, Tensor]: ...
-
-
-class AutoEncoder_MoCoV3(AutoEncoderSelfSup):
-    def __init__(self, base_momentum: float = 0.01, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
-        self.base_momentum = base_momentum
-        self.momentum_encoder = CosineEMA(
-            self.whole_model_, momentum=base_momentum
-        )
-
-    @staticmethod
-    def calc_acc(logits: Tensor, labels: Tensor) -> Tensor:
-        """Calculate the accuracy of the model.
-
-        Args:
-            logits (Tensor): The output logits, shape (N, C).
-            labels (Tensor): The target labels, shape (N).
-
-        Returns
-            Tensor: The accuracy of the model.
-        """
-        preds = torch.argmax(logits, dim=1)
-        acc = torch.sum(preds == labels).float() / labels.shape[0]
-        return acc.unsqueeze(0)
-
-    def loss(
-        self, inputs: list[Tensor], data_samples: list[DataSample], **kwargs
-    ) -> dict[str, Tensor]:
-        """The forward function in training.
-
-        Args:
-            inputs (List[Tensor]): The input images.
-            data_samples (List[DataSample]): All elements required
-                during the forward function.
-
-        Returns:
-            Dict[str, Tensor]: A dictionary of loss components.
-        """
-        assert isinstance(inputs, list)
-        self.backbone: BaseModule
-        self.neck: BaseModule
-        self.head: BaseModule
-
-        q1 = self.backbone(inputs[0])[0]
-        q2 = self.backbone(inputs[1])[0]
-
-        # compute key features, [N, C] each, no gradient
-        with torch.no_grad():
-            # update momentum encoder
-            self.momentum_encoder.update_parameters(self.whole_model_)
-
-            k1 = self.momentum_encoder(inputs[0])[0]
-            k2 = self.momentum_encoder(inputs[1])[0]
-
-        selfsup1 = self.head.loss(q1, k2)
-        selfsup2 = self.head.loss(q2, k1)
-
-        loss = selfsup1[0] + selfsup2[0]
-        acc1 = self.calc_acc(logits=selfsup1[1], labels=selfsup1[2])
-        acc2 = self.calc_acc(logits=selfsup2[1], labels=selfsup2[2])
-        acc = (acc1 + acc2) / 2
-        acc = torch.cat(all_gather(acc)).mean()
-        losses = dict(loss_MoCoV3=loss, acc_MoCoV3=acc)
-        return losses
-
-
-class AutoEncoder_Recon(AutoEncoderSelfSup):
-    def loss(
-        self, inputs: list[Tensor], data_samples: list[DataSample], **kwargs
-    ) -> dict[str, Tensor]:
-        """The forward function in training.
-
-        Args:
-            inputs (List[Tensor]): The input images.
-            data_samples (List[DataSample]): All elements required
-                during the forward function.
-
-        Returns:
-            Dict[str, Tensor]: A dictionary of loss components.
-        """
-        assert isinstance(inputs, list)
-        self.backbone: BaseModule
-        self.head: BaseModule
-        losses = {}
-        recon = self.backbone(inputs[0])[0]
-        ori = inputs[1]
-        selfsup_loss = self.head.loss(recon, ori)
-
-        losses.update(selfsup_loss)
-        return losses
 
 
 class RandomSubView(BaseTransform):
@@ -385,11 +119,13 @@ class RandomSubView(BaseTransform):
 
 class NormalizeCoord(BaseTransform):
     """
-        Required fields:
-            - view_coords: [num_views, num_spatial_dims]
-        
-        Modified fields:
-            - view_coords: [num_views, num_spatial_dims]
+    Normalize the coordination.
+    
+    Required fields:
+        - view_coords: [num_views, num_spatial_dims]
+    
+    Modified fields:
+        - view_coords: [num_views, num_spatial_dims]
     """
     def __init__(self, div: list[int]):
         self.div = div
@@ -405,6 +141,10 @@ class NormalizeCoord(BaseTransform):
 
 
 class ParseCoords(BaseTransform):
+    """
+    Pre-Parse the generated coordination context,
+    to minimize train-time label generation.
+    """
     def __init__(self, view_size: tuple[int], sub_view_size: tuple[int]):
         self.view_size = np.array(view_size)
         self.sub_view_size = np.array(sub_view_size)
@@ -622,6 +362,8 @@ class ParseCoords(BaseTransform):
 
 
 class RelativeSimilaritySelfSup(AutoEncoderSelfSup):
+    """The top design of the Self-Supervision."""
+    
     def __init__(
         self, 
         gap_head:ConfigDict, 
@@ -787,61 +529,7 @@ class RelativeSimilaritySelfSup(AutoEncoderSelfSup):
             raise RuntimeError(f'Invalid mode "{mode}".')
 
 
-class RelSimSup_DualDevice(RelativeSimilaritySelfSup):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.stream1 = torch.cuda.Stream(device='cuda:0')
-        self.stream2 = torch.cuda.Stream(device='cuda:1')
-        self.gap_head = self.gap_head.to('cuda:1')
-    
-    def loss(self, inputs:Tensor, data_samples:list[DataSample], **kwargs) -> dict[str, Tensor]:
-        """重写loss函数,让gap_head在CUDA:1上计算"""
-        
-        sv_main = inputs[:, 0]
-        sv_aux = inputs[:, 1:]
-        coord_info = self._stack_coord_info(data_samples)
-        
-        # neural implicit representation forward  
-        nir = self.extract_nir(sv_main, sv_aux)  # [N, sub-view, C, ...]
-        
-        losses = {}
-        
-        # gap_head计算移至CUDA:1
-        with torch.cuda.stream(self.stream2):
-            nir_dev1 = nir.to('cuda:1', non_blocking=True)
-            gap_info = coord_info["normed_abs_gap"].to('cuda:1', non_blocking=True)
-            gap_losses = self.gap_head.loss(nir_dev1, gap_info)
-            # 在CUDA:1上完成反向传播
-            for k, v in gap_losses.items():
-                v.backward(retain_graph=True)
-            # 结果移回CUDA:0
-            gap_losses = {k: v.detach().to('cuda:0', non_blocking=True) 
-                          for k, v in gap_losses.items()}
-        
-        # 其他head保持在CUDA:0
-        with torch.cuda.stream(self.stream1):
-            sim_losses = self.sim_head.loss(nir, coord_info["sim_pair_indices"])
-            vec_losses = self.vec_head.loss(nir, coord_info["normed_abs_gap"])
-        
-        # 同步两个流
-        torch.cuda.synchronize()
-        
-        # 合并所有losses
-        for k, v in gap_losses.items():
-            losses[k] = v
-        for k, v in sim_losses.items():
-            losses[k] = v  
-        for k, v in vec_losses.items():
-            losses[k] = v
-            
-        # 更新momentum模型
-        self.momentum_encoder.update_parameters(self.whole_model_)
-        
-        return losses
-
-
-class GlobalAvgPool(nn.Module):
-    
+class GlobalAvgPool(nn.Module):    
     def __init__(self, dim: Literal["1d", "2d", "3d"]):
         super().__init__()
         self.dim = dim
@@ -858,6 +546,11 @@ class GlobalAvgPool(nn.Module):
 
 
 class BaseVolumeWisePredictor(nn.Module):
+    """
+    The class is shared by `GapPredictor` and `VecAngConstraint`.
+    They both need feature extraction for sub-view.
+    """
+    
     def __init__(self, dim:Literal["1d","2d","3d"], in_channels:int, num_views:int=3):
         super().__init__()
         
@@ -906,6 +599,8 @@ class BaseVolumeWisePredictor(nn.Module):
 
 
 class GapPredictor(BaseVolumeWisePredictor):
+    """Predict the gap between all sub-views."""
+    
     def __init__(self, loss_weight:float=1., *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.cri = nn.SmoothL1Loss()
@@ -961,6 +656,12 @@ class GapPredictor(BaseVolumeWisePredictor):
 
 
 class SimPairDiscriminator(BaseModule):
+    """
+    Predict the similarity between adjacent and distant pairs.
+    The pairs are generated among all combinations of the sub-views.
+    A pair of sub-views can generate an adjacent and a distant pair.
+    """
+    
     LABEL_ADJA_PAIR = 0
     LABEL_DIST_PAIR = 1
     
@@ -1283,6 +984,12 @@ class SimPairDiscriminator(BaseModule):
 
 
 class VecAngConstraint(BaseVolumeWisePredictor):
+    """
+    Predict the absolute coordinations of sub-views.
+    The prediction is supervised by coordinations, and,
+    the possible routes between the sub-views.
+    """
+    
     def __init__(self, 
                  num_views:int, 
                  dim:Literal["1d","2d","3d"], 
@@ -1858,174 +1565,3 @@ class RelSim_Viser(Visualizer):
         self.add_image('PredImg/Gap', gap_vis_img, step)
         self.add_image('PredImg/Similarity', sim_vis_img, step)
         self.add_image('PredImg/Vector', vec_vis_img, step)
-
-
-
-
-"""MGAM TEST"""
-
-def generate_test_data(batch_size:int=2, 
-                      num_views:int=3,
-                      channels:int=4,
-                      volume_size:int=64) -> tuple[Tensor, Tensor]:
-    """生成测试数据
-    
-    Returns:
-        nir: [N, num_views, C, Z, Y, X]
-        abs_gap: [N, num_views, num_views, 3]
-    """
-    # 生成随机体积数据
-    nir = torch.randn(batch_size, num_views, channels, 
-                     volume_size, volume_size, volume_size)
-    
-    # 生成随机距离向量
-    abs_gap = torch.randn(batch_size, num_views, num_views, 3)
-    
-    return nir, abs_gap
-
-class TestSimPairDiscriminator:
-    @pytest.fixture
-    def discriminator(self):
-        return SimPairDiscriminator(
-            sub_volume_size=48,
-            dim="3d",
-            in_channels=4
-        )
-    
-    def test_initialization(self, discriminator):
-        assert discriminator.s == 48
-        assert discriminator.dim == "3d"
-        assert discriminator.in_channels == 4
-        assert len(discriminator.pair_encoder) == 4
-    
-    def test_forward(self, discriminator):
-        batch_size, num_pairs = 2, 3
-        num_sub_vols, channels = 4, 4
-        vol_size = 48
-        
-        # 创建输入tensor
-        sub_vols = torch.randn(batch_size, num_pairs, num_sub_vols, 
-                             channels, vol_size, vol_size, vol_size)
-        
-        # 执行forward
-        output = discriminator.forward(sub_vols)
-        
-        # 检查输出维度
-        assert output.shape == (batch_size, num_pairs, 2)
-    
-    def test_loss_calculation(self, discriminator):
-        # 生成测试数据
-        nir, abs_gap = generate_test_data()
-        
-        # 计算损失
-        loss = discriminator.loss(nir, abs_gap)
-        
-        # 检查损失是否为标量
-        assert loss.dim() == 0
-        assert not torch.isnan(loss)
-        assert not torch.isinf(loss)
-    
-    def test_sub_volume_selector(self, discriminator):
-        # 生成测试数据
-        nir, abs_gap = generate_test_data()
-        
-        # 获取子体积索引
-        indices = discriminator._get_subvolume_indices(abs_gap, [nir.shape[0], *nir.shape[3:]])
-        
-        # 选择子体积
-        sub_vols = discriminator._sub_volume_selector(nir, indices)
-        
-        # 检查输出维度
-        assert len(sub_vols.shape) == 7  # [N, num_pairs, 4, C, s, s, s]
-        assert sub_vols.shape[2] == 4    # 4个子体积
-        assert all(s == 48 for s in sub_vols.shape[-3:])  # 子体积大小
-    
-    def test_generate_target(self, discriminator):
-        batch_size, num_pairs = 2, 3
-        dist_preds = torch.randn(batch_size, num_pairs, 2)
-        
-        target = discriminator._generate_target(dist_preds)
-        
-        assert target.shape == (batch_size, num_pairs, 2)
-        assert torch.all(target[..., 0] == discriminator.LABEL_ADJA_PAIR)
-        assert torch.all(target[..., 1] == discriminator.LABEL_DIST_PAIR)
-
-def test_gap_predictor():
-    # 测试3D情况
-    batch_size = 2
-    num_views = 3
-    channels = 16
-    spatial_size = 64
-    
-    predictor = GapPredictor(
-        dim="3d",
-        in_channels=channels,
-        num_views=num_views
-    )
-    
-    # 创建模拟输入
-    nir = torch.randn(
-        batch_size, 
-        num_views,
-        channels,
-        spatial_size,
-        spatial_size,
-        spatial_size
-    )
-    
-    # 测试forward方法
-    similarity = predictor.forward(nir)
-    
-    # 验证输出形状
-    assert similarity.shape == (batch_size, num_views, num_views)
-    
-    # 测试loss方法
-    abs_gap = torch.randn(batch_size, num_views, num_views)
-    loss = predictor.loss(nir, abs_gap)
-    assert isinstance(loss, Tensor)
-    assert loss.ndim == 0  # 标量损失值
-
-def test_gap_predictor_different_dims():
-    dims = ["1d", "2d", "3d"]
-    spatial_sizes = {
-        "1d": (64,),
-        "2d": (64, 64),
-        "3d": (64, 64, 64)
-    }
-    
-    for dim in dims:
-        batch_size = 2
-        num_views = 3
-        channels = 16
-        
-        predictor = GapPredictor(
-            dim=dim,
-            in_channels=channels,
-            num_views=num_views
-        )
-        
-        # 创建对应维度的输入
-        input_shape = (batch_size, num_views, channels) + spatial_sizes[dim]
-        nir = torch.randn(*input_shape)
-        
-        # 测试forward
-        similarity = predictor.forward(nir)
-        assert similarity.shape == (batch_size, num_views, num_views)
-
-def test_gap_predictor_edge_cases():
-    # 测试单batch情况
-    predictor = GapPredictor("3d", 16, 3)
-    nir = torch.randn(1, 3, 16, 48, 48, 48)
-    similarity = predictor.forward(nir)
-    assert similarity.shape == (1, 3, 3)
-    
-    # 测试最小volume数
-    predictor = GapPredictor("3d", 16, 2)
-    nir = torch.randn(2, 2, 16, 48, 48, 48)
-    similarity = predictor.forward(nir)
-    assert similarity.shape == (2, 2, 2)
-
-
-
-if __name__ == "__main__":
-    pytest.main([__file__])
