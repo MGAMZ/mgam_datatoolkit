@@ -5,6 +5,7 @@ import datetime
 import logging
 import json
 import copy
+from pprint import pprint
 from functools import partial
 from numbers import Number
 from typing_extensions import Sequence
@@ -59,7 +60,7 @@ def DynamicRunnerSelection(cfg: ConfigType) -> Runner:
                 strategy = kwargs.get("cfg", {}).pop("strategy", None)
                 auto_strategy = partial(
                     size_based_auto_wrap_policy, 
-                    min_num_params=int(1e7),
+                    min_num_params=int(1e6),
                     recurse=True,
                 )
                 strategy.update(
@@ -329,22 +330,20 @@ class RemasteredFSDP(MMFullyShardedDataParallel):
 from mmengine.registry import FUNCTIONS, MODEL_WRAPPERS
 from mmengine.model import BaseDataPreprocessor, is_model_wrapper
 from mmengine.device import get_device
+from mmengine.optim import BaseOptimWrapper, _ParamScheduler
 from torch.distributed.checkpoint.state_dict import get_state_dict, set_state_dict, StateDictOptions
 class RemasteredFSDP_Strategy(FSDPStrategy):
+    def __init__(self, 
+                 model_wrapper_cfg:dict|None=None, 
+                 *args, **kwargs):
+        self.model_wrapper_cfg = model_wrapper_cfg
+        super().__init__(*args, **kwargs)
+    
     def _wrap_model(self, model: nn.Module) -> None:
-        """Wrap the model to :obj:``MMFullyShardedDataParallel`` or other
-        custom fully sharded data parallel module wrappers.
-
-        Args:
-            model (nn.Module): Model to be wrapped.
-
-        Returns:
-            FullyShardedDataParallel: ``MMFullyShardedDataParallel``
-            or subclass of ``FullyShardedDataParallel``.
-        """
+        """包装模型但不加载状态"""
         try:
             from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import \
-                apply_activation_checkpointing  # noqa: E501
+                apply_activation_checkpointing
         except ImportError:
             apply_activation_checkpointing = None
 
@@ -358,26 +357,24 @@ class RemasteredFSDP_Strategy(FSDPStrategy):
         if self.model_wrapper is None:
             self.model_wrapper = dict(type='MMFullyShardedDataParallel')
 
-        default_args = dict(
-            module=model,
-            device_id=int(os.environ['LOCAL_RANK']),
-            type='MMFullyShardedDataParallel')
-        model = MODEL_WRAPPERS.build(
-            self.model_wrapper, default_args=default_args)
-        
-        set_state_dict(
-            model, 
-            self.optim_state_dict(), 
-            model_state_dict=self.model_state_dict(),
-            optim_state_dict=self.optim_state_dict(),
-            options=StateDictOptions(
-                full_state_dict=True,
-                cpu_offload=True,
+        if self.model_wrapper_cfg is None:
+            self.model_wrapper_cfg = dict(
+                module=model,
+                device_id=int(os.environ['LOCAL_RANK']),
+                type='MMFullyShardedDataParallel')
+        else:
+            assert isinstance(self.model_wrapper_cfg, dict)
+            assert "type" in self.model_wrapper_cfg.keys()
+            assert len(self.model_wrapper_cfg) == 1, "The cfg should only contain a type param."
+            self.model_wrapper_cfg.update(
+                module=model, 
+                device_id=int(os.environ['LOCAL_RANK'] )
             )
+        
+        model = MODEL_WRAPPERS.build(
+            self.model_wrapper, 
+            default_args=self.model_wrapper_cfg
         )
-        # model.set_state_dict_type(model, self.state_dict_type,
-        #                           self.state_dict_config,
-        #                           self.optim_state_dict_config)
 
         if self.activation_checkpointing is not None:
             if apply_activation_checkpointing is None:
@@ -400,6 +397,66 @@ class RemasteredFSDP_Strategy(FSDPStrategy):
                     raise TypeError('`check_fn` must be a callable function')
                 apply_activation_checkpointing(model, check_fn=check_fn, **cfg)
         return model
+
+    def prepare(
+        self,
+        model: nn.Module|dict,
+        *,
+        optim_wrapper: BaseOptimWrapper,
+        param_scheduler: _ParamScheduler|None = None,
+        compile: dict|bool = False,
+        dispatch_kwargs: dict|None = None,
+    ):
+        """准备模型和组件,正确处理状态加载"""
+        if self._prepared:
+            return self._prepared_components()
+        if dispatch_kwargs is not None:
+            self.dispatch_kwargs.update(dispatch_kwargs)
+
+        self.model = self.build_model(model)
+        self.model = self._init_model_weights(self.model)
+        self.optim_wrapper = self.build_optim_wrapper(optim_wrapper, self.model)
+        self.model = self._wrap_model(self.model)
+        
+        # 在包装后加载状态
+        if hasattr(self, 'model_state_dict') and hasattr(self, 'optim_state_dict'):
+            set_state_dict(
+                self.model,
+                (self.optim_wrapper.optimizer,),
+                model_state_dict=self.model_state_dict(),
+                optim_state_dict=self.optim_state_dict(),
+                options=StateDictOptions(
+                    full_state_dict=True,
+                    cpu_offload=True,
+                )
+            )
+            
+        self.model = self.compile_model(self.model, compile=compile)
+
+        if param_scheduler is not None:
+            self.param_schedulers = self.build_param_scheduler(
+                param_scheduler, self.optim_wrapper)
+
+        self._prepared = True
+        return self._prepared_components()
+    
+    def build_optim_wrapper(self, *args, **kwargs):
+        optim_wrapper = super().build_optim_wrapper(*args, **kwargs)
+        self._scale_lr()
+
+        accumulative_counts = getattr(optim_wrapper,
+                                        '_accumulative_counts', 1)
+        if accumulative_counts > 1:
+            if 'max_iters' not in self.dispatch_kwargs:
+                raise ValueError(
+                    '"max_iters" must be specified because '
+                    '"accumulative_counts" was set as '
+                    f'{accumulative_counts} which is greater than 1.')
+
+            optim_wrapper.initialize_count_status(  # type: ignore
+                self.model, 0, self.dispatch_kwargs['max_iters'])
+
+        return optim_wrapper
 
 
 class RatioSampler(DefaultSampler):
