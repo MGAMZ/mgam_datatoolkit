@@ -675,7 +675,7 @@ class RelativeSimilaritySelfSup(AutoEncoderSelfSup):
         aux_model = self.momentum_encoder \
                     if self.momentum \
                     else self.whole_model_
-        with torch.inference_mode():
+        with torch.no_grad():
             nir_aux = [aux_model(sub_view)[0] 
                        for sub_view in sv_aux.transpose(0, 1)]
         nir = torch.stack([nir_main, *nir_aux], dim=1)  # [N, sub_view, C, ...]
