@@ -4,16 +4,16 @@ import pdb
 import datetime
 import logging
 import json
+import copy
 from functools import partial
 from numbers import Number
-from typing_extensions import Sequence, Mapping
+from typing_extensions import Sequence
 
 import torch
 import pandas as pd
 import numpy as np
-from torch import Tensor
+from torch import Tensor, nn
 from torch.distributed.fsdp.wrap import size_based_auto_wrap_policy
-from torch.utils.data._utils.collate import default_collate as torch_default_collate
 
 from mmengine.dataset.sampler import DefaultSampler
 from mmengine.runner import (
@@ -31,15 +31,16 @@ from mmengine.model.wrappers import (
     MMDistributedDataParallel,
     MMFullyShardedDataParallel,
 )
-from mmengine.structures import BaseDataElement
+from mmengine.model.averaged_model import BaseAveragedModel
 from mmengine.dataset.utils import default_collate
+from mmengine._strategy.fsdp import FSDPStrategy
 
 from ..utils.DevelopUtils import measure_time, InjectVisualize
 
 
 # support FSDP
 def DynamicRunnerSelection(cfg: ConfigType) -> Runner:
-    if cfg.use_FSDP:
+    if cfg.dist is True and cfg.MP_mode != "ddp":
         RunnerChoice = FlexibleRunner
     else:
         RunnerChoice = Runner
@@ -52,13 +53,14 @@ def DynamicRunnerSelection(cfg: ConfigType) -> Runner:
             self.resume_param_scheduler = kwargs.get("cfg", {}).pop(
                 "resume_param_scheduler", True
             )
-
             self.custom_env(kwargs.get("env_cfg", {}))
-            strategy = kwargs.get("cfg", {}).pop("strategy", None)
 
-            if issubclass(self.__class__, FlexibleRunner):
+            if cfg.MP_mode == "fsdp":
+                strategy = kwargs.get("cfg", {}).pop("strategy", None)
                 auto_strategy = partial(
-                    size_based_auto_wrap_policy, min_num_params=int(1e7)
+                    size_based_auto_wrap_policy, 
+                    min_num_params=int(1e7),
+                    recurse=True,
                 )
                 strategy.update(
                     dict(model_wrapper=dict(auto_wrap_policy=auto_strategy))
@@ -300,7 +302,6 @@ class RemasteredDDP(MMDistributedDataParallel):
         except:
             return getattr(self.module, name)
 
-
 # customized FSDP training for our task.
 class RemasteredFSDP(MMFullyShardedDataParallel):
     """
@@ -323,6 +324,82 @@ class RemasteredFSDP(MMFullyShardedDataParallel):
             return super().__getattr__(name)
         except:
             return getattr(self.module, name)
+
+
+from mmengine.registry import FUNCTIONS, MODEL_WRAPPERS
+from mmengine.model import BaseDataPreprocessor, is_model_wrapper
+from mmengine.device import get_device
+from torch.distributed.checkpoint.state_dict import get_state_dict, set_state_dict, StateDictOptions
+class RemasteredFSDP_Strategy(FSDPStrategy):
+    def _wrap_model(self, model: nn.Module) -> None:
+        """Wrap the model to :obj:``MMFullyShardedDataParallel`` or other
+        custom fully sharded data parallel module wrappers.
+
+        Args:
+            model (nn.Module): Model to be wrapped.
+
+        Returns:
+            FullyShardedDataParallel: ``MMFullyShardedDataParallel``
+            or subclass of ``FullyShardedDataParallel``.
+        """
+        try:
+            from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import \
+                apply_activation_checkpointing  # noqa: E501
+        except ImportError:
+            apply_activation_checkpointing = None
+
+        for module in model.modules():
+            if isinstance(module, BaseDataPreprocessor):
+                module.to(get_device())
+
+        if is_model_wrapper(model):
+            return
+
+        if self.model_wrapper is None:
+            self.model_wrapper = dict(type='MMFullyShardedDataParallel')
+
+        default_args = dict(
+            module=model,
+            device_id=int(os.environ['LOCAL_RANK']),
+            type='MMFullyShardedDataParallel')
+        model = MODEL_WRAPPERS.build(
+            self.model_wrapper, default_args=default_args)
+        
+        set_state_dict(
+            model, 
+            self.optim_state_dict(), 
+            model_state_dict=self.model_state_dict(),
+            optim_state_dict=self.optim_state_dict(),
+            options=StateDictOptions(
+                full_state_dict=True,
+                cpu_offload=True,
+            )
+        )
+        # model.set_state_dict_type(model, self.state_dict_type,
+        #                           self.state_dict_config,
+        #                           self.optim_state_dict_config)
+
+        if self.activation_checkpointing is not None:
+            if apply_activation_checkpointing is None:
+                raise RuntimeError(
+                    'activation_checkpointing maybe deprecated by current '
+                    'PyTorch version, maybe you could switch to PyTorch 2.0 '
+                    'or 2.1 to use `activation_checkpointing`.')
+            cfg = copy.deepcopy(self.activation_checkpointing)
+            with FUNCTIONS.switch_scope_and_registry(None):
+                check_fn = cfg.pop('check_fn')
+                if isinstance(check_fn, str):
+                    check_fn = FUNCTIONS.get(check_fn)
+                elif isinstance(check_fn, dict):
+                    fn_type = check_fn.pop('type')
+                    if isinstance(fn_type, str):
+                        fn_type = FUNCTIONS.get(fn_type)
+                    check_fn = partial(fn_type, **cfg)
+
+                if not callable(check_fn):
+                    raise TypeError('`check_fn` must be a callable function')
+                apply_activation_checkpointing(model, check_fn=check_fn, **cfg)
+        return model
 
 
 class RatioSampler(DefaultSampler):
@@ -377,3 +454,115 @@ def multi_sample_collate(data_batch: Sequence[dict]):
     data_batch = flattened
 
     return default_collate(data_batch)
+
+
+class MomentumAvgModel(nn.Module):
+    def __init__(self,
+                 model: nn.Module,
+                 momentum: float = 0.0002,
+                 gamma: int = 100,
+                 interval: int = 1,
+                 device: torch.device|None = None,
+                 update_buffers: bool = False) -> None:
+        super().__init__()
+        
+        # 检查分布式环境
+        self.is_distributed = hasattr(model, 'module')
+        self.is_deepspeed = hasattr(model, 'module') and hasattr(model.module, 'deepspeed')
+        
+        # DeepSpeed环境下获取完整模型
+        if self.is_deepspeed:
+            with model.module.summon_full_params():
+                self.module = copy.deepcopy(model.module).requires_grad_(False)
+        else:
+            target_model = model.module if self.is_distributed else model
+            self.module = copy.deepcopy(target_model).requires_grad_(False)
+            
+        self.interval = interval
+        if device is not None:
+            self.module = self.module.to(device)
+            
+        self.register_buffer('steps',
+                           torch.tensor(0, dtype=torch.long, device=device))
+                           
+        self.update_buffers = update_buffers
+        if update_buffers:
+            state_dict = self.module.state_dict()
+            self.avg_parameters = {
+                k: v for k, v in state_dict.items() 
+                if v.numel() > 0
+            }
+        else:
+            params = dict(self.module.named_parameters())
+            self.avg_parameters = {
+                k: v for k, v in params.items() 
+                if v.numel() > 0
+            }
+            
+        # 动量参数检查
+        assert 0.0 < momentum < 1.0, f'momentum must be in range (0.0, 1.0) but got {momentum}'
+        if momentum > 0.5:
+            print_log(
+                'The value of momentum in EMA is usually a small number,'
+                'which is different from the conventional notion of '
+                f'momentum but got {momentum}. Please make sure the '
+                f'value is correct.',
+                logger='current', 
+                level=logging.WARNING)
+        self.momentum = momentum
+        assert gamma > 0, f'gamma must be greater than 0, but got {gamma}'
+        self.gamma = gamma
+
+    def forward(self, *args, **kwargs):
+        """Forward method of the averaged model."""
+        return self.module(*args, **kwargs)
+
+    def _get_current_param(self):
+        if self.update_buffers:
+            return self.module.state_dict()
+        else:
+            return dict(self.module.named_parameters())
+    
+    def update_parameters(self, model: nn.Module) -> None:
+        """Update the parameters of the model. This method will execute the
+        ``avg_func`` to compute the new parameters and update the model's
+        parameters.
+
+        Args:
+            model (nn.Module): The model whose parameters will be averaged.
+        """
+        src_parameters = (
+            model.state_dict()
+            if self.update_buffers else dict(model.named_parameters()))
+        if self.steps == 0:
+            for k, p_avg in self.avg_parameters.items():
+                p_avg.data.copy_(src_parameters[k].data)
+        elif self.steps % self.interval == 0:  # type: ignore
+            for k, p_avg in self.avg_parameters.items():
+                # NOTE handle deepspeed model shred issue, p_avg may be empty here.
+                if p_avg.dtype.is_floating_point and p_avg.shape==src_parameters[k].data.shape:
+                    device = p_avg.device
+                    self.avg_func(p_avg.data,
+                                  src_parameters[k].data.to(device),
+                                  self.steps)
+        if not self.update_buffers:
+            # If not update the buffers,
+            # keep the buffers in sync with the source model.
+            for b_avg, b_src in zip(self.module.buffers(), model.buffers()):
+                b_avg.data.copy_(b_src.data.to(b_avg.device))
+        self.steps += 1  # type: ignore
+
+    def avg_func(self, averaged_param: Tensor, source_param: Tensor,
+                 steps: int) -> None:
+        """Compute the moving average of the parameters using the linear
+        momentum strategy.
+
+        Args:
+            averaged_param (Tensor): The averaged parameters.
+            source_param (Tensor): The source parameters.
+            steps (int): The number of times the parameters have been
+                updated.
+        """
+        momentum = max(self.momentum,
+                       self.gamma / (self.gamma + self.steps.item()))
+        averaged_param.lerp_(source_param, momentum)

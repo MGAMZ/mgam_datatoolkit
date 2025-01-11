@@ -11,8 +11,10 @@ import numpy as np
 import torch
 import mpl_toolkits.mplot3d.art3d as art3d
 from torch import Tensor
+from torch import nn
 from torch.nn import PixelUnshuffle as PixelUnshuffle2D
 from torch.nn import functional as F
+from torch.nn.modules.conv import _ConvNd
 from matplotlib import pyplot as plt
 from matplotlib.patches import Patch
 from matplotlib.axes import Axes
@@ -21,7 +23,7 @@ from matplotlib.gridspec import SubplotSpec
 from mmcv.transforms import BaseTransform
 from mmengine.config import ConfigDict
 from mmengine.runner import Runner
-from mmengine.model import MomentumAnnealingEMA, BaseModule
+from mmengine.model import BaseModule
 from mmengine.utils.misc import is_list_of
 from mmengine.dist import all_gather, get_rank, master_only
 from mmengine.visualization import Visualizer
@@ -33,15 +35,19 @@ from mmpretrain.structures import DataSample
 from mmpretrain.models.selfsup.base import BaseSelfSupervisor
 from mmpretrain.models.selfsup.mocov3 import CosineEMA
 
-from mgamdata.mm.mmseg_Dev3D import PixelUnshuffle1D, PixelUnshuffle3D
-from mgamdata.process.LoadBiomedicalData import LoadImageFromMHA
+from ..mm.mmeng_PlugIn import MomentumAvgModel
+from ..mm.mmseg_Dev3D import PixelUnshuffle1D, PixelUnshuffle3D
 
 
 DIM_MAP = {"1d": 1, "2d": 2, "3d": 3}
 CMAP_SEQ_COLOR = ["winter", "RdPu"]
 DEFAULT_CMAP = plt.get_cmap(CMAP_SEQ_COLOR[0])
 CMAP_COLOR = [DEFAULT_CMAP(32), DEFAULT_CMAP(224)]
-
+CONV_MAPPING = {
+    "3d": nn.Conv3d,
+    "2d": nn.Conv2d,
+    "1d": nn.Conv1d
+}
 
 class MoCoV3Head_WithAcc(BaseModule):
     def __init__(
@@ -64,28 +70,28 @@ class MoCoV3Head_WithAcc(BaseModule):
 
     def _init_proj(self):
         if self.dim == "1d":
-            proj_conv = torch.nn.Conv1d
-            avgpool = partial(torch.nn.AdaptiveAvgPool1d, output_size=(1))
+            proj_conv = nn.Conv1d
+            avgpool = partial(nn.AdaptiveAvgPool1d, output_size=(1))
             pus = PixelUnshuffle1D
         elif self.dim == "2d":
-            proj_conv = torch.nn.Conv2d
-            avgpool = partial(torch.nn.AdaptiveAvgPool2d, output_size=(1, 1))
+            proj_conv = nn.Conv2d
+            avgpool = partial(nn.AdaptiveAvgPool2d, output_size=(1, 1))
             pus = PixelUnshuffle2D
         elif self.dim == "3d":
-            proj_conv = torch.nn.Conv3d
-            avgpool = partial(torch.nn.AdaptiveAvgPool3d, output_size=(1, 1, 1))
+            proj_conv = nn.Conv3d
+            avgpool = partial(nn.AdaptiveAvgPool3d, output_size=(1, 1, 1))
             pus = PixelUnshuffle3D
         else:
             raise NotImplementedError(f"Invalid Dim Setting: {self.dim}")
 
-        return torch.nn.Sequential(
+        return nn.Sequential(
             pus(downscale_factor=self.down_r),  # C_out = factor**dim * C_in
             proj_conv(
                 self.down_r ** int(self.dim[0]) * self.embed_dim, self.proj_channel, 1
             ),
-            torch.nn.GELU(),
+            nn.GELU(),
             avgpool(),
-            torch.nn.Flatten(start_dim=1),
+            nn.Flatten(start_dim=1),
         )
 
     def loss(
@@ -105,8 +111,8 @@ class MoCoV3Head_WithAcc(BaseModule):
         target = self.target_proj(base_out)  # NxC
 
         # normalize
-        pred = torch.nn.functional.normalize(pred, dim=1)
-        target = torch.nn.functional.normalize(target, dim=1)
+        pred = nn.functional.normalize(pred, dim=1)
+        target = nn.functional.normalize(target, dim=1)
 
         # get negative samples
         target = torch.cat(all_gather(target), dim=0)
@@ -145,11 +151,11 @@ class ReconstructionHead(BaseModule):
         self.loss_type = loss_type
         self.dim = dim
         self.criterion = (
-            torch.nn.L1Loss(reduction=reduction)
+            nn.L1Loss(reduction=reduction)
             if loss_type == "L1"
-            else torch.nn.MSELoss(reduction=reduction)
+            else nn.MSELoss(reduction=reduction)
         )
-        self.conv_proj = eval(f"torch.nn.Conv{dim}")(
+        self.conv_proj = eval(f"nn.Conv{dim}")(
             model_out_channels, recon_channels, 1
         )
 
@@ -172,10 +178,10 @@ class AutoEncoderSelfSup(BaseSelfSupervisor):
         *args,
         **kwargs,
     ) -> None:
-        encoder_decoder = torch.nn.Sequential(
+        encoder_decoder = nn.Sequential(
             MODELS.build(encoder),
-            MODELS.build(neck) if neck is not None else torch.nn.Identity(),
-            MODELS.build(decoder) if decoder is not None else torch.nn.Identity(),
+            MODELS.build(neck) if neck is not None else nn.Identity(),
+            MODELS.build(decoder) if decoder is not None else nn.Identity(),
         )
         super().__init__(
             backbone=encoder_decoder,
@@ -189,9 +195,9 @@ class AutoEncoderSelfSup(BaseSelfSupervisor):
         )
 
     @property
-    def whole_model_(self) -> torch.nn.Module:
+    def whole_model_(self) -> nn.Module:
         if self.with_neck:
-            return torch.nn.Sequential(self.backbone, self.neck)
+            return nn.Sequential(self.backbone, self.neck)
         else:
             return self.backbone
 
@@ -635,12 +641,15 @@ class RelativeSimilaritySelfSup(AutoEncoderSelfSup):
         self.gap_head:GapPredictor          = MODELS.build(gap_head)
         self.sim_head:SimPairDiscriminator  = MODELS.build(sim_head)
         self.vec_head:VecAngConstraint      = MODELS.build(vec_head)
-        self.momentum_encoder = MomentumAnnealingEMA(
-            self.whole_model_,
-            momentum=momentum,
-            gamma=gamma,
-            interval=update_interval,
-        )
+        self.momentum = momentum
+        if momentum is not None:
+            self.momentum_encoder = MomentumAvgModel(
+                self.whole_model_,
+                momentum=momentum,
+                gamma=gamma,
+                interval=update_interval,
+                update_buffers=False,
+            )
 
     def _stack_coord_info(self, data_samples:list[DataSample]):
         s = {}
@@ -663,7 +672,12 @@ class RelativeSimilaritySelfSup(AutoEncoderSelfSup):
         # sv: sub view
         nir_main = self.whole_model_(sv_main)[0]
         # nir_sv: neural implicit representation of sub-sub_view
-        nir_aux = [self.momentum_encoder(sub_view)[0] for sub_view in sv_aux.transpose(0, 1)]
+        aux_model = self.momentum_encoder \
+                    if self.momentum \
+                    else self.whole_model_
+        with torch.inference_mode():
+            nir_aux = [aux_model(sub_view)[0] 
+                       for sub_view in sv_aux.transpose(0, 1)]
         nir = torch.stack([nir_main, *nir_aux], dim=1)  # [N, sub_view, C, ...]
         return nir  # [N, sub-view, C, ...]
 
@@ -703,7 +717,8 @@ class RelativeSimilaritySelfSup(AutoEncoderSelfSup):
             losses[k] = v
         
         # update momentum model
-        self.momentum_encoder.update_parameters(self.whole_model_)
+        if self.momentum is not None:
+            self.momentum_encoder.update_parameters(self.whole_model_)
         
         return losses
 
@@ -772,7 +787,60 @@ class RelativeSimilaritySelfSup(AutoEncoderSelfSup):
             raise RuntimeError(f'Invalid mode "{mode}".')
 
 
-class GlobalAvgPool(torch.nn.Module):
+class RelSimSup_DualDevice(RelativeSimilaritySelfSup):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.stream1 = torch.cuda.Stream(device='cuda:0')
+        self.stream2 = torch.cuda.Stream(device='cuda:1')
+        self.gap_head = self.gap_head.to('cuda:1')
+    
+    def loss(self, inputs:Tensor, data_samples:list[DataSample], **kwargs) -> dict[str, Tensor]:
+        """重写loss函数,让gap_head在CUDA:1上计算"""
+        
+        sv_main = inputs[:, 0]
+        sv_aux = inputs[:, 1:]
+        coord_info = self._stack_coord_info(data_samples)
+        
+        # neural implicit representation forward  
+        nir = self.extract_nir(sv_main, sv_aux)  # [N, sub-view, C, ...]
+        
+        losses = {}
+        
+        # gap_head计算移至CUDA:1
+        with torch.cuda.stream(self.stream2):
+            nir_dev1 = nir.to('cuda:1', non_blocking=True)
+            gap_info = coord_info["normed_abs_gap"].to('cuda:1', non_blocking=True)
+            gap_losses = self.gap_head.loss(nir_dev1, gap_info)
+            # 在CUDA:1上完成反向传播
+            for k, v in gap_losses.items():
+                v.backward(retain_graph=True)
+            # 结果移回CUDA:0
+            gap_losses = {k: v.detach().to('cuda:0', non_blocking=True) 
+                          for k, v in gap_losses.items()}
+        
+        # 其他head保持在CUDA:0
+        with torch.cuda.stream(self.stream1):
+            sim_losses = self.sim_head.loss(nir, coord_info["sim_pair_indices"])
+            vec_losses = self.vec_head.loss(nir, coord_info["normed_abs_gap"])
+        
+        # 同步两个流
+        torch.cuda.synchronize()
+        
+        # 合并所有losses
+        for k, v in gap_losses.items():
+            losses[k] = v
+        for k, v in sim_losses.items():
+            losses[k] = v  
+        for k, v in vec_losses.items():
+            losses[k] = v
+            
+        # 更新momentum模型
+        self.momentum_encoder.update_parameters(self.whole_model_)
+        
+        return losses
+
+
+class GlobalAvgPool(nn.Module):
     
     def __init__(self, dim: Literal["1d", "2d", "3d"]):
         super().__init__()
@@ -780,26 +848,42 @@ class GlobalAvgPool(torch.nn.Module):
 
     def forward(self, x: Tensor) -> Tensor:
         if self.dim == "1d":
-            return torch.nn.functional.adaptive_avg_pool1d(x, 1).squeeze(-1)
+            return nn.functional.adaptive_avg_pool1d(x, 1).squeeze(-1)
         elif self.dim == "2d":
-            return torch.nn.functional.adaptive_avg_pool2d(x, (1,1)).squeeze(-1).squeeze(-1)
+            return nn.functional.adaptive_avg_pool2d(x, (1,1)).squeeze(-1).squeeze(-1)
         elif self.dim == "3d":
-            return torch.nn.functional.adaptive_avg_pool3d(x, (1,1,1)).squeeze(-1).squeeze(-1).squeeze(-1)
+            return nn.functional.adaptive_avg_pool3d(x, (1,1,1)).squeeze(-1).squeeze(-1).squeeze(-1)
         else:
             raise NotImplementedError(f"Invalid Dim Setting: {self.dim}")
 
 
-class BaseVolumeWisePredictor(BaseModule):
+class BaseVolumeWisePredictor(nn.Module):
     def __init__(self, dim:Literal["1d","2d","3d"], in_channels:int, num_views:int=3):
         super().__init__()
+        
         self.dim = dim
         self.num_views = num_views
-        self.act = torch.nn.GELU()
-        self.proj = torch.nn.ModuleList([
-            eval(f"torch.nn.Conv{dim}")(in_channels//(2**i), in_channels//(2**(i+1)), 3, 2)
-            for i in range(3)
-        ])
+        self.act = nn.GELU()
         self.avg_pool = GlobalAvgPool(dim)
+        
+        # 预计算通道数
+        self.channels = []
+        c = in_channels
+        for _ in range(4):
+            self.channels.append(c)
+            c = c // 2
+        
+        for i in range(3):
+            setattr(
+                self, f"proj_{i+1}", 
+                CONV_MAPPING[dim](
+                    in_channels=self.channels[i],
+                    out_channels=self.channels[i+1],
+                    kernel_size=3,
+                    stride=2,
+                    padding=1
+                )
+            )
     
     def forward(self, x:Tensor) -> Tensor:
         """
@@ -809,22 +893,22 @@ class BaseVolumeWisePredictor(BaseModule):
         Returns:
             x (Tensor): [N, num_views, C]
         """
-        x = x.transpose(1,0)
-        extreacted = []
-        for batch in x:
-            for proj in self.proj:
-                batch = proj(batch)
-                batch = self.act(batch)
-            batch = self.avg_pool(batch)
-            extreacted.append(batch)
+        views = list(x.unbind(dim=1))
+        for i, view in enumerate(views):
+            for j in range(3):
+                view:_ConvNd = getattr(self, f"proj_{j+1}")(view)
+                view = self.act(view)
+            view = self.avg_pool(view)
+
+            views[i] = view
         
-        return torch.stack(extreacted, dim=1)  # [N, num_views, C]
+        return torch.stack(views, dim=1)  # [N, num_views, C]
 
 
 class GapPredictor(BaseVolumeWisePredictor):
     def __init__(self, loss_weight:float=1., *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.cri = torch.nn.SmoothL1Loss()
+        self.cri = nn.SmoothL1Loss()
         self.loss_weight = loss_weight
     
     def forward(self, nir:Tensor) -> Tensor:
@@ -905,8 +989,8 @@ class SimPairDiscriminator(BaseModule):
         self.loss_weight = loss_weight
         self.dim = dim
         self.in_channels = in_channels
-        self.encoder = torch.nn.ModuleList([
-            eval(f"torch.nn.Conv{dim}")(
+        self.encoder = nn.ModuleList([
+            eval(f"nn.Conv{dim}")(
                 in_channels=in_channels*(2**i), 
                 out_channels=in_channels*(2**(i+1)), 
                 kernel_size=4, 
@@ -914,9 +998,9 @@ class SimPairDiscriminator(BaseModule):
                 padding=1,)
             for i in range(4)
         ])
-        self.act = torch.nn.GELU()
+        self.act = nn.GELU()
         self.avg_pool = GlobalAvgPool(dim)
-        self.sim_cri = torch.nn.CosineSimilarity()
+        self.sim_cri = nn.CosineSimilarity()
         self.gt = torch.arange(4).float()[None, None]  # [1 (batch), 1 (num_pairs), 4]
         
         self._init_pair_mask()
@@ -1206,10 +1290,10 @@ class VecAngConstraint(BaseVolumeWisePredictor):
                  *args, **kwargs):
         super().__init__(dim=dim, *args, **kwargs)
         self.loss_weight = loss_weight
-        num_channel_from_super = self.proj[-1].out_channels
-        self.proj_direction_vector = torch.nn.Linear(num_channel_from_super, int(dim.replace('d','')))
-        torch.nn.init.ones_(self.proj_direction_vector.weight)
-        self.cri = torch.nn.SmoothL1Loss()
+        num_channel_from_super = self.channels[-1]
+        self.proj_direction_vector = nn.Linear(num_channel_from_super, int(dim.replace('d','')))
+        nn.init.ones_(self.proj_direction_vector.weight)
+        self.cri = nn.SmoothL1Loss()
         self.cycle_route_index = torch.from_numpy(self.generate_all_cycles(num_views))  # [num_views, num_paths, path_steps, 2]
 
     def forward(self, nir:Tensor) -> Tensor:
@@ -1396,9 +1480,9 @@ class RelSim_Metric(BaseMetric):
         """
         c = lambda k, r: torch.stack([result[k] for result in r]).mean().cpu().numpy()
         context = {
-            "gap_loss": c("gap_loss", results),
-            "sim_loss": c("sim_loss", results),
-            "vec_loss": c("vec_loss", results),
+            "gap_loss": c("gap_loss", results) if results else None,
+            "sim_loss": c("sim_loss", results) if results else None,
+            "vec_loss": c("vec_loss", results) if results else None,
         }
         context["all_loss"] = sum(context.values())
         return context

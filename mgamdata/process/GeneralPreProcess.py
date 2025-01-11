@@ -190,12 +190,13 @@ class TypeConvert(BaseTransform):
     - img
     - gt_seg_map
     """
-    def __init__(self, key:str, dtype:type):
-        self.key = key
+    def __init__(self, key:str|list[str], dtype:type):
+        self.key = key if isinstance(key, list) else [key]
         self.dtype = dtype
     
     def transform(self, results):
-        results[self.key] = results[self.key].astype(self.dtype)
+        for k in self.key:
+            results[k] = results[k].astype(self.dtype)
         return results
 
 
