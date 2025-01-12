@@ -8,10 +8,7 @@ from mmengine.model import BaseModule
 from mmseg.models.decode_heads.decode_head import BaseDecodeHead
 
 from ..mm.mmseg_Dev3D import BaseDecodeHead_3D
-
-
-import torch
-import torch.nn as nn
+from .utils import pad_ensure_conv_out_same_size
 
 
 class MedNeXtBlock(nn.Module):
@@ -47,7 +44,7 @@ class MedNeXtBlock(nn.Module):
             out_channels=in_channels,
             kernel_size=kernel_size,
             stride=stride,
-            padding=kernel_size // 2,
+            padding=pad_ensure_conv_out_same_size(kernel_size, stride, 1),
             groups=in_channels if n_groups is None else n_groups,
         )
 
