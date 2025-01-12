@@ -11,7 +11,7 @@ import os
 import pdb
 import pytest
 import math
-
+import torch.utils.checkpoint
 from typing_extensions import Literal, Sequence
 from itertools import permutations
 
@@ -372,6 +372,7 @@ class RelativeSimilaritySelfSup(AutoEncoderSelfSup):
         momentum=1e-4, 
         gamma=100, 
         update_interval=1, 
+        checkpoint_nir:bool=False,
         extra_keys:list[str]=[
             "view_coords", "abs_gap", "rel_gap", "sim_pair_indices", 
             "sim_pair_centers", "normed_view_coords", "normed_abs_gap", "normed_rel_gap", 
@@ -383,6 +384,7 @@ class RelativeSimilaritySelfSup(AutoEncoderSelfSup):
         self.gap_head:GapPredictor          = MODELS.build(gap_head)
         self.sim_head:SimPairDiscriminator  = MODELS.build(sim_head)
         self.vec_head:VecAngConstraint      = MODELS.build(vec_head)
+        self.checkpoint_nir = checkpoint_nir
         self.momentum = momentum
         if momentum is not None:
             self.momentum_encoder = MomentumAvgModel(
@@ -442,7 +444,15 @@ class RelativeSimilaritySelfSup(AutoEncoderSelfSup):
         coord_info = self._stack_coord_info(data_samples)
         
         # neural implicit representation forward
-        nir = self.extract_nir(sv_main, sv_aux)  # [N, sub-view, C, ...]
+        if self.checkpoint_nir:
+            # [N, sub-view, C, ...]
+            nir = torch.utils.checkpoint.checkpoint(
+                self.extract_nir, sv_main, sv_aux,
+                use_reentrant=False,
+            )
+        else:
+            # [N, sub-view, C, ...]
+            nir = self.extract_nir(sv_main, sv_aux)
         
         losses = {}
         # relative gap self-supervision
