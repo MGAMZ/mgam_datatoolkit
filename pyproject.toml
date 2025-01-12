@@ -35,13 +35,17 @@ dependencies = [
   "orjson",
   "HolisticTraceAnalysis",
   "pylint-django",
-  "tensorrt",
   "openslide-python",
   "openslide-bin",
   "h5py",
   "timm",
   "opensdpc",
+]
+
+[project.optional-dependencies]
+nvidia = [
   "deepspeed",
+  "tensorrt",
 ]
 
 [project.scripts]
