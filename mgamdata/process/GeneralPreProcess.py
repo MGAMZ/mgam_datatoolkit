@@ -3,13 +3,15 @@ import random
 import pdb
 from collections.abc import Sequence
 from functools import partial
-from typing_extensions import Literal, deprecated
+from typing_extensions import Literal
 
 import torch
 import numpy as np
 import cv2
 from torch.nn import functional as F
 from scipy.ndimage import gaussian_filter
+from scipy.ndimage import map_coordinates
+from scipy.spatial.transform import Rotation as R
 
 from mmcv.transforms import Resize, BaseTransform
 from mmengine.registry import TRANSFORMS
@@ -768,3 +770,104 @@ class SampleAugment(BaseTransform):
             samples.append(self.get_one_sample(results.copy()))
         return samples
 
+
+class RandomRotate3D(BaseTransform):
+    def __init__(self,
+                 degree: float,
+                 prob: float = 0.5,
+                 keys: list[str] = ["img", "gt_seg_map"]):
+        self.degree = degree
+        self.prob = prob
+        self.keys = keys
+        # 预计算最大旋转角的余弦值
+        self.cos_theta = np.cos(np.deg2rad(degree))
+
+    def _sample_rotation_matrix(self):
+        axis = np.random.randn(3)
+        axis /= np.linalg.norm(axis)
+        angle = np.random.uniform(-self.degree, self.degree)
+        return R.from_rotvec(np.deg2rad(angle) * axis).as_matrix()
+
+    def _rotate_volume(self, array: np.ndarray, rot: np.ndarray):
+        z, y, x = array.shape
+        center = np.array([z/2, y/2, x/2])
+
+        dz, dy, dx = np.indices((z, y, x))
+        coords = np.stack([dz, dy, dx], axis=0).reshape(3, -1).astype(np.float32)
+
+        coords_centered = coords.T - center
+        coords_rotated = (rot @ coords_centered.T).T + center
+
+        rotated = map_coordinates(
+            array,
+            [coords_rotated[:, 0], coords_rotated[:, 1], coords_rotated[:, 2]],
+            order=1,
+            mode='nearest'
+        ).reshape(z, y, x)
+        return rotated
+
+    def _compute_minimal_bounds(self, shape):
+        """计算理论最小有效区域"""
+        z, y, x = shape
+        center = np.array([z/2, y/2, x/2])
+        
+        # 计算对角线长度（从中心到角点的最大距离）
+        max_radius = np.sqrt((z/2)**2 + (y/2)**2 + (x/2)**2)
+        
+        # 任意旋转后，点到中心的距离不变
+        # 但在各轴上的投影最大可能偏移为 r*sin(theta)
+        max_offset = max_radius * np.sqrt(1 - self.cos_theta**2)
+        
+        # 计算安全边界
+        padding = np.ceil(max_offset).astype(int)
+        
+        return (padding, z-padding-1,
+                padding, y-padding-1,
+                padding, x-padding-1)
+
+    def _compute_valid_crop_bounds(self, shape, rot):
+        """计算旋转后有效区域 (zmin,zmax,ymin,ymax,xmin,xmax)"""
+        z, y, x = shape
+        center = np.array([z/2, y/2, x/2])
+
+        # 8个角点
+        corners = np.array([
+            [0, 0, 0], [0, 0, x-1], [0, y-1, 0], [0, y-1, x-1],
+            [z-1, 0, 0], [z-1, 0, x-1], [z-1, y-1, 0], [z-1, y-1, x-1]
+        ], dtype=np.float32)
+
+        corners_centered = corners - center
+        corners_rotated = (rot @ corners_centered.T).T + center
+
+        zmin, ymin, xmin = corners_rotated.min(axis=0)
+        zmax, ymax, xmax = corners_rotated.max(axis=0)
+
+        # 与原体素范围 [0, z-1], [0, y-1], [0, x-1] 做交集
+        zmin, zmax = max(0, np.ceil(zmin)), min(z-1, np.floor(zmax))
+        ymin, ymax = max(0, np.ceil(ymin)), min(y-1, np.floor(ymax))
+        xmin, xmax = max(0, np.ceil(xmin)), min(x-1, np.floor(xmax))
+
+        return int(zmin), int(zmax), int(ymin), int(ymax), int(xmin), int(xmax)
+
+    def _center_crop(self, array: np.ndarray, bounds):
+        zmin, zmax, ymin, ymax, xmin, xmax = bounds
+        return array[zmin:zmax+1, ymin:ymax+1, xmin:xmax+1]
+
+    def transform(self, results):
+        if np.random.rand() < self.prob:
+            # 1. 生成随机旋转矩阵
+            rot = self._sample_rotation_matrix()
+            
+            # 2. 计算理论最小边界（基于最大旋转角）
+            bounds = self._compute_minimal_bounds(
+                results[self.keys[0]].shape
+            )
+            
+            # 3. 先旋转再裁剪
+            for key in self.keys:
+                # 旋转整个体素
+                rotated = self._rotate_volume(results[key], rot)
+                # 在旋转后的体素上裁剪安全区域
+                results[key] = self._center_crop(rotated, bounds)
+        
+        return results
