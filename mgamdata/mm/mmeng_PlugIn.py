@@ -60,8 +60,7 @@ def DynamicRunnerSelection(cfg: ConfigType) -> Runner:
                 strategy = kwargs.get("cfg", {}).pop("strategy", None)
                 auto_strategy = partial(
                     size_based_auto_wrap_policy, 
-                    min_num_params=int(1e6),
-                    recurse=True,
+                    min_num_params=int(1e5),
                 )
                 strategy.update(
                     dict(model_wrapper=dict(auto_wrap_policy=auto_strategy))
