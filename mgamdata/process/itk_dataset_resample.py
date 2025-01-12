@@ -119,6 +119,10 @@ def parse_args():
     return parser.parse_args()
 
 
-if __name__ == '__main__':
+def main():
     args = parse_args()
     resample_standard_dataset(args.source_root, args.spacing, args.dest_root, args.mp)
+
+
+if __name__ == '__main__':
+    main()

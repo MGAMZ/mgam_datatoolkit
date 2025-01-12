@@ -176,9 +176,10 @@ class PreCropper3D:
                 for vol_size, crop_size in zip(image_array.shape, cropper.crop_size)
             ]
         ):
-            print(
+            tqdm.write(
                 Fore.YELLOW,
-                f"Deprecated due to too small volume ({image_array.shape}): {image_itk_path}",
+                f"Deprecated {image_itk_path} due to too small volume: "
+                f"Minimum {image_array.shape}, got {cropper.crop_size}",
                 Style.RESET_ALL,
             )
             return None
@@ -338,3 +339,8 @@ class SemiSupervisedMhaCropper3D(PreCropper3D):
                 )
 
         return task_list
+
+    @staticmethod
+    def main_entry():
+        """Entry point for command line interface"""
+        cropper = SemiSupervisedMhaCropper3D()

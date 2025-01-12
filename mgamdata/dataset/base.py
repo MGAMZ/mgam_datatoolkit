@@ -127,10 +127,15 @@ class mgam_Standard_3D_Mha(mgam_BaseSegDataset):
 
 
 class mgam_SemiSup_3D_Mha(mgam_Standard_3D_Mha):
+    def __init__(self, mode:Literal["semi", "sup"]="semi", *args, **kwargs):
+        self.mode = mode
+        super().__init__(*args, **kwargs)
+    
     def _split(self):
+        split_at = "label" if self.mode == "sup" else "image"
         all_series = [
             file.replace(".mha", "")
-            for file in os.listdir(os.path.join(self.data_root_mha, "image"))
+            for file in os.listdir(os.path.join(self.data_root_mha, split_at))
             if file.endswith(".mha")
         ]
         all_series = sorted(

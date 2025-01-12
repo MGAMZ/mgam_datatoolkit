@@ -1,5 +1,5 @@
 import pdb
-from typing_extensions import deprecated, Sequence
+from typing_extensions import Literal, deprecated, Sequence
 
 import cv2
 import numpy as np
@@ -129,7 +129,7 @@ class LoadMaskFromMHA(LoadFromMHA):
         return results
 
 
-class LoadSampleFromNpz(BaseTransform):
+class LoadRoseThyroidSampleFromNpz(BaseTransform):
     """
     Required Keys:
 
@@ -142,8 +142,9 @@ class LoadSampleFromNpz(BaseTransform):
     - gt_seg_map
     - seg_fields
     """
+    VALID_LOAD_FIELD = Literal["img", "anno"]
 
-    def __init__(self, load_type: str | Sequence[str]):
+    def __init__(self, load_type: VALID_LOAD_FIELD | Sequence[VALID_LOAD_FIELD]):
         self.load_type = load_type if isinstance(load_type, Sequence) else [load_type]
         assert all([load_type in ["img", "anno"] for load_type in self.load_type])
 
@@ -169,6 +170,50 @@ class LoadSampleFromNpz(BaseTransform):
                     point_mask[mask_copy == old_id] = new_id
             results["gt_seg_map"] = point_mask
             results["gt_label"] = cluster_cls
+            results["seg_fields"].append("gt_seg_map")
+
+        return results
+
+
+class LoadCTPreCroppedSampleFromNpz(BaseTransform):
+    """
+    Required Keys:
+
+    - img_path
+    - seg_map_path
+
+    Modified Keys:
+
+    - img
+    - gt_seg_map
+    - seg_fields
+    """
+    VALID_LOAD_FIELD = Literal["img", "anno"]
+
+    def __init__(self, load_type: VALID_LOAD_FIELD | Sequence[VALID_LOAD_FIELD]):
+        self.load_type = load_type if isinstance(load_type, Sequence) else [load_type]
+        assert all([load_type in ["img", "anno"] for load_type in self.load_type])
+
+    def transform(self, results):
+        assert (
+            results["img_path"] == results["seg_map_path"]
+        ), f"img_path: {results['img_path']}, seg_map_path: {results['seg_map_path']}"
+        sample_path = results["img_path"]
+        sample = np.load(sample_path)
+
+        if "img" in self.load_type:
+            results["img"] = sample["img"]
+            results["img_shape"] = results["img"].shape[:-1]
+            results["ori_shape"] = results["img"].shape[:-1]
+
+        if "anno" in self.load_type:
+            gt_seg_map = sample["gt_seg_map"]
+            # Support mmseg dataset rule
+            if results.get("label_map", None) is not None:
+                mask_copy = gt_seg_map.copy()
+                for old_id, new_id in results["label_map"].items():
+                    gt_seg_map[mask_copy == old_id] = new_id
+            results["gt_seg_map"] = sample["gt_seg_map"]
             results["seg_fields"].append("gt_seg_map")
 
         return results

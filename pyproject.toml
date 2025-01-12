@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mgamdata"
-version = "1.8.2.250111"
+version = "1.8.3.250112"
 requires-python = ">= 3.12"
 authors = [
   {name = "Yiqin Zhang", email = "312065559@qq.com"},
@@ -41,11 +41,14 @@ dependencies = [
   "h5py",
   "timm",
   "opensdpc",
+  "deepspeed",
 ]
 
 [project.scripts]
 mmrun = "mgamdata.mm.run:main"
 mmconc = "mgamdata.mm.TestConclude:main"
+semi_precrop = "mgamdata.process.PreCrop_3D:SemiSupervisedMhaCropper3D.main_entry"
+itk_resample = "mgamdata.process.itk_dataset_resample:main"
 
 [tool.setuptools]
 packages = ["mgamdata"]

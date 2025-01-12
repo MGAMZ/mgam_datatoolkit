@@ -27,7 +27,7 @@ from mmengine.runner.runner import ConfigType
 from mmengine.hooks import LoggerHook
 from mmengine.hooks import RuntimeInfoHook as _RuntimeInfoHook
 from mmengine.logging import print_log, MMLogger
-from mmengine.optim.optimizer import AmpOptimWrapper
+from mmengine.optim import AmpOptimWrapper, DefaultOptimWrapperConstructor
 from mmengine.model.wrappers import (
     MMDistributedDataParallel,
     MMFullyShardedDataParallel,
@@ -279,7 +279,6 @@ class AmpPatchAccumulateOptimWarpper(AmpOptimWrapper):
             self.step(**step_kwargs)
             self.zero_grad(**zero_kwargs)
 
-
 # customized DDP training for our task.
 class RemasteredDDP(MMDistributedDataParallel):
     """
@@ -465,19 +464,24 @@ class RatioSampler(DefaultSampler):
     def __init__(self, use_sample_ratio: float, **kwargs):
         super().__init__(**kwargs)
         self.use_sample_ratio = use_sample_ratio
+        self.num_samples_original = super(RatioSampler, self).__len__()
         print_log(
-            f"RatioSampler used, original num of batches {super().__len__()} -> used {len(self)}",
+            f"RatioSampler used, original num of batches "
+            f"{self.num_samples_original} -> used {len(self)}",
             MMLogger.get_current_instance(),
         )
 
     def __iter__(self):
         indices = np.array(list(super().__iter__()))
-        num_samples = int(len(indices) * self.use_sample_ratio)
-        sampled_indices = np.random.choice(indices, num_samples, replace=False)
+        sampled_indices = np.random.choice(indices, len(self), replace=False)
         return iter(sampled_indices.tolist())
 
     def __len__(self):
-        return int(super().__len__() * self.use_sample_ratio)
+        # deceive dataloader
+        num_samples = super().__len__()
+        if num_samples < 1:
+            raise FileNotFoundError(f"No enough samples: {num_samples}.")
+        return max(int(num_samples*self.use_sample_ratio), 1)
 
 
 class RuntimeInfoHook(_RuntimeInfoHook):
@@ -623,3 +627,14 @@ class MomentumAvgModel(nn.Module):
         momentum = max(self.momentum,
                        self.gamma / (self.gamma + self.steps.item()))
         averaged_param.lerp_(source_param, momentum)
+
+
+class mgam_OptimWrapperConstructor(DefaultOptimWrapperConstructor):
+    def __call__(self, model: nn.Module):
+        if hasattr(model, 'module'):
+            model = model.module
+        
+        filtered_params = filter(lambda p: p.requires_grad, model.parameters())
+        model.parameters = lambda: filtered_params
+        
+        return super().__call__(model)

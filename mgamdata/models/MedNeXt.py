@@ -746,12 +746,14 @@ class MM_MedNext_Encoder(BaseModule):
         norm_type="group",
         dim="2d",  # 2d or 3d
         grn=False,
+        freeze:bool=False,
         *args,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
 
         self.do_ds = deep_supervision
+        self.freeze = freeze
         assert dim in ["2d", "3d"]
         self.use_checkpoint = use_checkpoint
 
@@ -892,6 +894,10 @@ class MM_MedNext_Encoder(BaseModule):
                 for _ in range(block_counts[4])
             ]
         )
+
+        if self.freeze:
+            self.eval()
+            self.requires_grad_(False)
 
     def forward(self, x: torch.Tensor):
         if self.use_checkpoint:
@@ -1143,6 +1149,7 @@ class MM_MedNext_Decoder_2D(BaseDecodeHead):
         use_checkpoint: bool = False,
         norm_type="group",
         grn=False,
+        freeze:bool=False,
         *args,
         **kwargs,
     ):
@@ -1161,7 +1168,7 @@ class MM_MedNext_Decoder_2D(BaseDecodeHead):
             *args,
             **kwargs,
         )
-
+        self.freeze = freeze
         self.mednext = MM_MedNext_Decoder(
             embed_dims=embed_dims,
             num_classes=num_classes,
@@ -1174,6 +1181,10 @@ class MM_MedNext_Decoder_2D(BaseDecodeHead):
             grn=grn,
             dim="2d",
         )
+
+        if self.freeze:
+            self.eval()
+            self.requires_grad_(False)
 
     def forward(self, inputs):
         return self.mednext(inputs)[0]
@@ -1191,6 +1202,7 @@ class MM_MedNext_Decoder_3D(BaseDecodeHead_3D):
         use_checkpoint: bool = False,
         norm_type="group",
         grn=False,
+        freeze:bool=False,
         *args,
         **kwargs,
     ):
@@ -1209,7 +1221,7 @@ class MM_MedNext_Decoder_3D(BaseDecodeHead_3D):
             *args,
             **kwargs,
         )
-
+        self.freeze = freeze
         self.mednext = MM_MedNext_Decoder(
             embed_dims=embed_dims,
             num_classes=num_classes,
@@ -1222,6 +1234,10 @@ class MM_MedNext_Decoder_3D(BaseDecodeHead_3D):
             grn=grn,
             dim="3d",
         )
+
+        if self.freeze:
+            self.eval()
+            self.requires_grad_(False)
 
     def forward(self, inputs):
         return self.mednext(inputs)
