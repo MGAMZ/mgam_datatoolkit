@@ -21,9 +21,10 @@ class MedNeXtBlock(nn.Module):
         out_channels: int,
         exp_r: int = 4,
         kernel_size: int = 7,
+        stride: int = 1,
         do_res: bool = True,
         norm_type: str = "group",
-        n_groups: int = None,
+        n_groups: int|None = None,
         dim: str = "3d",
         grn: bool = False,
     ):
@@ -45,7 +46,7 @@ class MedNeXtBlock(nn.Module):
             in_channels=in_channels,
             out_channels=in_channels,
             kernel_size=kernel_size,
-            stride=1,
+            stride=stride,
             padding=kernel_size // 2,
             groups=in_channels if n_groups is None else n_groups,
         )
@@ -731,17 +732,7 @@ class MM_MedNext_Encoder(BaseModule):
         do_res: bool = False,  # Can be used to individually test residual connection
         do_res_up_down: bool = False,  # Additional 'res' connection on up and down convs
         use_checkpoint: bool = False,  # Either inside block or outside block
-        block_counts: list = [
-            2,
-            2,
-            2,
-            2,
-            2,
-            2,
-            2,
-            2,
-            2,
-        ],  # Can be used to test staging ratio:
+        block_counts: list = [2,2,2,2,2,2,2,2,2],  # Can be used to test staging ratio:
         # [3,3,9,3] in Swin as opposed to [2,2,2,2,2] in nnUNet
         norm_type="group",
         dim="2d",  # 2d or 3d
@@ -938,17 +929,7 @@ class MM_MedNext_Decoder(BaseModule):
         do_res: bool = False,  # Can be used to individually test residual connection
         do_res_up_down: bool = False,  # Additional 'res' connection on up and down convs
         use_checkpoint: bool = False,
-        block_counts: list = [
-            2,
-            2,
-            2,
-            2,
-            2,
-            2,
-            2,
-            2,
-            2,
-        ],  # Can be used to test staging ratio:
+        block_counts: list = [2,2,2,2,2,2,2,2,2],  # Can be used to test staging ratio:
         # [3,3,9,3] in Swin as opposed to [2,2,2,2,2] in nnUNet
         deep_supervision: bool = False,
         norm_type="group",
