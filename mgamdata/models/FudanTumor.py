@@ -390,11 +390,11 @@ class SubGroupLabelClser(BaseClassifier):
         return self.shared(inputs)
     
     def loss(self, 
-             feat: Literal["loss", "predict"], 
+             feat, 
              data_samples: list[DataSample]):
         """
         Args:
-            feat: loss or predict
+            feat: [N, C]
             data_samples (list[DataSample]): [N]
                 - gt_label (dict):
                     - Immunization (Tensor): [num_targets]
@@ -608,6 +608,7 @@ class SubGroupClsHead(BaseModule):
 class SubGroupMetric(BaseMetric):
     def process(self, data_batch: dict, data_samples: list[dict]) -> None:
         losses = {k: [] for k in LABEL_GROUP.keys()}
+        classwise_counts = {k: {} for k in LABEL_GROUP.keys()}
         for data_sample in data_samples:
             for sub_group in LABEL_GROUP.keys():
                 if sub_group in data_sample["gt_label"].keys():
@@ -615,14 +616,40 @@ class SubGroupMetric(BaseMetric):
                     pred_label = data_sample[f"pred_label/{sub_group}"]
                     acc = (gt_label == pred_label)
                     losses[sub_group].append(acc.cpu().numpy())
-        self.results.append(losses)
+                    
+                    # Class-Wise 统计
+                    for i in range(len(gt_label)):
+                        if i not in classwise_counts[sub_group]:
+                            classwise_counts[sub_group][i] = [0, 0]  # [correct, total]
+                        correct = (pred_label[i].item() == gt_label[i].item())
+                        classwise_counts[sub_group][i][0] += int(correct)
+                        classwise_counts[sub_group][i][1] += 1
+                    
+        self.results.append((losses, classwise_counts))
 
     def compute_metrics(self, results: list) -> dict:
-        avg_loss = {k:[] for k in LABEL_GROUP.keys()}
-        for loss in results:
-            for k, v in loss.items():
+        # ...existing code...
+        avg_loss = {k: [] for k in LABEL_GROUP.keys()}
+        aggregated_classwise_counts = {k: {} for k in LABEL_GROUP.keys()}
+        for (loss_dict, cls_dict) in results:
+            for k, v in loss_dict.items():
                 avg_loss[k].extend(v)
-        avg_loss = {f"Acc/{k}":np.mean(v) for k,v in avg_loss.items()}
-        avg_loss[f"Acc/Avg"] = np.mean(list(avg_loss.values()))
+            # 聚合 Class-Wise 统计
+            for sg, class_map in cls_dict.items():
+                for class_idx, cnts in class_map.items():
+                    if class_idx not in aggregated_classwise_counts[sg]:
+                        aggregated_classwise_counts[sg][class_idx] = [0, 0]
+                    aggregated_classwise_counts[sg][class_idx][0] += cnts[0]
+                    aggregated_classwise_counts[sg][class_idx][1] += cnts[1]
+
+        avg_loss = {f"Acc/{k}": np.mean(v) for k, v in avg_loss.items()}
+        avg_loss["Acc/Avg"] = np.mean(list(avg_loss.values()))
+        
+        # 计算并添加 Class-Wise Acc
+        for sg, class_map in aggregated_classwise_counts.items():
+            for class_idx, cnts in class_map.items():
+                total = cnts[1] if cnts[1] > 0 else 1
+                avg_loss[f"ClassWiseAcc/{sg}_{class_idx}"] = cnts[0] / total
+
         return avg_loss
 

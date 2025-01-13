@@ -9,8 +9,7 @@ import torch
 import numpy as np
 import cv2
 from torch.nn import functional as F
-from scipy.ndimage import gaussian_filter
-from scipy.ndimage import map_coordinates
+from scipy.ndimage import gaussian_filter, map_coordinates
 from scipy.spatial.transform import Rotation as R
 
 from mmcv.transforms import Resize, BaseTransform
@@ -31,7 +30,7 @@ class AutoPad(BaseTransform):
         size: tuple[int, ...], 
         dim: Literal["1d", "2d", "3d"],
         pad_val: int = 0, 
-        pad_label_val: int = 0
+        pad_label_val: int = 0,
     ):
         self.dim = dim
         self.dim_map = {"1d": 1, "2d": 2, "3d": 3}
@@ -774,10 +773,19 @@ class SampleAugment(BaseTransform):
 class RandomRotate3D(BaseTransform):
     def __init__(self,
                  degree: float,
-                 prob: float = 0.5,
-                 keys: list[str] = ["img", "gt_seg_map"]):
+                 prob: float = 1.0,
+                 interp_order: int = 0,
+                 pad_val: float = -4096,
+                 resample_prefilter: bool = False,
+                 crop_to_valid_region: bool = True,
+                 keys: list[str] = ["img", "gt_seg_map"],
+    ):
         self.degree = degree
         self.prob = prob
+        self.interp_order = interp_order
+        self.pad_val = pad_val
+        self.resample_prefilter = resample_prefilter
+        self.crop_to_valid_region = crop_to_valid_region
         self.keys = keys
         # 预计算最大旋转角的余弦值
         self.cos_theta = np.cos(np.deg2rad(degree))
@@ -801,53 +809,67 @@ class RandomRotate3D(BaseTransform):
         rotated = map_coordinates(
             array,
             [coords_rotated[:, 0], coords_rotated[:, 1], coords_rotated[:, 2]],
-            order=1,
-            mode='nearest'
+            order=self.interp_order,
+            mode="constant",
+            cval=self.pad_val,
+            prefilter=self.resample_prefilter,
         ).reshape(z, y, x)
         return rotated
 
-    def _compute_minimal_bounds(self, shape):
-        """计算理论最小有效区域"""
-        z, y, x = shape
-        center = np.array([z/2, y/2, x/2])
+    def _find_valid_bounds(self, volume: np.ndarray):
+        """使用递归缩小的方式找出有效区域
         
-        # 计算对角线长度（从中心到角点的最大距离）
-        max_radius = np.sqrt((z/2)**2 + (y/2)**2 + (x/2)**2)
+        Args:
+            volume: 旋转后的体积数据
+            pad_val: padding值
         
-        # 任意旋转后，点到中心的距离不变
-        # 但在各轴上的投影最大可能偏移为 r*sin(theta)
-        max_offset = max_radius * np.sqrt(1 - self.cos_theta**2)
+        Returns:
+            (zmin,zmax,ymin,ymax,xmin,xmax): 有效区域的边界
+        """
+        shape = np.array(volume.shape)
+        center = shape // 2
         
-        # 计算安全边界
-        padding = np.ceil(max_offset).astype(int)
+        def check_region(size_ratio):
+            """检查给定比例下的区域是否有效"""
+            # 计算当前size
+            current_size = (shape * size_ratio).astype(int)
+            half_size = current_size // 2
+            
+            # 计算边界
+            mins = center - half_size
+            maxs = center + half_size
+            
+            # 提取区域
+            region = volume[mins[0]:maxs[0],
+                        mins[1]:maxs[1],
+                        mins[2]:maxs[2]]
+            
+            # 检查是否包含pad_val
+            return not np.any(region == self.pad_val), (mins, maxs)
         
-        return (padding, z-padding-1,
-                padding, y-padding-1,
-                padding, x-padding-1)
-
-    def _compute_valid_crop_bounds(self, shape, rot):
-        """计算旋转后有效区域 (zmin,zmax,ymin,ymax,xmin,xmax)"""
-        z, y, x = shape
-        center = np.array([z/2, y/2, x/2])
-
-        # 8个角点
-        corners = np.array([
-            [0, 0, 0], [0, 0, x-1], [0, y-1, 0], [0, y-1, x-1],
-            [z-1, 0, 0], [z-1, 0, x-1], [z-1, y-1, 0], [z-1, y-1, x-1]
-        ], dtype=np.float32)
-
-        corners_centered = corners - center
-        corners_rotated = (rot @ corners_centered.T).T + center
-
-        zmin, ymin, xmin = corners_rotated.min(axis=0)
-        zmax, ymax, xmax = corners_rotated.max(axis=0)
-
-        # 与原体素范围 [0, z-1], [0, y-1], [0, x-1] 做交集
-        zmin, zmax = max(0, np.ceil(zmin)), min(z-1, np.floor(zmax))
-        ymin, ymax = max(0, np.ceil(ymin)), min(y-1, np.floor(ymax))
-        xmin, xmax = max(0, np.ceil(xmin)), min(x-1, np.floor(xmax))
-
-        return int(zmin), int(zmax), int(ymin), int(ymax), int(xmin), int(xmax)
+        # 二分查找最大有效比例
+        left, right = 0.0, 1.0
+        best_bounds = None
+        
+        while right - left > 0.01:  # 精度阈值
+            mid = (left + right) / 2
+            is_valid, bounds = check_region(mid)
+            
+            # 区域值有效，更新左边界，减小裁切比例
+            if is_valid:
+                left = mid
+                best_bounds = bounds
+            # 区域中包含pad_val，更新右边界，增大裁切比例
+            else:
+                right = mid
+        
+        if best_bounds is None:
+            raise ValueError("No valid region found")
+            
+        mins, maxs = best_bounds
+        return (mins[0], maxs[0]-1,
+                mins[1], maxs[1]-1,
+                mins[2], maxs[2]-1)
 
     def _center_crop(self, array: np.ndarray, bounds):
         zmin, zmax, ymin, ymax, xmin, xmax = bounds
@@ -855,19 +877,43 @@ class RandomRotate3D(BaseTransform):
 
     def transform(self, results):
         if np.random.rand() < self.prob:
-            # 1. 生成随机旋转矩阵
             rot = self._sample_rotation_matrix()
             
-            # 2. 计算理论最小边界（基于最大旋转角）
-            bounds = self._compute_minimal_bounds(
-                results[self.keys[0]].shape
-            )
-            
-            # 3. 先旋转再裁剪
             for key in self.keys:
-                # 旋转整个体素
+                # 旋转体积
                 rotated = self._rotate_volume(results[key], rot)
-                # 在旋转后的体素上裁剪安全区域
-                results[key] = self._center_crop(rotated, bounds)
+                # 找出有效区域
+                bounds = self._find_valid_bounds(rotated)
+                # 裁剪到有效区域
+                if self.crop_to_valid_region:
+                    results[key] = self._center_crop(rotated, bounds)
+                else:
+                    results[key] = rotated
+        
+        return results
+
+
+class CenterCrop3D(BaseTransform):
+    def __init__(
+        self, 
+        size: list[int], 
+        keys: list[str] = ["img", "gt_seg_map"]
+    ):
+        self.size = size
+        self.keys = keys
+    
+    def transform(self, results):
+        for key in self.keys:
+            shape = results[key].shape
+            center = np.array(shape) // 2
+            half_size = np.array(self.size) // 2
+            mins = center - half_size
+            maxs = center + half_size
+            results[key] = results[key][mins[0]:maxs[0],
+                                        mins[1]:maxs[1],
+                                        mins[2]:maxs[2]]
+        
+        if "img_shape" in results:
+            results["img_shape"] = self.size
         
         return results

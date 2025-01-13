@@ -35,6 +35,7 @@ from mmengine.model.wrappers import (
 from mmengine.model.averaged_model import BaseAveragedModel
 from mmengine.dataset.utils import default_collate
 from mmengine._strategy.fsdp import FSDPStrategy
+from mmengine.visualization.vis_backend import LocalVisBackend, TensorboardVisBackend
 
 from ..utils.DevelopUtils import measure_time, InjectVisualize
 
@@ -637,3 +638,18 @@ class mgam_OptimWrapperConstructor(DefaultOptimWrapperConstructor):
         model.parameters = lambda: filtered_params
         
         return super().__call__(model)
+
+
+class mgam_LocalVisBackend(LocalVisBackend):
+    def add_image(self, name:str, *args, **kwargs) -> None:
+        # When used with tensorboard, `/`may appear in name,
+        # it is used to create a subdirectory in tensorboard,
+        # but can result in error in file system (path not exist).
+        name = name.replace("/", "_")
+        super().add_image(name, *args, **kwargs)
+
+
+class mgam_TensorboardVisBackend(TensorboardVisBackend):
+    def add_image(self, *args, **kwargs):
+        super().add_image(*args, **kwargs)
+        self._tensorboard.flush()

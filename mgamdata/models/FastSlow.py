@@ -54,9 +54,9 @@ CONV_MAPPING = {
 
 
 
-class RandomSubView(BaseTransform):
+class RandomVolumeView(BaseTransform):
     """
-        Get random sub-view from the original image.
+        Get random view from the original image.
         
         Required fields:
             - img: [C, *]
@@ -70,24 +70,27 @@ class RandomSubView(BaseTransform):
         Added fields:
             - view_coords: [num_views, num_spatial_dims]
     """
-    def __init__(self, num_views: int, dim: Literal["1d", "2d", "3d"], size: tuple[int]):
+    def __init__(self, 
+                 num_views: int, 
+                 dim: Literal["1d", "2d", "3d"], 
+                 size: tuple[int]):
         self.num_views = num_views
         self.dim = dim
         self.size = size
     
-    def _determine_slices(self, shape: tuple[int]) -> tuple[list[slice], list[int]]:
-        full_slices = [slice(None)] * len(shape)
+    def _determine_slices(self, volume_shape: tuple[int]) -> tuple[list[slice], list[int]]:
+        full_slices = [slice(None)] * len(volume_shape)
         center_coords = []
         
         for i, s in enumerate(self.size):
             dim_idx = -(i + 1)
-            start = np.random.randint(0, shape[dim_idx] - s)
+            start = np.random.randint(0, volume_shape[dim_idx] - s + 1)
             full_slices[dim_idx] = slice(start, start + s)
             center_coords.insert(0, start + s // 2)
-            
+        
         return full_slices, center_coords
     
-    def _get_sub_view(self, array: np.ndarray, slices: list[slice]) -> np.ndarray:
+    def _get_view(self, array: np.ndarray, slices: list[slice]) -> np.ndarray:
         return array[tuple(slices)]
     
     def transform(self, results):
@@ -99,13 +102,13 @@ class RandomSubView(BaseTransform):
         for _ in range(self.num_views):
             slices, center_coord = self._determine_slices(img.shape)
             
-            sub_img_view = self._get_sub_view(img, slices)
-            img_views.append(sub_img_view)
+            img_view = self._get_view(img, slices)
+            img_views.append(img_view)
             coords.append(center_coord)
             
             for seg_field in results.get("seg_fields", []):
                 seg_slices = slices[1:] if len(slices) > 1 else slices
-                sub_seg = self._get_sub_view(results[seg_field], seg_slices)
+                sub_seg = self._get_view(results[seg_field], seg_slices)
                 segs[seg_field].append(sub_seg)
         
         results["img"] = np.stack(img_views)  # [num_views, *]
@@ -136,7 +139,8 @@ class NormalizeCoord(BaseTransform):
         return coords
     
     def transform(self, results:dict):
-        results["normed_view_coords"] = self._normalize(results["view_coords"].copy().astype(np.float32))
+        results["normed_view_coords"] = self._normalize(
+            results["view_coords"].copy().astype(np.float32))
         return results
 
 
@@ -248,8 +252,6 @@ class ParseCoords(BaseTransform):
         rel_gap = abs_gap / (rel_base[None, None, ...] + 1e-5)  # normalize the gap matrix
         
         return coords, abs_gap.astype(np.float32), rel_gap.astype(np.float32)
-
-
 
     def _find_all_paths(self, direction: np.ndarray) -> np.ndarray:
         """
@@ -404,26 +406,26 @@ class RelativeSimilaritySelfSup(AutoEncoderSelfSup):
                 s[k] = np.stack([sample.get(k) for sample in data_samples])
         return s
 
-    def extract_nir(self, sv_main:Tensor, sv_aux:Tensor) -> Tensor:
+    def extract_nir(self, vv_main:Tensor, vv_aux:Tensor) -> Tensor:
         """
         Args:
             nir_main (Tensor): [N, C, Z, Y, X]
-            nir_aux (Tensor): [N, sub-view, C, Z, Y, X]
+            nir_aux (Tensor): [N, view, C, Z, Y, X]
         
         Returns:
-            nir (Tensor): [N, sub-view, C, Z, Y, X]
+            nir (Tensor): [N, view, C, Z, Y, X]
         """
-        # sv: sub view
-        nir_main = self.whole_model_(sv_main)[0]
-        # nir_sv: neural implicit representation of sub-sub_view
+        # vv: volume view
+        nir_main = self.whole_model_(vv_main)[0]
+        # nir_vv: neural implicit representation of volume view
         aux_model = self.momentum_encoder \
                     if self.momentum \
                     else self.whole_model_
         with torch.no_grad():
-            nir_aux = [aux_model(sub_view)[0] 
-                       for sub_view in sv_aux.transpose(0, 1)]
-        nir = torch.stack([nir_main, *nir_aux], dim=1)  # [N, sub_view, C, ...]
-        return nir  # [N, sub-view, C, ...]
+            nir_aux = [aux_model(view)[0] 
+                       for view in vv_aux.transpose(0, 1)]
+        nir = torch.stack([nir_main, *nir_aux], dim=1)  # [N, view, C, ...]
+        return nir  # [N, view, C, ...]
 
     def loss(
         self, inputs:Tensor, data_samples:list[DataSample], **kwargs
@@ -438,21 +440,21 @@ class RelativeSimilaritySelfSup(AutoEncoderSelfSup):
         self.backbone: BaseModule
         self.head: BaseModule
         
-        # sv: sub view
-        sv_main = inputs[:, 0]
-        sv_aux = inputs[:, 1:]
+        # vv: volume view
+        vv_main = inputs[:, 0]
+        vv_aux = inputs[:, 1:]
         coord_info = self._stack_coord_info(data_samples)
         
         # neural implicit representation forward
         if self.checkpoint_nir:
             # [N, sub-view, C, ...]
             nir = torch.utils.checkpoint.checkpoint(
-                self.extract_nir, sv_main, sv_aux,
+                self.extract_nir, vv_main, vv_aux,
                 use_reentrant=False,
             )
         else:
             # [N, sub-view, C, ...]
-            nir = self.extract_nir(sv_main, sv_aux)
+            nir = self.extract_nir(vv_main, vv_aux)
         
         losses = {}
         # relative gap self-supervision
@@ -482,33 +484,33 @@ class RelativeSimilaritySelfSup(AutoEncoderSelfSup):
             inputs (Tensor): [N, sub-view, C, *]
             data_samples (list[DataSample]): 
                 DataSample:
-                    - view_coords (Tensor): [sub-view, 3]
+                    - view_coords (Tensor): [sub-view, coord-dims]
                     - volume (np.ndarray): [C, ...]
         
         Returns:
             list[DataSample]:
                 DataSample:
-                    - volume (np.ndarray): [sub-view, C, ...]
-                    - rel_gap (Tensor): [sub-view (start from), sub-view (point to), 3]
-                    - abs_gap (Tensor): [sub-view (start from), sub-view (point to), 3]
-                    - coords_gt (Tensor): [sub-view, 3]
-                    - view_coords (Tensor): [sub-view, 3]
-                    - gap_pred (Tensor): [sub-view, sub-view]
-                    - sim_pred (Tensor): [sub-view, sub-view]
-                    - vec_pred (Tensor): [sub-view, sub-view, 3]
+                    - volume (np.ndarray): [view, C, ...]
+                    - rel_gap (Tensor): [view (start from), view (point to), coord-dims]
+                    - abs_gap (Tensor): [view (start from), view (point to), coord-dims]
+                    - coords_gt (Tensor): [view, coord-dims]
+                    - view_coords (Tensor): [view, coord-dims]
+                    - gap_pred (Tensor): [view, view]
+                    - sim_pred (Tensor): [num_pairs, 4 (adj1, adj2, dst1, dst2), coord-dims]
+                    - vec_pred (Tensor): [view, view, coord-dims]
         """
         coord_info = self._stack_coord_info(data_samples)
 
-        sv_main = inputs[:, 0]
-        sv_aux = inputs[:, 1:]
+        vv_main = inputs[:, 0]
+        vv_aux = inputs[:, 1:]
         # neural implicit representation forward
-        nir = self.extract_nir(sv_main, sv_aux)  # [N, sub-view, C, ...]
+        nir = self.extract_nir(vv_main, vv_aux)  # [N, view, C, ...]
 
-        # [N, sub-view, sub-view]
+        # [N, view, view]
         gap_pred, gap_loss = self.gap_head.predict(nir, coord_info["normed_abs_gap"])
         # [N, num_pairs, 4 (i_adj1, i_adj2, i_dist1, i_dist2)]
         sim_pred, sim_loss = self.sim_head.predict(nir, coord_info["sim_pair_indices"], coord_info["sim_pair_centers"])
-        # [N, sub-view, sub-view, 3]
+        # [N, view, view, 3]
         vec_pred, vec_loss = self.vec_head.predict(nir, coord_info["normed_abs_gap"])
         
         for i in range(len(data_samples)):
@@ -558,7 +560,7 @@ class GlobalAvgPool(nn.Module):
 class BaseVolumeWisePredictor(nn.Module):
     """
     The class is shared by `GapPredictor` and `VecAngConstraint`.
-    They both need feature extraction for sub-view.
+    They both need feature extraction for views.
     """
     
     def __init__(self, dim:Literal["1d","2d","3d"], in_channels:int, num_views:int=3):
@@ -609,7 +611,7 @@ class BaseVolumeWisePredictor(nn.Module):
 
 
 class GapPredictor(BaseVolumeWisePredictor):
-    """Predict the gap between all sub-views."""
+    """Predict the gap between all views."""
     
     def __init__(self, loss_weight:float=1., *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -942,21 +944,21 @@ class SimPairDiscriminator(BaseModule):
     @torch.inference_mode()
     def predict(self, 
                 nir:Tensor, 
-                sub_area_indices:np.ndarray, 
-                gt_pair_coords:np.ndarray
+                sub_view_indices:np.ndarray, 
+                sub_view_coords:np.ndarray
     ) -> tuple:
         """
         Args:
             nir (Tensor): [N, num_views, C, ...]
-            sub_area_indices (np.ndarray): [N, num_pairs, 4, index (tuple) (view_idx, *coord-dim-slices)]
-            pair_coords (np.ndarray): [N, num_pairs, 4, coord-dims]
+            sub_view_indices (np.ndarray): [N, num_pairs, 4, index (tuple) (view_idx, *coord-dim-slices)]
+            sub_view_coords (np.ndarray):  [N, num_pairs, 4, coord-dims]
             
         Returns:
-            pred_pair_coords (Tensor): [N, num_pairs, 4, 3]
+            pred_pair_coords (Tensor): [N, num_pairs, 4, coord-dims]
             loss (Tensor): scalar
         """
         # [N, num_pairs, 4 (v_from_adj, v_to_adj, v_from_dist, v_to_dist), C, ...]
-        sub_areas = self._sub_volume_selector(nir, sub_area_indices)
+        sub_areas = self._sub_volume_selector(nir, sub_view_indices)
         
         f = self.forward(sub_areas)  # [N, num_pairs, 4, C, ...]
         
@@ -987,17 +989,17 @@ class SimPairDiscriminator(BaseModule):
             return np.take_along_axis(source, indices, 2)
         
         # resample using sub_volume_indices
-        pred_pair_coords = gather_by_indices(gt_pair_coords, pred_pair_idx)
-        assert pred_pair_coords.shape == gt_pair_coords.shape
+        pred_pair_coords = gather_by_indices(sub_view_coords, pred_pair_idx)
+        assert pred_pair_coords.shape == sub_view_coords.shape
 
         return pred_pair_coords, loss
 
 
 class VecAngConstraint(BaseVolumeWisePredictor):
     """
-    Predict the absolute coordinations of sub-views.
+    Predict the absolute coordinations of views.
     The prediction is supervised by coordinations, and,
-    the possible routes between the sub-views.
+    the possible routes between the views.
     """
     
     def __init__(self, 
@@ -1225,7 +1227,7 @@ class RelSim_VisHook(Hook):
             data_batch (dict or tuple or list, optional): Data from dataloader.
             outputs (Sequence, optional): Outputs from model.
         """
-        if outputs is not None and (batch_idx % self.interval == 0 or batch_idx == 0):
+        if (outputs is not None) and (batch_idx % self.interval == 0):
             self._visualizer.add_datasample(outputs[0], runner.iter)
 
 
@@ -1465,7 +1467,7 @@ class RelSim_Viser(Visualizer):
     def _vis_vec(self, vec:Tensor, coords:np.ndarray, gt_vec:Tensor):
         """
         Args:
-            coords (np.ndarray): [sub-view, 3 (coord-dim)]
+            coords (np.ndarray): [num_views, 3 (coord-dim)]
             vec (np.ndarray): [num_views, num_views, 3]
             gt_vec (np.ndarray): [num_views, num_views, 3]
         """
