@@ -91,6 +91,10 @@ class mgam_BaseSegDataset(BaseSegDataset):
 
 class mgam_Standard_3D_Mha(mgam_BaseSegDataset):
     def __init__(self, data_root_mha: str, *args, **kwargs) -> None:
+        # HACK: Most implementations use the more elastic dataset,
+        # which is `mgam_SemiSup_3D_Mha`, and it contains a `mode` parameter.
+        kwargs.pop("mode", None)
+        
         self.data_root_mha = data_root_mha
         super().__init__(*args, **kwargs)
         self.data_root: str

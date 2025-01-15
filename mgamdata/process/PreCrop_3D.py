@@ -153,10 +153,11 @@ class PreCropper3D:
         }
 
     def Crop3D(
-        self, cropper, image_itk_path: str, anno_itk_path: str | None  # type: ignore
+        self, 
+        cropper: RandomCrop3D, 
+        image_itk_path: str, 
+        anno_itk_path: str | None
     ):
-        cropper: RandomCrop3D
-
         # Load Image and Segmentations
         image_itk_image = sitk.ReadImage(image_itk_path)
         image_array = sitk.GetArrayFromImage(image_itk_image)
@@ -170,16 +171,14 @@ class PreCropper3D:
             anno_array = None
 
         # Deprecat too small volume
-        if any(
-            [
-                vol_size < crop_size
-                for vol_size, crop_size in zip(image_array.shape, cropper.crop_size)
-            ]
-        ):
+        minimum_required_size = np.array(cropper.crop_size)
+        if self.args.cut_edge is not None:
+            minimum_required_size += np.array(self.args.cut_edge)
+        if np.any(np.array(image_array.shape) < minimum_required_size):
             tqdm.write(
-                Fore.YELLOW,
+                Fore.YELLOW + \
                 f"Deprecated {image_itk_path} due to too small volume: "
-                f"Minimum {image_array.shape}, got {cropper.crop_size}",
+                f"Minimum {minimum_required_size}, got {image_array.shape}" + \
                 Style.RESET_ALL,
             )
             return None
@@ -218,15 +217,13 @@ class PreCropper3D:
             crop_bbox = cropper.crop_bbox(data)
 
             if anno_itk_path is not None:
-                cropped_anno_array: np.ndarray = cropper.crop(anno_array, crop_bbox)
-                cropped_anno_array = unsafe_astype(cropped_anno_array, np.uint8)
+                cropped_ann: np.ndarray = cropper.crop(anno_array, crop_bbox)
+                cropped_ann = unsafe_astype(cropped_ann, np.uint8)
 
-                if self.all_index_ensured(cropped_anno_array):
-                    cropped_image_array: np.ndarray = cropper.crop(
-                        image_array, crop_bbox
-                    )
-                    cropped_image_array = unsafe_astype(cropped_image_array, np.int16)
-                    yield cropped_image_array, cropped_anno_array
+                if self.all_index_ensured(cropped_ann):
+                    cropped_img: np.ndarray = cropper.crop(image_array, crop_bbox)
+                    cropped_img = unsafe_astype(cropped_img, np.int16)
+                    yield cropped_img, cropped_ann
                 else:
                     tqdm.write(
                         f"deprecated due to failing to ensure index: {anno_itk_path} | crop_idx: {i}"

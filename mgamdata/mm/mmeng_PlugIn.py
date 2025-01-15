@@ -1,3 +1,4 @@
+from abc import abstractmethod
 import os
 import os.path as osp
 import pdb
@@ -11,6 +12,7 @@ from numbers import Number
 from typing_extensions import Sequence
 
 import torch
+import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
 from torch import Tensor, nn
@@ -23,8 +25,9 @@ from mmengine.runner import (
     FlexibleRunner,
     find_latest_checkpoint,
 )
+from mmengine.dist import master_only, all_gather_object
 from mmengine.runner.runner import ConfigType
-from mmengine.hooks import LoggerHook
+from mmengine.hooks import LoggerHook, Hook
 from mmengine.hooks import RuntimeInfoHook as _RuntimeInfoHook
 from mmengine.logging import print_log, MMLogger
 from mmengine.optim import AmpOptimWrapper, DefaultOptimWrapperConstructor
@@ -32,10 +35,9 @@ from mmengine.model.wrappers import (
     MMDistributedDataParallel,
     MMFullyShardedDataParallel,
 )
-from mmengine.model.averaged_model import BaseAveragedModel
 from mmengine.dataset.utils import default_collate
 from mmengine._strategy.fsdp import FSDPStrategy
-from mmengine.visualization.vis_backend import LocalVisBackend, TensorboardVisBackend
+from mmengine.visualization import LocalVisBackend, TensorboardVisBackend, Visualizer
 
 from ..utils.DevelopUtils import measure_time, InjectVisualize
 
@@ -243,7 +245,6 @@ class LoggerJSON(LoggerHook):
             json.dump(metrics, f, indent=4)
 
         super().after_test_epoch(runner, metrics)
-
 
 # better AMP support
 class AmpPatchAccumulateOptimWarpper(AmpOptimWrapper):
@@ -653,3 +654,42 @@ class mgam_TensorboardVisBackend(TensorboardVisBackend):
     def add_image(self, *args, **kwargs):
         super().add_image(*args, **kwargs)
         self._tensorboard.flush()
+
+
+class GeneralVisHook(Hook):
+    def __init__(self, interval:int, *args, **kwargs):
+        self.interval = interval
+        self._visualizer:Visualizer = Visualizer.get_current_instance()
+        super().__init__(*args, **kwargs)
+    
+    def after_val_iter(self,
+                       runner:Runner,
+                       batch_idx: int,
+                       data_batch: dict|tuple|list|None = None,
+                       outputs: Sequence|None = None
+    ) -> None:
+        if (outputs is not None) and (batch_idx % self.interval == 0):
+            self._visualizer.add_datasample(outputs[0], runner.iter)
+
+
+class GeneralViser(Visualizer):
+    def __init__(self, 
+                 name="SimViser" , 
+                 plt_backend:str="agg",
+                 *args, **kwargs,
+    ):
+        super().__init__(name=name, *args, **kwargs)
+        plt.switch_backend(plt_backend)
+    
+    def _plt2array(self, fig: plt.Figure) -> np.ndarray:
+        fig.canvas.draw()
+        return np.frombuffer(fig.canvas.tostring_rgb(), dtype='uint8').reshape(
+            fig.canvas.get_width_height()[::-1] + (3,)
+        )
+    
+    @abstractmethod
+    @master_only
+    def add_datasample(self, data_sample:dict, step:int|None=None):
+        ...
+
+

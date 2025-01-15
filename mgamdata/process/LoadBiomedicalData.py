@@ -189,6 +189,7 @@ class LoadCTPreCroppedSampleFromNpz(BaseTransform):
     - seg_fields
     """
     VALID_LOAD_FIELD = Literal["img", "anno"]
+    DEFAULT_NPZ_FIELDS = ["img", "gt_seg_map"]
 
     def __init__(self, load_type: VALID_LOAD_FIELD | Sequence[VALID_LOAD_FIELD]):
         self.load_type = load_type if isinstance(load_type, Sequence) else [load_type]
@@ -202,12 +203,13 @@ class LoadCTPreCroppedSampleFromNpz(BaseTransform):
         sample = np.load(sample_path)
 
         if "img" in self.load_type:
-            results["img"] = sample["img"]
+            results["img"] = sample[self.DEFAULT_NPZ_FIELDS[0]]
+            assert results["img"].shape == (96,96,96), f"img shape EXCEPTION: {results['img'].shape}"
             results["img_shape"] = results["img"].shape[:-1]
             results["ori_shape"] = results["img"].shape[:-1]
 
         if "anno" in self.load_type:
-            gt_seg_map = sample["gt_seg_map"]
+            gt_seg_map = sample[self.DEFAULT_NPZ_FIELDS[1]]
             # Support mmseg dataset rule
             if results.get("label_map", None) is not None:
                 mask_copy = gt_seg_map.copy()

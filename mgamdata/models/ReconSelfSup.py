@@ -1,173 +1,46 @@
 import os
 import pdb
-from functools import partial
-from typing_extensions import Literal
+from typing_extensions import Literal, Sequence
 
 import torch
-from torch import nn, Tensor
-from torch.nn import PixelUnshuffle as PixelUnshuffle2D
+import matplotlib.pyplot as plt
+from torch import gt, nn, Tensor
 
-from mmengine.registry import MODELS
+from mmcv.transforms import BaseTransform
+from mmengine.evaluator.metric import BaseMetric
 from mmengine.structures import BaseDataElement
 from mmengine.model import BaseModule
-from mmengine.dist import all_gather, get_rank
-from mmpretrain.structures import DataSample
-from mmpretrain.models.selfsup.mocov3 import CosineEMA
+from mmengine.dist import master_only
 
-from ..mm.mmseg_Dev3D import PixelUnshuffle1D, PixelUnshuffle3D
+from ..mm.mmeng_PlugIn import GeneralViser
 from .SelfSup import AutoEncoderSelfSup, VoxelData
 
 
 
-class MoCoV3Head_WithAcc(BaseModule):
-    def __init__(
-        self,
-        embed_dim: int,
-        proj_channel: int,
-        dim: Literal["1d", "2d", "3d"],
-        loss: dict,
-        temperature: float = 1.0,
-    ) -> None:
-        super().__init__()
-        self.embed_dim = embed_dim
-        self.proj_channel = proj_channel
-        self.dim = dim
-        self.loss_module = MODELS.build(loss)
-        self.temperature = temperature
-        self.down_r = 4
-        self.predictor = self._init_proj()
-        self.target_proj = self._init_proj()
+class ReconDataSample(BaseDataElement):
+    def set_gt_data(self, value:Tensor):
+        self.set_field(value, 'gt_data', dtype=VoxelData)
 
-    def _init_proj(self):
-        if self.dim == "1d":
-            proj_conv = nn.Conv1d
-            avgpool = partial(nn.AdaptiveAvgPool1d, output_size=(1))
-            pus = PixelUnshuffle1D
-        elif self.dim == "2d":
-            proj_conv = nn.Conv2d
-            avgpool = partial(nn.AdaptiveAvgPool2d, output_size=(1, 1))
-            pus = PixelUnshuffle2D
-        elif self.dim == "3d":
-            proj_conv = nn.Conv3d
-            avgpool = partial(nn.AdaptiveAvgPool3d, output_size=(1, 1, 1))
-            pus = PixelUnshuffle3D
-        else:
-            raise NotImplementedError(f"Invalid Dim Setting: {self.dim}")
+    def set_mask(self, value:Tensor):
+        self.set_field(value, 'erase_mask', dtype=VoxelData)
+    
+    def set_pred_data(self, value:Tensor):
+        self.set_field(value, 'pred_data', dtype=VoxelData)
 
-        return nn.Sequential(
-            pus(downscale_factor=self.down_r),  # C_out = factor**dim * C_in
-            proj_conv(
-                self.down_r ** int(self.dim[0]) * self.embed_dim, self.proj_channel, 1
-            ),
-            nn.GELU(),
-            avgpool(),
-            nn.Flatten(start_dim=1),
+
+class PackReconInput(BaseTransform):
+    def transform(self, results:dict):
+        inputs = torch.from_numpy(results['img'])
+        datasample = ReconDataSample(
+            gt_data=VoxelData(data=torch.from_numpy(results['ori_img'])),
+            erase_mask=VoxelData(data=torch.from_numpy(results['erase_mask'])),
+            metainfo={"sample_file_path": results['img_path'],}
         )
-
-    def loss(
-        self, base_out: Tensor, momentum_out: Tensor
-    ) -> tuple[Tensor, Tensor, Tensor]:
-        """Generate loss.
-
-        Args:
-            base_out (Tensor): [N, C, ...] features from base_encoder.
-            momentum_out (Tensor): [N, C, ...] features from momentum_encoder.
-
-        Returns:
-            Tensor: The loss tensor.
-        """
-        # predictor computation
-        pred = self.predictor(base_out)  # NxC
-        target = self.target_proj(base_out)  # NxC
-
-        # normalize
-        pred = nn.functional.normalize(pred, dim=1)
-        target = nn.functional.normalize(target, dim=1)
-
-        # get negative samples
-        target = torch.cat(all_gather(target), dim=0)
-
-        # Einstein sum is more intuitive
-        logits = torch.einsum("nc,mc->nm", [pred, target]) / self.temperature
-
-        """
-        使用一个混淆矩阵来表达经过两组不同的变换之后的同batch样本之间的相似度
-        理想情况下，模型应当能识别出同样的样本，因此这个矩阵应当是对角线上有较大值，其他地方为较小值
-        从分类任务混淆矩阵的角度出发，这代表着样本的gt标签就是它们自身的index
-        """
-
-        # generate labels
-        batch_size = logits.shape[0]
-        labels = (
-            torch.arange(batch_size, dtype=torch.long) + batch_size * get_rank()
-        ).to(logits.device)
-
-        loss = self.loss_module(logits, labels)
-        return loss, logits, labels
-
-
-class MoCoV3(AutoEncoderSelfSup):
-    def __init__(self, base_momentum: float = 0.01, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
-        self.base_momentum = base_momentum
-        self.momentum_encoder = CosineEMA(
-            self.whole_model_, momentum=base_momentum
-        )
-
-    @staticmethod
-    def calc_acc(logits: Tensor, labels: Tensor) -> Tensor:
-        """Calculate the accuracy of the model.
-
-        Args:
-            logits (Tensor): The output logits, shape (N, C).
-            labels (Tensor): The target labels, shape (N).
-
-        Returns
-            Tensor: The accuracy of the model.
-        """
-        preds = torch.argmax(logits, dim=1)
-        acc = torch.sum(preds == labels).float() / labels.shape[0]
-        return acc.unsqueeze(0)
-
-    def loss(
-        self, inputs: list[Tensor], data_samples: list[DataSample], **kwargs
-    ) -> dict[str, Tensor]:
-        """The forward function in training.
-
-        Args:
-            inputs (List[Tensor]): The input images.
-            data_samples (List[DataSample]): All elements required
-                during the forward function.
-
-        Returns:
-            Dict[str, Tensor]: A dictionary of loss components.
-        """
-        assert isinstance(inputs, list)
-        self.backbone: BaseModule
-        self.neck: BaseModule
-        self.head: BaseModule
-
-        q1 = self.backbone(inputs[0])[0]
-        q2 = self.backbone(inputs[1])[0]
-
-        # compute key features, [N, C] each, no gradient
-        with torch.no_grad():
-            # update momentum encoder
-            self.momentum_encoder.update_parameters(self.whole_model_)
-
-            k1 = self.momentum_encoder(inputs[0])[0]
-            k2 = self.momentum_encoder(inputs[1])[0]
-
-        selfsup1 = self.head.loss(q1, k2)
-        selfsup2 = self.head.loss(q2, k1)
-
-        loss = selfsup1[0] + selfsup2[0]
-        acc1 = self.calc_acc(logits=selfsup1[1], labels=selfsup1[2])
-        acc2 = self.calc_acc(logits=selfsup2[1], labels=selfsup2[2])
-        acc = (acc1 + acc2) / 2
-        acc = torch.cat(all_gather(acc)).mean()
-        losses = dict(loss_MoCoV3=loss, acc_MoCoV3=acc)
-        return losses
+        
+        return {
+            "inputs": inputs,
+            "data_samples": datasample,
+        }
 
 
 class ReconHead(BaseModule):
@@ -176,7 +49,6 @@ class ReconHead(BaseModule):
         model_out_channels: int,
         recon_channels: int,
         dim: Literal["1d", "2d", "3d"],
-        reduction: str = "mean",
         loss_type: Literal["L1", "L2"] = "L1",
     ):
         super().__init__()
@@ -185,46 +57,199 @@ class ReconHead(BaseModule):
         self.loss_type = loss_type
         self.dim = dim
         self.criterion = (
-            nn.L1Loss(reduction=reduction)
+            nn.L1Loss(reduction="none")
             if loss_type == "L1"
-            else nn.MSELoss(reduction=reduction)
+            else nn.MSELoss(reduction="none")
         )
         self.conv_proj = eval(f"nn.Conv{dim}")(
             model_out_channels, recon_channels, 1
         )
 
-    def loss(self, recon: Tensor, ori: Tensor):
-        proj = self.conv_proj(recon)
-        loss = self.criterion(proj.squeeze(), ori.squeeze())
-        return {f"loss_recon_{self.loss_type}": loss, "reconed": proj}
+    def loss(self, recon: Tensor, ori: Tensor, mask:Tensor|None=None) -> dict[str, Tensor]:
+        proj = self(recon)
+        loss = self.criterion(proj, ori)
+        if mask is not None:
+            loss = loss * mask
+        
+        return {
+            f"loss_recon_{self.loss_type}": loss.mean(), 
+            "reconed": proj
+        }
+
+    def forward(self, recon:Tensor) -> Tensor:
+        return self.conv_proj(recon)
 
 
-class ReconDataSample(BaseDataElement):
-    def set_gt_data(self, value:Tensor):
-        self.set_field(value, 'gt_data', dtype=VoxelData)
-
-    def set_mask(self, value:Tensor):
-        self.set_field(value, 'mask', dtype=VoxelData)
-
-
-class Recon_SelfSup(AutoEncoderSelfSup):
+class Reconstructor(AutoEncoderSelfSup):
+    head: ReconHead
+    
+    def __init__(self, embed_dims:int, test_cfg:dict, *args, **kwargs):
+        assert test_cfg.get("mode") == "slide", "Only support slide mode."
+        super().__init__(*args, **kwargs)
+        self.embed_dims = embed_dims
+        self.test_cfg = test_cfg
+    
     def _stack_datasamples(self, data_samples: list[ReconDataSample]) -> tuple[Tensor, Tensor]:
-        ori = torch.stack([sample.gt_data for sample in data_samples])
-        return ori
+        ori = torch.stack([sample.gt_data.data for sample in data_samples])
+        mask = torch.stack([sample.erase_mask.data for sample in data_samples])
+        return ori, mask
     
     def loss(
         self, 
         inputs: list[Tensor], 
-        data_samples: list[ReconDataSample], **kwargs
+        data_samples: list[ReconDataSample]
     ) -> dict[str, Tensor]:
         
-        assert isinstance(inputs, list)
-        self.backbone: BaseModule
-        self.head: BaseModule
-        losses = {}
-        recon = self.backbone(inputs)
-        ori = torch.stack([sample.gt_data for sample in data_samples])
-        selfsup_loss = self.head.loss(recon, ori)
+        recon = self.whole_model_(inputs)
+        ori, mask = self._stack_datasamples(data_samples)
+        selfsup_loss = self.head.loss(recon[0], ori, mask)
+        return selfsup_loss
 
-        losses.update(selfsup_loss)
-        return losses
+    def slide_inference(self, inputs: Tensor) -> Tensor:
+        """Inference by sliding-window with overlap, copy from `EncoderDecoder3D`.
+
+        If z_crop > z_img or y_crop > y_img or x_crop > x_img, the small patch will be used to
+        decode without padding.
+
+        Args:
+            inputs (tensor): the tensor should have a shape NxCxZxYxX,
+                which contains all volumes in the batch.
+            batch_img_metas (list[dict]): list of volume metainfo where each may
+                also contain: 'img_shape', 'scale_factor', 'flip', 'img_path',
+                'ori_shape', and 'pad_shape'.
+                For details on the values of these keys see
+                `mmseg/datasets/pipelines/formatting.py:PackSegInputs`.
+
+        Returns:
+            Tensor: The segmentation results, seg_logits from model of each
+                input volume.
+        """
+
+        accu_device: str = self.test_cfg.slide_accumulate_device
+        z_stride, y_stride, x_stride = self.test_cfg.stride  # type: ignore
+        z_crop, y_crop, x_crop = self.test_cfg.crop_size  # type: ignore
+        batch_size, _, z_img, y_img, x_img = inputs.size()
+        out_channels = self.embed_dims
+        z_grids = max(z_img - z_crop + z_stride - 1, 0) // z_stride + 1
+        y_grids = max(y_img - y_crop + y_stride - 1, 0) // y_stride + 1
+        x_grids = max(x_img - x_crop + x_stride - 1, 0) // x_stride + 1
+        preds = torch.zeros(
+            size=(batch_size, out_channels, z_img, y_img, x_img),
+            dtype=torch.float16,
+            device=accu_device,
+            pin_memory=False,
+        )
+        count_mat = torch.zeros(
+            size=(batch_size, 1, z_img, y_img, x_img),
+            dtype=torch.uint8,
+            device=accu_device,
+            pin_memory=False,
+        )
+
+        for z_idx in range(z_grids):
+            for y_idx in range(y_grids):
+                for x_idx in range(x_grids):
+                    z1 = z_idx * z_stride
+                    y1 = y_idx * y_stride
+                    x1 = x_idx * x_stride
+                    z2 = min(z1 + z_crop, z_img)
+                    y2 = min(y1 + y_crop, y_img)
+                    x2 = min(x1 + x_crop, x_img)
+                    z1 = max(z2 - z_crop, 0)
+                    y1 = max(y2 - y_crop, 0)
+                    x1 = max(x2 - x_crop, 0)
+                    crop_vol = inputs[:, :, z1:z2, y1:y2, x1:x2]  # [N, C, Z, Y, X]
+                    
+                    # NOTE WARNING:
+                    # Setting `non_blocking=True` WILL CAUSE:
+                    # Invalid pred_seg_logit accumulation on X axis.
+                    crop_seg_logit = self.whole_model_(crop_vol)[0]
+                    reconed = self.head(crop_seg_logit)
+                    
+                    preds[:, :, z1:z2, y1:y2, x1:x2] += reconed.to(accu_device, non_blocking=False)
+                    count_mat[:, :, z1:z2, y1:y2, x1:x2] += 1
+
+        assert torch.all(count_mat != 0), "The count_mat should not be zero"
+        preds /= count_mat
+        return preds
+
+    @torch.inference_mode()
+    def predict(
+        self, 
+        inputs: Tensor, 
+        data_samples: list[ReconDataSample]
+    ) -> list[ReconDataSample]:
+        
+        recon_feat = self.slide_inference(inputs)
+        reconed = self.head(recon_feat)
+        
+        for i, sample in enumerate(data_samples):
+            sample.set_pred_data(VoxelData(data=reconed[i]))
+        
+        return data_samples
+
+    def forward(self,
+                inputs: Tensor,
+                data_samples: list[ReconDataSample],
+                mode: str = 'tensor'
+    ):
+        if mode == 'loss':
+            return self.loss(inputs, data_samples)
+        elif mode == 'predict':
+            return self.predict(inputs, data_samples)
+        else:
+            raise RuntimeError(f'Invalid mode "{mode}".')
+
+
+class ReconMetric(BaseMetric):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.L1 = nn.L1Loss(reduction="mean")
+        self.eps = 1e-6
+    
+    def process(self, data_batch: dict, data_samples: Sequence[dict]) -> None:
+        for sample in data_samples:
+            pred = sample["pred_data"]["data"]
+            gt = sample["gt_data"]["data"]
+            self.results.append({
+                "L1": self.L1(pred, gt).cpu().numpy(),
+                "mape": torch.mean(torch.abs(pred - gt) / (gt + self.eps)).cpu().numpy()
+            })
+    
+    def compute_metrics(self, results: list[dict]) -> dict:
+        L1 = sum([r['L1'] for r in results]) / len(results)
+        mape = sum([r['mape'] for r in results]) / len(results)
+        return {"mae": L1, "mape": mape}
+
+
+class ReconViser(GeneralViser):
+    @master_only
+    def add_datasample(self, data_sample:ReconDataSample, step:int|None=None):
+        gt_data = data_sample.gt_data.data.detach().cpu().numpy().mean(axis=0)
+        pred_data = data_sample.pred_data.data.detach().cpu().numpy().mean(axis=0)
+        z_mid = gt_data.shape[0] // 2
+        y_mid = gt_data.shape[1] // 2
+        x_mid = gt_data.shape[2] // 2
+        fig, axes = plt.subplots(2, 3, figsize=(10, 6))
+        
+        axes[0,0].imshow(gt_data[z_mid, ...], cmap="gray")
+        axes[0,1].imshow(gt_data[:, y_mid, :], cmap="gray")
+        axes[0,2].imshow(gt_data[:, :, x_mid], cmap="gray")
+        axes[1,0].imshow(pred_data[z_mid, ...], cmap="gray")
+        axes[1,1].imshow(pred_data[:, y_mid, :], cmap="gray")
+        axes[1,2].imshow(pred_data[:, :, x_mid], cmap="gray")
+        
+        axes[0,0].set_title("XY")
+        axes[0,1].set_title("YZ")
+        axes[0,2].set_title("XZ")
+        axes[0,0].set_ylabel("GT")
+        axes[1,0].set_ylabel("Pred")
+        
+        plt.tight_layout()
+        fig_array = self._plt2array(fig)
+        plt.close(fig)
+        
+        dir_name = os.path.basename(os.path.dirname(data_sample.sample_file_path))
+        self.add_image(name=dir_name, image=fig_array, step=step)
+
+

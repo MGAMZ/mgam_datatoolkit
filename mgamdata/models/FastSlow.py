@@ -9,10 +9,9 @@ This is the implementation of our research.
 
 import os
 import pdb
-import pytest
 import math
 import torch.utils.checkpoint
-from typing_extensions import Literal, Sequence
+from typing_extensions import Literal
 from itertools import permutations
 
 import numpy as np
@@ -29,17 +28,15 @@ from matplotlib.gridspec import SubplotSpec
 
 from mmcv.transforms import BaseTransform
 from mmengine.config import ConfigDict
-from mmengine.runner import Runner
 from mmengine.model import BaseModule
 from mmengine.dist import master_only
 from mmengine.visualization import Visualizer
-from mmengine.hooks import Hook
 from mmengine.evaluator import BaseMetric
 from mmpretrain.registry import MODELS
 from mmpretrain.structures import DataSample
 
 from .SelfSup import AutoEncoderSelfSup
-from ..mm.mmeng_PlugIn import MomentumAvgModel
+from ..mm.mmeng_PlugIn import MomentumAvgModel, GeneralViser
 
 
 DIM_MAP = {"1d": 1, "2d": 2, "3d": 3}
@@ -1209,46 +1206,10 @@ class RelSim_Metric(BaseMetric):
         return context
 
 
-class RelSim_VisHook(Hook):
-    def __init__(self, interval:int, *args, **kwargs):
-        self.interval = interval
-        self._visualizer: RelSim_Viser = Visualizer.get_current_instance()
+class RelSim_Viser(GeneralViser):
+    def __init__(self, coord_norm:list[int], *args, **kwargs):
         super().__init__(*args, **kwargs)
-    
-    def after_val_iter(self,
-                       runner:Runner,
-                       batch_idx: int,
-                       data_batch: dict|tuple|list|None = None,
-                       outputs: Sequence|None = None) -> None:
-        """All subclasses should override this method, if they need any
-        operations after each validation iteration.
-
-        Args:
-            runner (Runner): The runner of the validation process.
-            batch_idx (int): The index of the current batch in the val loop.
-            data_batch (dict or tuple or list, optional): Data from dataloader.
-            outputs (Sequence, optional): Outputs from model.
-        """
-        if (outputs is not None) and (batch_idx % self.interval == 0):
-            self._visualizer.add_datasample(outputs[0], runner.iter)
-
-
-class RelSim_Viser(Visualizer):
-    def __init__(self, 
-                 coord_norm:list[int], 
-                 name="SimViser" , 
-                 plt_backend:str="agg",
-                 *args, **kwargs,
-    ):
-        super().__init__(name=name, *args, **kwargs)
         self.coord_norm = np.array(coord_norm)
-        plt.switch_backend(plt_backend)
-    
-    def _plt2array(self, fig: plt.Figure) -> np.ndarray:
-        fig.canvas.draw()
-        return np.frombuffer(fig.canvas.tostring_rgb(), dtype='uint8').reshape(
-            fig.canvas.get_width_height()[::-1] + (3,)
-        )
     
     def _vis_gap(self, gap: Tensor, gt_gap: Tensor):
         """

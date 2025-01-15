@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mgamdata"
-version = "1.8.3.250112"
+version = "1.8.4.250115"
 requires-python = ">= 3.12"
 authors = [
   {name = "Yiqin Zhang", email = "312065559@qq.com"},
@@ -51,7 +51,7 @@ nvidia = [
 [project.scripts]
 mmrun = "mgamdata.mm.run:main"
 mmconc = "mgamdata.mm.TestConclude:main"
-semi_precrop = "mgamdata.process.PreCrop_3D:SemiSupervisedMhaCropper3D.main_entry"
+precrop = "mgamdata.process.PreCrop_3D:SemiSupervisedMhaCropper3D.main_entry"
 itk_resample = "mgamdata.process.itk_dataset_resample:main"
 
 [tool.setuptools]

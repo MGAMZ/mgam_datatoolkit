@@ -490,17 +490,17 @@ class RandomCrop3D(BaseTransform):
                 tuple: Coordinates of the cropped volume.
             """
 
-            margin_d = max(img.shape[0] - self.crop_size[0], 0)
-            margin_h = max(img.shape[1] - self.crop_size[1], 0)
-            margin_w = max(img.shape[2] - self.crop_size[2], 0)
-            offset_d = np.random.randint(0, margin_d + 1)
-            offset_h = np.random.randint(0, margin_h + 1)
-            offset_w = np.random.randint(0, margin_w + 1)
-            crop_d1, crop_d2 = offset_d, offset_d + self.crop_size[0]
-            crop_y1, crop_y2 = offset_h, offset_h + self.crop_size[1]
-            crop_x1, crop_x2 = offset_w, offset_w + self.crop_size[2]
+            margin_z = max(img.shape[0] - self.crop_size[0], 0)
+            margin_y = max(img.shape[1] - self.crop_size[1], 0)
+            margin_x = max(img.shape[2] - self.crop_size[2], 0)
+            offset_z = np.random.randint(0, margin_z + 1)
+            offset_y = np.random.randint(0, margin_y + 1)
+            offset_x = np.random.randint(0, margin_x + 1)
+            crop_z1, crop_z2 = offset_z, offset_z + self.crop_size[0]
+            crop_y1, crop_y2 = offset_y, offset_y + self.crop_size[1]
+            crop_x1, crop_x2 = offset_x, offset_x + self.crop_size[2]
 
-            return crop_d1, crop_d2, crop_y1, crop_y2, crop_x1, crop_x2
+            return crop_z1, crop_z2, crop_y1, crop_y2, crop_x1, crop_x2
 
         img = results["img"]
         crop_bbox = generate_crop_bbox(img)
@@ -529,8 +529,8 @@ class RandomCrop3D(BaseTransform):
             np.ndarray: The cropped volume.
         """
 
-        crop_d1, crop_d2, crop_y1, crop_y2, crop_x1, crop_x2 = crop_bbox
-        img = img[crop_d1:crop_d2, crop_y1:crop_y2, crop_x1:crop_x2, ...]
+        crop_z1, crop_z2, crop_y1, crop_y2, crop_x1, crop_x2 = crop_bbox
+        img = img[crop_z1:crop_z2, crop_y1:crop_y2, crop_x1:crop_x2, ...]
         return img
 
     def transform(self, results: dict) -> dict:
@@ -581,11 +581,13 @@ class RandomAxis(BaseTransform):
 
 
 class NewAxis(BaseTransform):
-    def __init__(self, axis: int):
+    def __init__(self, axis: int, keys:list[str]=['img']):
         self.axis = axis
+        self.keys = keys
 
     def transform(self, results: dict):
-        results["img"] = np.expand_dims(results["img"], axis=self.axis)
+        for k in self.keys:
+            results[k] = np.expand_dims(results[k], axis=self.axis)
         return results
 
 
@@ -678,6 +680,7 @@ class RandomDiscreteErase(BaseTransform):
         Specified by `keys_pad_vals`
     
     Added Keys:
+        ori_img (np.ndarray): The original image before erasing.
         erase_mask (np.ndarray): The mask of the erased area.
     """
     
@@ -710,17 +713,17 @@ class RandomDiscreteErase(BaseTransform):
         return array
 
     def transform(self, results: dict):
+        results["ori_img"] = results["img"].copy()
+        results["erase_mask"] = np.zeros_like(results["img"].squeeze())
+        
         if np.random.rand() < self.prob:
             erase_ratio = np.random.uniform(self.min_ratio, self.max_ratio)
             img_shape = results["img"].squeeze().shape
             mask = self._generate_mask(img_shape, erase_ratio)
-            results["erase_mask"] = mask
             
+            results["erase_mask"] = mask
             for key, pad_val in self.keys_pad_vals:
                 results[key] = self._apply_mask(results[key], mask, pad_val)
-            
-        else:
-            results["erase_mask"] = np.zeros_like(results["img"].squeeze())
         
         return results
 
