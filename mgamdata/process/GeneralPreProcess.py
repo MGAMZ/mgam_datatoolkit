@@ -1,6 +1,7 @@
 import os
 import random
 import pdb
+from numbers import Number
 from collections.abc import Sequence
 from functools import partial
 from typing_extensions import Literal
@@ -666,20 +667,32 @@ class RandomAlter(RandomContinuousErase):
 
 
 class RandomDiscreteErase(BaseTransform):
+    """
+    Args:
+        max_ratio (float): The maximum ratio of the erased area.
+        keys_pad_vals (Sequence[tuple[str, Number]]): The keys and values to be padded.
+        min_ratio (float): The minimum ratio of the erased area.
+        prob (float): The probability of performing this transformation.
+    
+    Modified Keys: 
+        Specified by `keys_pad_vals`
+    
+    Added Keys:
+        erase_mask (np.ndarray): The mask of the erased area.
+    """
+    
     def __init__(
         self,
         max_ratio: float,
-        pad_val: float | int,
+        keys_pad_vals: Sequence[tuple[str, Number]],
         min_ratio: float = 0.,
-        seg_pad_val=0,
         prob: float = 0.5,
     ):
         assert 0 < max_ratio <= 1
         self.min_ratio = min_ratio
         self.max_ratio = max_ratio
-        self.pad_val = pad_val
-        self.seg_pad_val = seg_pad_val
         self.prob = prob
+        self.keys_pad_vals = keys_pad_vals
 
     def _generate_mask(self, array_shape: tuple, ratio: float) -> np.ndarray:
         total_elements = np.prod(array_shape)
@@ -703,10 +716,9 @@ class RandomDiscreteErase(BaseTransform):
             mask = self._generate_mask(img_shape, erase_ratio)
             results["erase_mask"] = mask
             
-            results["img"] = self._apply_mask(results["img"], mask, self.pad_val)
-            if "gt_seg_map" in results:
-                results["gt_seg_map"] = self._apply_mask(results["gt_seg_map"], mask, self.seg_pad_val)
-        
+            for key, pad_val in self.keys_pad_vals:
+                results[key] = self._apply_mask(results[key], mask, pad_val)
+            
         else:
             results["erase_mask"] = np.zeros_like(results["img"].squeeze())
         
