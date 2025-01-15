@@ -204,7 +204,6 @@ class LoadCTPreCroppedSampleFromNpz(BaseTransform):
 
         if "img" in self.load_type:
             results["img"] = sample[self.DEFAULT_NPZ_FIELDS[0]]
-            assert results["img"].shape == (96,96,96), f"img shape EXCEPTION: {results['img'].shape}"
             results["img_shape"] = results["img"].shape[:-1]
             results["ori_shape"] = results["img"].shape[:-1]
 
