@@ -615,17 +615,17 @@ class GapPredictor(BaseVolumeWisePredictor):
     
     def __init__(self, loss_weight:float=1., *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.cri = nn.SmoothL1Loss()
+        self.cri = nn.MSELoss()
         self.loss_weight = loss_weight
+        self.proj_axis = nn.Linear(self.channels[-1], 3)
     
     def forward(self, nir:Tensor) -> Tensor:
         """
         Args:
             nir (Tensor): Size [N, num_views, C, Z, Y, X]
-            rel_gap (Tensor): Size [N, num_views (start from), num_views (point to), coord-dim-length]
         
         Returns:
-            vector gap sort loss (Tensor): [N, ]
+            axis_gap (Tensor): Size [N, num_views, num_views, 3]
         """
         nir = super().forward(nir)  # [N, num_views, C]
         
@@ -633,9 +633,8 @@ class GapPredictor(BaseVolumeWisePredictor):
         # diff equals to the relative distance between each `nir`.
         rep_diff = nir.unsqueeze(2) - nir.unsqueeze(1)  # (N, num_views, num_views, C)
         # calculate the distance of `rel_pos_rep_diff`
-        similarity = rep_diff.norm(dim=-1)  # (N, num_views, num_views)
-        
-        return similarity  # (N, num_views, num_views)
+        axis_gap = self.proj_axis(rep_diff)  # (N, num_views, num_views, coord-dim-length)
+        return axis_gap  # (N, num_views, num_views)
     
     def loss(self, nir:Tensor, gap:Tensor) -> dict[str, Tensor]:
         """
@@ -643,23 +642,26 @@ class GapPredictor(BaseVolumeWisePredictor):
             nir (Tensor): Size [N, num_views, C, ...]
             gap (Tensor): Size [N, num_views (start from), num_views (point to), coord-dim-length]
         """
-        # (N, num_views, num_views)
-        similarity = self.forward(nir)
-        # (N, num_views, num_views)
-        loss = self.cri(similarity, gap.norm(dim=-1))
-        return {"loss/gap": loss*self.loss_weight}
+        # (N, num_views, num_views, coord-dim-length)
+        axis_gap = self.forward(nir)
+        # (N, num_views, num_views, coord-dim-length)
+        loss_axis_gap = self.cri(axis_gap, gap)
+        loss_norm_gap = self.cri(axis_gap.norm(dim=-1), gap.norm(dim=-1))
+        return {"loss/axis_gap": loss_axis_gap*self.loss_weight,
+                "loss/norm_gap": loss_norm_gap*self.loss_weight}
 
     @torch.inference_mode()
     def predict(self, nir:Tensor, gap:Tensor|None=None) -> tuple[Tensor, Tensor|None]:
         """
         Args:
             nir (Tensor): [N, num_views, C, ...]
-            rel_gap (Tensor): Size [N, num_views (start from), num_views (point to), coord-dim-length]
+            gap (Tensor): Size [N, num_views (start from), num_views (point to), coord-dim-length]
             
         Returns:
             gap_pred (Tensor): [N, num_views, num_views]
+            gap_loss (Tensor): [1, ]
         """
-        pred = self.forward(nir)
+        pred = self.forward(nir).norm(dim=-1)
         if gap is not None:
             loss = self.cri(pred, gap.norm(dim=-1))
         else:
