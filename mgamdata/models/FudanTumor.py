@@ -1,5 +1,6 @@
 import os
 import pdb
+import math
 from collections.abc import Callable
 from typing_extensions import Literal
 
@@ -313,28 +314,10 @@ class SVM(BaseBackbone):
         return (feat,)
 
 
-class SubGroupSharedExtractor(BaseBackbone):
-    def __init__(self, in_channels: int, *args, **kwargs):
-        super(SubGroupSharedExtractor, self).__init__(*args, **kwargs)
-        self.in_channels = in_channels
-        self.proj = nn.ModuleList([
-            nn.Linear(in_channels, in_channels),
-            nn.GELU(),
-            nn.Linear(in_channels, in_channels),
-            nn.GELU(),
-            nn.Linear(in_channels, in_channels),
-        ])
-    
-    def forward(self, inputs: Tensor):
-        i = inputs
-        for layer in self.proj:
-            i = layer(i)
-        return i
-
-
-class SubGroupLabelClser(BaseClassifier):
+class GrouppedClser(BaseClassifier):
     def __init__(
         self, 
+        enable_clam_feat:bool,
         shared:dict, 
         clser_Immunization:dict,
         clser_Histological:dict,
@@ -343,23 +326,29 @@ class SubGroupLabelClser(BaseClassifier):
         clser_GenePhenoTp:dict,
         *args, **kwargs
     ):
-        super(SubGroupLabelClser, self).__init__(*args, **kwargs)
-        self.shared:SubGroupSharedExtractor = MODELS.build(shared)
-        self.clser_Immunization:SubGroupClsHead = MODELS.build(clser_Immunization)
-        self.clser_Histological:SubGroupClsHead = MODELS.build(clser_Histological)
-        self.clser_TumorNucleus:SubGroupClsHead = MODELS.build(clser_TumorNucleus)
-        self.clser_TumorStroma:SubGroupClsHead = MODELS.build(clser_TumorStroma)
-        self.clser_GenePhenoTp:SubGroupClsHead = MODELS.build(clser_GenePhenoTp)
+        super().__init__(*args, **kwargs)
+        self.enable_clam_feat = enable_clam_feat
+        if enable_clam_feat:
+            self.shared = MODELS.build(shared)
+        self.clser_Immunization = MODELS.build(clser_Immunization)
+        self.clser_Histological = MODELS.build(clser_Histological)
+        self.clser_TumorNucleus = MODELS.build(clser_TumorNucleus)
+        self.clser_TumorStroma = MODELS.build(clser_TumorStroma)
+        self.clser_GenePhenoTp = MODELS.build(clser_GenePhenoTp)
     
     def forward(self,
                 inputs: Tensor,
                 data_samples: list[DataSample],
                 mode: str = 'tensor'
     ):
-        feat = self.extract_feat(inputs)
+        if self.enable_clam_feat:
+            feat = self.extract_feat(inputs)
+        else:
+            feat = None
+        
         
         if mode == "tensor":
-            return self.extract_feat(inputs)
+            return feat
 
         if mode == "predict":
             with torch.inference_mode():
@@ -419,7 +408,7 @@ class SubGroupLabelClser(BaseClassifier):
         results = {}
 
         for sg in LABEL_GROUP.keys():
-            # 收集包含此子分组的样本索引
+            # 收集包含此子目标组的样本索引
             sg_indices = []
             for i, ds in enumerate(data_samples):
                 if sg in ds.gt_label.keys():
@@ -428,7 +417,7 @@ class SubGroupLabelClser(BaseClassifier):
                 continue
 
             # 批量收集
-            sub_feats = feat[sg_indices]
+            sub_feats = feat[sg_indices] if feat is not None else None
             sub_feat_annos = torch.stack([data_samples[i].feat_anno 
                                           for i in sg_indices])
             sub_labels = torch.stack([data_samples[i].gt_label[sg] 
@@ -480,7 +469,7 @@ class SubGroupLabelClser(BaseClassifier):
                 continue
 
             # 批量收集
-            sub_feats = feat[sg_indices]
+            sub_feats = feat[sg_indices] if feat is not None else None
             sub_feat_annos = torch.stack([data_samples[i].feat_anno 
                                           for i in sg_indices])
             
@@ -493,16 +482,75 @@ class SubGroupLabelClser(BaseClassifier):
         return results
 
 
-class SubGroupClsHead(BaseModule):
+class SharedExtractor1D(BaseBackbone):
+    def __init__(self, in_channels: int, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.in_channels = in_channels
+        self.proj = nn.ModuleList([
+            nn.Linear(in_channels, in_channels),
+            nn.GELU(),
+            nn.Linear(in_channels, in_channels),
+            nn.GELU(),
+            nn.Linear(in_channels, in_channels),
+        ])
+    
+    def forward(self, inputs: Tensor):
+        i = inputs
+        for layer in self.proj:
+            i = layer(i)
+        return i
+
+
+class SharedExtractor2D(BaseBackbone):
+    def __init__(self, 
+                 in_n_feats:int, 
+                 hidden_channels:list[int], 
+                 *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        assert self.is_perfect_square(in_n_feats)
+        
+        self.in_n_feats = in_n_feats
+        self.h_chans = hidden_channels
+        self.feat_2d_size = int(math.sqrt(in_n_feats))
+        
+        self.layer = nn.ModuleList()
+        for i in range(len(self.h_chans)-1):
+            group = [
+                nn.Conv2d(self.h_chans[i], self.h_chans[i+1], kernel_size=3),
+                nn.GELU()
+            ]
+            self.layer.extend(group)
+        
+        self.pool = nn.AdaptiveAvgPool2d((1, 1))
+
+    @staticmethod
+    def is_perfect_square(n):
+        if n < 0:
+            return False  # 负数没有实数平方根
+        root = math.sqrt(n)
+        return int(root + 0.5) ** 2 == n
+    
+    def forward(self, inputs: Tensor):
+        # [N, n_feats, C] -> [N, C, n_feats]
+        i = inputs.transpose(1, 2)
+        # [N, C, n_feats] -> [N, C, feat_2d_size, feat_2d_size]
+        i = i.reshape(*i.shape[:2], self.feat_2d_size, self.feat_2d_size)
+        for layer in self.layer:
+            i = layer(i)
+        i = self.pool(i).flatten(1)
+        return i  # [N, C]
+
+
+class SubGroupHead(BaseModule):
     def __init__(self, 
                  num_classes:tuple[int],
+                 in_clam_channels:int,
                  enable_clam_feat:bool=True,
                  enable_anno_feat:bool=True,
-                 in_clam_channels:int=1024,
                  in_anno_channels:int=69,
                  *args, **kwargs
     ):
-        super(SubGroupClsHead, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
         self.enable_clam_feat = enable_clam_feat
         self.enable_anno_feat = enable_anno_feat
         self.num_classes = num_classes
@@ -525,7 +573,7 @@ class SubGroupClsHead(BaseModule):
             ]))
         self.cri = nn.CrossEntropyLoss()
 
-    def forward(self, inputs:Tensor, anno:Tensor):
+    def forward(self, inputs:Tensor|None=None, anno:Tensor|None=None):
         """
         Args:
             inputs (Tensor): [N, C]
@@ -533,14 +581,18 @@ class SubGroupClsHead(BaseModule):
         Returns:
             pred_logits (list[Tensor]): [N, targets, classes]
         """
-        if inputs.ndim == anno.ndim == 1:
+        if inputs is not None and inputs.ndim == 1:
             inputs = inputs.unsqueeze(0)
+        if anno is not None and anno.ndim == 1:
             anno = anno.unsqueeze(0)
         if self.enable_clam_feat and self.enable_anno_feat:
+            assert inputs is not None and anno is not None
             feat = torch.cat((inputs, anno), dim=1)
         elif self.enable_clam_feat:
+            assert inputs is not None
             feat = inputs
         elif self.enable_anno_feat:
+            assert anno is not None
             feat = anno
         
         union_feat = feat
@@ -557,7 +609,7 @@ class SubGroupClsHead(BaseModule):
         
         return logits
 
-    def loss(self, inputs:Tensor, anno:Tensor, gt_label:Tensor):
+    def loss(self, inputs:Tensor|None, anno:Tensor|None, gt_label:Tensor):
         """
         Args:
             inputs (Tensor): [N, C]
@@ -568,9 +620,11 @@ class SubGroupClsHead(BaseModule):
             loss (Tensor): [1]
             acc  (Tensor): [1]
         """
-        if inputs.ndim == anno.ndim == 1:
+        if inputs is not None and inputs.ndim == 1:
             inputs = inputs.unsqueeze(0)
+        if anno is not None and anno.ndim == 1:
             anno = anno.unsqueeze(0)
+        if gt_label.ndim == 1:
             gt_label = gt_label.unsqueeze(0)
         
         # [num_targets, N, classes]
@@ -591,9 +645,10 @@ class SubGroupClsHead(BaseModule):
         return {"loss": torch.stack(losses).mean(), 
                 "acc": torch.stack(accs).mean()}
     
-    def predict(self, inputs:Tensor, anno:Tensor, *args, **kwargs):
-        if inputs.ndim == anno.ndim == 1:
+    def predict(self, inputs:Tensor|None, anno:Tensor|None, *args, **kwargs):
+        if inputs is not None and inputs.ndim == 1:
             inputs = inputs.unsqueeze(0)
+        if anno is not None and anno.ndim == 1:
             anno = anno.unsqueeze(0)
         
         # [num_targets, N, classes]

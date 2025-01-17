@@ -657,8 +657,9 @@ class mgam_TensorboardVisBackend(TensorboardVisBackend):
 
 
 class GeneralVisHook(Hook):
-    def __init__(self, interval:int, *args, **kwargs):
+    def __init__(self, interval:int, enable:bool=True, *args, **kwargs):
         self.interval = interval
+        self.enable = enable
         self._visualizer:Visualizer = Visualizer.get_current_instance()
         super().__init__(*args, **kwargs)
     
@@ -668,7 +669,7 @@ class GeneralVisHook(Hook):
                        data_batch: dict|tuple|list|None = None,
                        outputs: Sequence|None = None
     ) -> None:
-        if (outputs is not None) and (batch_idx % self.interval == 0):
+        if (outputs is not None) and (batch_idx % self.interval == 0) and self.enable:
             self._visualizer.add_datasample(outputs[0], runner.iter)
 
 

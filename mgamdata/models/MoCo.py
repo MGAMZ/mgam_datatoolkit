@@ -7,15 +7,43 @@ import torch
 from torch import nn, Tensor
 from torch.nn import PixelUnshuffle as PixelUnshuffle2D
 
+import mmengine
+from mmcv.transforms import BaseTransform
 from mmengine.model import BaseModule
-from mmengine.registry import MODELS
 from mmengine.dist import all_gather, get_rank
+from mmengine.evaluator.metric import BaseMetric
 from mmpretrain.structures import DataSample
 from mmpretrain.models.selfsup.mocov3 import CosineEMA
+from mmpretrain.registry import MODELS
+
 
 from ..mm.mmseg_Dev3D import PixelUnshuffle1D, PixelUnshuffle3D
-from .SelfSup import AutoEncoderSelfSup
+from .SelfSup import AutoEncoderSelfSup, VoxelData
 
+
+
+class MoCoDataSample(mmengine.structures.BaseDataElement):
+    def set_view1(self, value:Tensor):
+        self.set_field(value, 'view1', dtype=VoxelData)
+
+    def set_view2(self, value:Tensor):
+        self.set_field(value, 'view2', dtype=VoxelData)
+
+
+class PackMoCoInput(BaseTransform):
+    def transform(self, results:dict):
+        assert len(results['img']) == 2
+        inputs = [torch.from_numpy(view) for view in results['img']]
+        datasample = MoCoDataSample(
+            view_1=VoxelData(data=inputs[0]),
+            view_2=VoxelData(data=inputs[1]),
+            metainfo={"sample_file_path": results['img_path']},
+        )
+        
+        return {
+            "inputs": inputs,
+            "data_samples": datasample,
+        }
 
 
 class MoCoV3Head_WithAcc(BaseModule):
@@ -129,7 +157,10 @@ class MoCoV3(AutoEncoderSelfSup):
         return acc.unsqueeze(0)
 
     def loss(
-        self, inputs: list[Tensor], data_samples: list[DataSample], **kwargs
+        self, 
+        inputs: list[Tensor], 
+        data_samples: list[DataSample]|None = None, 
+        **kwargs
     ) -> dict[str, Tensor]:
         """The forward function in training.
 
@@ -142,18 +173,12 @@ class MoCoV3(AutoEncoderSelfSup):
             Dict[str, Tensor]: A dictionary of loss components.
         """
         assert isinstance(inputs, list)
-        self.backbone: BaseModule
-        self.neck: BaseModule
-        self.head: BaseModule
 
         q1 = self.whole_model_(inputs[0])[0]
         q2 = self.whole_model_(inputs[1])[0]
 
-        # compute key features, [N, C] each, no gradient
         with torch.no_grad():
-            # update momentum encoder
             self.momentum_encoder.update_parameters(self.whole_model_)
-
             k1 = self.momentum_encoder(inputs[0])[0]
             k2 = self.momentum_encoder(inputs[1])[0]
 
@@ -167,4 +192,3 @@ class MoCoV3(AutoEncoderSelfSup):
         acc = torch.cat(all_gather(acc)).mean()
         losses = dict(loss_MoCoV3=loss, acc_MoCoV3=acc)
         return losses
-

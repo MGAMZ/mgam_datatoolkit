@@ -7,6 +7,7 @@ import numpy as np
 import torch
 from torch import nn, Tensor
 
+from mmengine.model import BaseModule
 from mmengine.registry import MODELS
 from mmengine.utils.misc import is_list_of
 from mmengine.structures import BaseDataElement
@@ -43,6 +44,9 @@ class AutoEncoderSelfSup(BaseSelfSupervisor):
             *args,
             **kwargs,
         )
+        self.backbone: BaseModule
+        self.neck: BaseModule
+        self.head: BaseModule
 
     @property
     def whole_model_(self) -> nn.Module:

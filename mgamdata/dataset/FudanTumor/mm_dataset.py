@@ -256,7 +256,7 @@ class LoadPt(BaseTransform):
     def transform(self, results:dict):
         try:
             # [num_patches, channels]
-            results["pt"] = torch.load(results["pt_path"], weights_only=False)
+            results["pt"] = torch.load(results["pt_path"], weights_only=False).float()
         except Exception as e:
             raise RuntimeError(f"Failed to load feature from {results['pt_path']}") from e
         

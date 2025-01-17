@@ -173,7 +173,7 @@ class PreCropper3D:
         # Deprecat too small volume
         minimum_required_size = np.array(cropper.crop_size)
         if self.args.cut_edge is not None:
-            minimum_required_size += np.array(self.args.cut_edge)
+            minimum_required_size += np.array(self.args.cut_edge) * 2
         if np.any(np.array(image_array.shape) < minimum_required_size):
             tqdm.write(
                 Fore.YELLOW + \

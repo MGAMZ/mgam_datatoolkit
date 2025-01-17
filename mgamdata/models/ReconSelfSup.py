@@ -32,6 +32,7 @@ class PackReconInput(BaseTransform):
     def transform(self, results:dict):
         inputs = torch.from_numpy(results['img'])
         datasample = ReconDataSample(
+            erased_data=VoxelData(data=results['img']),
             gt_data=VoxelData(data=torch.from_numpy(results['ori_img'])),
             erase_mask=VoxelData(data=torch.from_numpy(results['erase_mask'])),
             metainfo={"sample_file_path": results['img_path'],}
@@ -84,7 +85,6 @@ class Reconstructor(AutoEncoderSelfSup):
     head: ReconHead
     
     def __init__(self, embed_dims:int, test_cfg:dict, *args, **kwargs):
-        assert test_cfg.get("mode") == "slide", "Only support slide mode."
         super().__init__(*args, **kwargs)
         self.embed_dims = embed_dims
         self.test_cfg = test_cfg
@@ -173,6 +173,11 @@ class Reconstructor(AutoEncoderSelfSup):
         preds /= count_mat
         return preds
 
+    def whole_inference(self, inputs: Tensor) -> Tensor:
+        recon_feat = self.whole_model_(inputs)[0]
+        reconed = self.head(recon_feat)
+        return reconed
+
     @torch.inference_mode()
     def predict(
         self, 
@@ -180,8 +185,10 @@ class Reconstructor(AutoEncoderSelfSup):
         data_samples: list[ReconDataSample]
     ) -> list[ReconDataSample]:
         
-        recon_feat = self.slide_inference(inputs)
-        reconed = self.head(recon_feat)
+        if self.test_cfg["mode"] == "whole":
+            reconed = self.whole_inference(inputs)
+        elif self.test_cfg["mode"] == "slide":
+            reconed = self.slide_inference(inputs)
         
         for i, sample in enumerate(data_samples):
             sample.set_pred_data(VoxelData(data=reconed[i]))
@@ -225,25 +232,30 @@ class ReconMetric(BaseMetric):
 class ReconViser(GeneralViser):
     @master_only
     def add_datasample(self, data_sample:ReconDataSample, step:int|None=None):
+        input_data = data_sample.erased_data.data.mean(axis=0)
         gt_data = data_sample.gt_data.data.detach().cpu().numpy().mean(axis=0)
         pred_data = data_sample.pred_data.data.detach().cpu().numpy().mean(axis=0)
         z_mid = gt_data.shape[0] // 2
         y_mid = gt_data.shape[1] // 2
         x_mid = gt_data.shape[2] // 2
-        fig, axes = plt.subplots(2, 3, figsize=(10, 6))
+        fig, axes = plt.subplots(3, 3, figsize=(10, 6))
         
-        axes[0,0].imshow(gt_data[z_mid, ...], cmap="gray")
-        axes[0,1].imshow(gt_data[:, y_mid, :], cmap="gray")
-        axes[0,2].imshow(gt_data[:, :, x_mid], cmap="gray")
-        axes[1,0].imshow(pred_data[z_mid, ...], cmap="gray")
-        axes[1,1].imshow(pred_data[:, y_mid, :], cmap="gray")
-        axes[1,2].imshow(pred_data[:, :, x_mid], cmap="gray")
+        axes[0,0].imshow(input_data[z_mid, ...], cmap="gray")
+        axes[0,1].imshow(input_data[:, y_mid, :], cmap="gray")
+        axes[0,2].imshow(input_data[:, :, x_mid], cmap="gray")
+        axes[1,0].imshow(gt_data[z_mid, ...], cmap="gray")
+        axes[1,1].imshow(gt_data[:, y_mid, :], cmap="gray")
+        axes[1,2].imshow(gt_data[:, :, x_mid], cmap="gray")
+        axes[2,0].imshow(pred_data[z_mid, ...], cmap="gray")
+        axes[2,1].imshow(pred_data[:, y_mid, :], cmap="gray")
+        axes[2,2].imshow(pred_data[:, :, x_mid], cmap="gray")
         
         axes[0,0].set_title("XY")
         axes[0,1].set_title("YZ")
         axes[0,2].set_title("XZ")
-        axes[0,0].set_ylabel("GT")
-        axes[1,0].set_ylabel("Pred")
+        axes[0,0].set_ylabel("Input")
+        axes[1,0].set_ylabel("GT")
+        axes[2,0].set_ylabel("Pred")
         
         plt.tight_layout()
         fig_array = self._plt2array(fig)
