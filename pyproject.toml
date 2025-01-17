@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mgamdata"
-version = "1.8.5.250117"
+version = "1.8.6.250117"
 requires-python = ">= 3.12"
 authors = [
   {name = "Yiqin Zhang", email = "312065559@qq.com"},
@@ -54,5 +54,8 @@ mmconc = "mgamdata.mm.TestConclude:main"
 precrop = "mgamdata.process.PreCrop_3D:SemiSupervisedMhaCropper3D.main_entry"
 itk_resample = "mgamdata.process.itk_dataset_resample:main"
 
-[tool.setuptools]
-packages = ["mgamdata"]
+[tool.setuptools.package-dir]
+mgamdata = "mgamdata"
+mmengine = "mmengine/mmengine"
+mmsegmentation = "mmsegmentation/mmseg"
+mmpretrain = "mmpretrain/mmpretrain"

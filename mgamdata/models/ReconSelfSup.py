@@ -4,7 +4,7 @@ from typing_extensions import Literal, Sequence
 
 import torch
 import matplotlib.pyplot as plt
-from torch import gt, nn, Tensor
+from torch import nn, Tensor
 
 from mmcv.transforms import BaseTransform
 from mmengine.evaluator.metric import BaseMetric
