@@ -1,0 +1,9 @@
+[submodule "mmengine"]
+	path = mmengine
+	url = git@gitee.com:MGAM/mmengine.git
+[submodule "mmsegmentation"]
+	path = mmsegmentation
+	url = git@gitee.com:MGAM/mmsegmentation.git
+[submodule "mmpretrain"]
+	path = mmpretrain
+	url = git@gitee.com:MGAM/mmpretrain.git
