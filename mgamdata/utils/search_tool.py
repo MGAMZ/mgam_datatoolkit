@@ -1,7 +1,6 @@
 import os
 
 
-
 # NOTE 输入的所有gt文件夹是有优先级顺序的，只会返回最先找到的gt路径
 def search_mha_file(source_folders:list[str]|str, seriesUID:str, target_type:str|None):
     if isinstance(source_folders, str):
@@ -15,7 +14,6 @@ def search_mha_file(source_folders:list[str]|str, seriesUID:str, target_type:str
                         return os.path.join(roots, file)
     else:
         print(f"Can't find {target_type} file, UID {seriesUID}, type: {target_type}.")
-
 
 
 def find_sample_pair(image_folder:str, label_folder:str):
