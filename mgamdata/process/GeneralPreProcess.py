@@ -4,6 +4,8 @@ import pdb
 from numbers import Number
 from collections.abc import Sequence
 from functools import partial
+import warnings
+from colorama import Fore, Style
 from typing_extensions import Literal
 
 import torch
@@ -449,10 +451,13 @@ class RandomCrop3D(BaseTransform):
         ignore_index (int): The label index to be ignored. Default: 255
     """
 
+    CROP_RETRY = 32
+
     def __init__(
         self,
         crop_size: int | tuple[int, int, int],
         cat_max_ratio: float = 1.0,
+        std_threshold: float|None = None,
         ignore_index: int = 255,
     ):
         super().__init__()
@@ -468,6 +473,7 @@ class RandomCrop3D(BaseTransform):
         assert min(crop_size) > 0
         self.crop_size = crop_size
         self.cat_max_ratio = cat_max_ratio
+        self.std_threshold = std_threshold
         self.ignore_index = ignore_index
 
     def crop_bbox(self, results: dict, failed_times: int = 0) -> tuple:
@@ -503,19 +509,38 @@ class RandomCrop3D(BaseTransform):
             return crop_z1, crop_z2, crop_y1, crop_y2, crop_x1, crop_x2
 
         img = results["img"]
-        crop_bbox = generate_crop_bbox(img)
-        if self.cat_max_ratio < 1.0:
-            # Repeat 10 times
-            for crop_time in range(10):
-                seg_temp = self.crop(results["gt_seg_map"], crop_bbox)
+        ann = results["gt_seg_map"]
+        
+        # crop the volume
+        for _ in range(self.CROP_RETRY):
+            crop_bbox = generate_crop_bbox(img)
+            ccm_check_ = None
+            std_check_ = None
+            
+            if self.cat_max_ratio is not None and self.cat_max_ratio < 1.0:
+                seg_temp = self.crop(ann, crop_bbox)
                 labels, cnt = np.unique(seg_temp, return_counts=True)
                 cnt = cnt[labels != self.ignore_index]
-                if (len(cnt) > 1) and (
-                    (np.max(cnt) / np.sum(cnt)) < self.cat_max_ratio
+                if (len(cnt) < 1) or (
+                    (np.max(cnt) / np.sum(cnt)) > self.cat_max_ratio
                 ):
-                    break
-                crop_bbox = generate_crop_bbox(img)
-
+                    ccm_check_ = np.max(cnt) / np.sum(cnt)
+                    continue
+            
+            if self.std_threshold is not None:
+                img_temp = self.crop(img, crop_bbox)
+                if img_temp.std() < self.std_threshold:
+                    std_check_ = img_temp.std()
+                    continue
+            
+            break
+        
+        else:
+            warnings.warn(Fore.YELLOW + \
+                          f"Cannot find a valid crop bbox after {self.CROP_RETRY+1} trials. " + \
+                          f"Last check result: ccm_check={ccm_check_}, std_check={std_check_}." + \
+                          Style.RESET_ALL)
+        
         return crop_bbox
 
     def crop(self, img: np.ndarray, crop_bbox: tuple) -> np.ndarray:

@@ -35,7 +35,7 @@ class TCGA_MetaParser:
 
 
 class TCGA_Formatter(StandardFileFormatter):
-    MINIMUM_DCM_SLICES = 64
+    MINIMUM_DCM_SLICES = 16
 
     def execute(self):
         meta_path = os.path.join(self.data_root, "metadata.csv")
@@ -53,9 +53,13 @@ class TCGA_Formatter(StandardFileFormatter):
     def tasks(self) -> list:
         task_list = []
         deprecated_dcm = 0
-        samples = self.TCGA_meta.get_all_filtered_sample(attr="SOP Class Name", val="CT Image Storage")
+        samples = self.TCGA_meta.get_all_filtered_sample(attr="Modality", val="CT")
         for seriesUID, dcms_folder in tqdm(samples, desc="Searching"):
-            dcms_folder = os.path.join(self.data_root, dcms_folder.replace("\\", "/"))
+            dcms_folder = os.path.join(self.data_root, str(dcms_folder).replace("\\", "/"))
+            if not os.path.exists(dcms_folder):
+                print(Fore.YELLOW, f"Folder not found: {dcms_folder}", Style.RESET_ALL)
+                continue
+            
             dcm_files = [os.path.join(dcms_folder, f) 
                          for f in os.listdir(dcms_folder) 
                          if f.lower().endswith(".dcm")]

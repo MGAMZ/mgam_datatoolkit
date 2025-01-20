@@ -33,6 +33,9 @@ class MoCoDataSample(mmengine.structures.BaseDataElement):
 
 
 class PackMoCoInput(BaseTransform):
+    def __init__(self, fp16:bool = False) -> None:
+        self.fp16 = fp16
+    
     def transform(self, results:dict):
         assert len(results['img']) == 2
         inputs = [torch.from_numpy(view) for view in results['img']]
@@ -41,7 +44,8 @@ class PackMoCoInput(BaseTransform):
             view_2=VoxelData(data=inputs[1]),
             metainfo={"sample_file_path": results['img_path']},
         )
-        
+        if self.fp16:
+            inputs = [inp.half() for inp in inputs]
         return {
             "inputs": inputs,
             "data_samples": datasample,

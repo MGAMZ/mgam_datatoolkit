@@ -82,6 +82,12 @@ class PreCropper3D:
             help="The edge size to cut off (delete) in each dimension. "
             "This is to avoid some datasets have invalid slice on the edge of a dcm series.",
         )
+        argparser.add_argument(
+            "--std-thr",
+            type=float,
+            default=None,
+            help="The threshold for std to determine whether a slice is valid.",
+        )
         self.args = argparser.parse_args()
 
     @abstractmethod
@@ -203,12 +209,14 @@ class PreCropper3D:
             "gt_seg_map": anno_array,
             "seg_fields": ["gt_seg_map"] if anno_array is not None else [],
         }
-
+        
+        # calculate the number of cropped patches
         num_cropped = (
             int(np.prod(np.array(image_array.shape) / np.array(cropper.crop_size)))
             * self.args.num_cropped_ratio
         )
 
+        # start cropping
         for i in range(num_cropped):
             # if no label, can't check cat_max_ratio
             if anno_itk_path is None:
@@ -325,6 +333,7 @@ class SemiSupervisedMhaCropper3D(PreCropper3D):
                         RandomCrop3D(
                             self.args.crop_size,
                             self.args.crop_cat_max,
+                            self.args.std_thr,
                             self.args.ignore_index,
                         ),
                         image_mha_path,
