@@ -8,7 +8,7 @@ import pandas as pd
 from mgamdata.dataset.base_convert import StandardFileFormatter
 
 
-class TCGA_MetaAnalyzer:
+class TCGA_MetaParser:
     META_SERIESUID_ATTR = "Series UID"
     META_PATH_ATTR = "File Location"
 
@@ -43,12 +43,12 @@ class TCGA_Formatter(StandardFileFormatter):
             "A standard TCGA dataset downloaded using NBIA Data Retriever "
             "must have a metadata.csv in the root directory"
         )
-        self.TCGA_meta = TCGA_MetaAnalyzer(meta_path)
+        self.TCGA_meta = TCGA_MetaParser(meta_path)
         return super().execute()
 
     def _series_id(self, image_path: str, label_path: str | None) -> str:
         folder_rel_path = os.path.relpath(image_path, os.path.dirname(image_path)).replace("\\", "/")
-        return self.TCGA_meta.get_series_uids(TCGA_MetaAnalyzer.META_PATH_ATTR, folder_rel_path)
+        return self.TCGA_meta.get_series_uids(TCGA_MetaParser.META_PATH_ATTR, folder_rel_path)
 
     def tasks(self) -> list:
         task_list = []

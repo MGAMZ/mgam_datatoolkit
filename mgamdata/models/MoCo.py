@@ -1,3 +1,4 @@
+from collections.abc import Callable
 import os
 import pdb
 from functools import partial
@@ -6,6 +7,7 @@ from typing_extensions import Literal
 import torch
 from torch import nn, Tensor
 from torch.nn import PixelUnshuffle as PixelUnshuffle2D
+from torch.utils.checkpoint import checkpoint as torch_ckpt
 
 import mmengine
 from mmcv.transforms import BaseTransform
@@ -134,9 +136,13 @@ class MoCoV3Head_WithAcc(BaseModule):
 
 
 class MoCoV3(AutoEncoderSelfSup):
-    def __init__(self, base_momentum: float = 0.01, *args, **kwargs) -> None:
+    def __init__(self, 
+                 base_momentum: float = 0.01, 
+                 backbone_checkpoint: bool = False,
+                 *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.base_momentum = base_momentum
+        self.backbone_checkpoint = backbone_checkpoint
         self.momentum_encoder = CosineEMA(
             self.whole_model_, momentum=base_momentum
         )
@@ -174,8 +180,12 @@ class MoCoV3(AutoEncoderSelfSup):
         """
         assert isinstance(inputs, list)
 
-        q1 = self.whole_model_(inputs[0])[0]
-        q2 = self.whole_model_(inputs[1])[0]
+        if self.backbone_checkpoint:
+            q1 = torch_ckpt(self.whole_model_, inputs[0])[0]    # type:ignore
+            q2 = torch_ckpt(self.whole_model_, inputs[1])[0]    # type:ignore
+        else:
+            q1 = self.whole_model_(inputs[0])[0]
+            q2 = self.whole_model_(inputs[1])[0]
 
         with torch.no_grad():
             self.momentum_encoder.update_parameters(self.whole_model_)
