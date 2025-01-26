@@ -1,4 +1,3 @@
-import os
 import pdb
 
 from torch import nn
@@ -81,4 +80,12 @@ class SegFormer3D_Decoder_MM(SegFormerDecoderHead, BaseModule):
             *args, **kwargs
         )
 
-
+    def forward(self, *args, **kwargs):
+        num_input_elements = len(args)
+        if num_input_elements == 1:
+            assert len(args[0]) == 4
+            return (super().forward(*args[0]), )
+        elif num_input_elements == 4:
+            return (super().forward(*args), )
+        else:
+            raise ValueError(f"Invalid number of inputs for SegFormer3D_Decoder_MM: {num_input_elements}")

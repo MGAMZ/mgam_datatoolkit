@@ -29,11 +29,14 @@ class AutoEncoderSelfSup(BaseSelfSupervisor):
         *args,
         **kwargs,
     ) -> None:
-        encoder_decoder = nn.Sequential(
-            MODELS.build(encoder),
-            MODELS.build(neck) if neck is not None else nn.Identity(),
-            MODELS.build(decoder) if decoder is not None else nn.Identity(),
-        )
+        
+        encoder_decoder = [MODELS.build(encoder)]
+        if neck is not None:
+            encoder_decoder.append(MODELS.build(neck))
+        if decoder is not None:
+            encoder_decoder.append(MODELS.build(decoder))
+        encoder_decoder = nn.Sequential(*encoder_decoder)
+
         super().__init__(
             backbone=encoder_decoder,
             neck=None,

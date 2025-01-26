@@ -435,7 +435,6 @@ class RelativeSimilaritySelfSup(AutoEncoderSelfSup):
                     - view_coords (Tensor): [sub-view, 3]
         """
         self.backbone: BaseModule
-        self.head: BaseModule
         
         # vv: volume view
         vv_main = inputs[:, 0]
@@ -1009,8 +1008,8 @@ class VecAngConstraint(BaseVolumeWisePredictor):
         super().__init__(dim=dim, *args, **kwargs)
         self.loss_weight = loss_weight
         num_channel_from_super = self.channels[-1]
-        self.proj_direction_vector = nn.Linear(num_channel_from_super, int(dim.replace('d','')))
-        nn.init.ones_(self.proj_direction_vector.weight)
+        self.proj_abs_loc = nn.Linear(num_channel_from_super, int(dim.replace('d','')))
+        nn.init.ones_(self.proj_abs_loc.weight)
         self.cri = nn.SmoothL1Loss()
         self.cycle_route_index = torch.from_numpy(self.generate_all_cycles(num_views))  # [num_views, num_paths, path_steps, 2]
 
@@ -1024,7 +1023,7 @@ class VecAngConstraint(BaseVolumeWisePredictor):
             vector gap sort loss (Tensor): [N, ]
         """
         nir = super().forward(nir)  # [N, num_views, C]
-        dire_vect = self.proj_direction_vector(nir)  # [N, num_views, coord-dim-length]
+        dire_vect = self.proj_abs_loc(nir)  # [N, num_views, coord-dim-length]
         dire_vect_diff = dire_vect.unsqueeze(2) - dire_vect.unsqueeze(1)  # (N, num_views, num_views, C)
         return dire_vect_diff  # (N, num_views, num_views, C)
 
@@ -1207,8 +1206,8 @@ class RelSim_Metric(BaseMetric):
 
 
 class RelSim_Viser(GeneralViser):
-    def __init__(self, coord_norm:list[int], *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, coord_norm:list[int], name:str|None=None, *args, **kwargs):
+        super().__init__(name, *args, **kwargs)
         self.coord_norm = np.array(coord_norm)
     
     def _vis_gap(self, gap: Tensor, gt_gap: Tensor):
@@ -1537,6 +1536,6 @@ class RelSim_Viser(GeneralViser):
         vec_vis_img = self._vis_vec(data_sample.vec_pred,
                                     data_sample.view_coords,
                                     data_sample.abs_gap)
-        self.add_image('PredImg/Gap', gap_vis_img, step)
+        self.add_image('PredImg/Gap_', gap_vis_img, step)
         self.add_image('PredImg/Similarity', sim_vis_img, step)
         self.add_image('PredImg/Vector', vec_vis_img, step)

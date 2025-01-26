@@ -60,8 +60,7 @@ class ReconHead(BaseModule):
         self.criterion = (
             nn.L1Loss(reduction="none")
             if loss_type == "L1"
-            else nn.MSELoss(reduction="none")
-        )
+            else nn.MSELoss(reduction="none"))
         self.conv_proj = eval(f"nn.Conv{dim}")(
             model_out_channels, recon_channels, 1
         )
@@ -71,11 +70,7 @@ class ReconHead(BaseModule):
         loss = self.criterion(proj, ori)
         if mask is not None:
             loss = loss * mask
-        
-        return {
-            f"loss_recon_{self.loss_type}": loss.mean(), 
-            "reconed": proj
-        }
+        return {f"loss_recon_{self.loss_type}": loss.mean()}
 
     def forward(self, recon:Tensor) -> Tensor:
         return self.conv_proj(recon)

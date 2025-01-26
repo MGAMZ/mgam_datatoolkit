@@ -629,6 +629,7 @@ class SegFormerDecoderHead(nn.Module):
         x = self.dropout(_c)
         x = self.linear_pred(x)
         x = self.upsample_volume(x)
+
         return x
 
 ###################################################################################
