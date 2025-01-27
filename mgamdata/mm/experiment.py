@@ -5,6 +5,8 @@ import glob
 import logging
 from colorama import Fore, Style
 
+import torch
+
 from mmengine.logging import print_log
 from mmengine.config import Config
 from mmengine.analysis import get_model_complexity_info
@@ -16,15 +18,18 @@ from mgamdata.mm.mmeng_PlugIn import DynamicRunnerSelection
 class experiment:
 
     def __init__(self, config, work_dir, test_work_dir, test_draw_interval,
-                 cfg_options, test_mode):
+                 cfg_options, test_mode, detect_anomaly):
         self.config = config
         self.work_dir = work_dir
         self.test_work_dir = test_work_dir
         self.test_draw_interval = test_draw_interval
         self.cfg_options = cfg_options
         self.test_mode = test_mode
-        self._prepare_basic_config()
-        self._main_process()
+        self.detect_anomaly = detect_anomaly
+        
+        with torch.autograd.set_detect_anomaly(detect_anomaly):
+            self._prepare_basic_config()
+            self._main_process()
 
     def _main_process(self):
         if self.IsTested(self.cfg):

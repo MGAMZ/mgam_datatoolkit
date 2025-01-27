@@ -1509,7 +1509,7 @@ class RelSim_Viser(GeneralViser):
         return img_arr
 
     @master_only
-    def add_datasample(self, data_sample:dict, step:int|None=None):
+    def add_datasample(self, data_sample:DataSample, step:int|None=None):
         """
         Args:
             data_sample: datasample dict
@@ -1536,6 +1536,8 @@ class RelSim_Viser(GeneralViser):
         vec_vis_img = self._vis_vec(data_sample.vec_pred,
                                     data_sample.view_coords,
                                     data_sample.abs_gap)
-        self.add_image('PredImg/Gap_', gap_vis_img, step)
-        self.add_image('PredImg/Similarity', sim_vis_img, step)
-        self.add_image('PredImg/Vector', vec_vis_img, step)
+        
+        img_name = os.path.basename(data_sample.img_path)
+        self.add_image(f'PredImg_{img_name}/Gap', gap_vis_img, step)
+        self.add_image(f'PredImg_{img_name}/Sim', sim_vis_img, step)
+        self.add_image(f'PredImg_{img_name}/Vec', vec_vis_img, step)

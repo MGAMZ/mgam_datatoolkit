@@ -1,5 +1,6 @@
 import pdb
 
+import torch
 from torch import nn
 from mmengine.model import BaseModule
 from .SegFormer3D import PatchEmbedding, TransformerBlock, cube_root, SegFormerDecoderHead
@@ -80,6 +81,10 @@ class SegFormer3D_Decoder_MM(SegFormerDecoderHead, BaseModule):
             *args, **kwargs
         )
 
+    # SegFormer3D doesn't support torch._dynamo.compile @ 2.5.0.
+    # The issue may be caused by inplace interpolate in Decoder forward.
+    # HACK Disable compile for now.
+    @torch.compiler.disable
     def forward(self, *args, **kwargs):
         num_input_elements = len(args)
         if num_input_elements == 1:

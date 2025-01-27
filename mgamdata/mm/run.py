@@ -26,6 +26,7 @@ class auto_runner:
         test_draw_interval,
         test,
         auto_retry,
+        detect_anomaly,
     ):
         self.exp_names = exp_names
         self.model_names = model_names
@@ -36,6 +37,7 @@ class auto_runner:
         self.test_draw_interval = test_draw_interval
         self.test = test
         self.auto_retry = auto_retry
+        self.detect_anomaly = detect_anomaly
 
     @classmethod
     def start_from_args(cls):
@@ -83,6 +85,9 @@ class auto_runner:
         parser.add_argument(
             "--auto-retry", type=int, default=0, help="单个实验出错自动重试次数"
         )
+        parser.add_argument(
+            "--detect-anomaly", default=False, action="store_true", help="PyTorch检测异常"
+        )
         args = parser.parse_args()
 
         return cls(
@@ -95,6 +100,7 @@ class auto_runner:
             test_draw_interval=args.test_draw_interval,
             test=args.test,
             auto_retry=args.auto_retry,
+            detect_anomaly=args.detect_anomaly,
         )
 
     def find_full_exp_name(self, exp_name):
@@ -161,6 +167,7 @@ class auto_runner:
                             self.test_draw_interval,
                             self.cfg_options,
                             self.test,
+                            self.detect_anomaly,
                         )
 
                     except KeyboardInterrupt:
