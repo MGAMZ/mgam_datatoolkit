@@ -27,11 +27,10 @@ def InjectVisualize(img, mask):
     if img.ndim == 3:
         img = img[np.newaxis, ...]
         mask = mask[np.newaxis, ...]
-    train_shape = img.shape
     
     fig, ax = plt.subplots(1, 2)
-    ax[0].imshow(img[0, train_shape[1]//5], cmap='gray')
-    ax[1].imshow(mask[0, train_shape[1]//5], cmap='gray')
+    ax[0].imshow(img[0, img.shape[1]//2], cmap='gray')
+    ax[1].imshow(mask[0, img.shape[1]//2], cmap='rainbow')
     os.makedirs('./InjectVisualize', exist_ok=True)
     fig.savefig(f'./InjectVisualize/visualize_{time()}.png')
 

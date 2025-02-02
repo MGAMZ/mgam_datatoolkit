@@ -6,6 +6,7 @@ from bdb import BdbQuit
 from os import path as osp
 from colorama import Fore, Style
 
+import torch
 from mmengine.config import DictAction
 
 from mgamdata.mm import MM_WORK_DIR_ROOT, MM_TEST_DIR_ROOT, MM_CONFIG_ROOT
@@ -193,9 +194,9 @@ class auto_runner:
                             )
 
                     else:
-                        print(
-                            Fore.GREEN + f"实验完成: {work_dir_path}" + Style.RESET_ALL
-                        )
+                        print(Fore.GREEN + f"实验完成: {work_dir_path}" + Style.RESET_ALL)
+                        if torch.distributed.is_initialized():
+                            torch.distributed.destroy_process_group()
                         break
 
 

@@ -36,6 +36,7 @@ class mgam_BaseSegDataset(BaseSegDataset):
     ) -> None:
         self.split = split
         self.debug = debug
+        assert debug in [True, False]
         self.dataset_name = (dataset_name 
                              if dataset_name is not None 
                              else self.__class__.__name__)
@@ -78,14 +79,18 @@ class mgam_BaseSegDataset(BaseSegDataset):
                 )
             )
 
-        print_log(
-            f"{self.dataset_name} dataset {self.split} split loaded {len(data_list)} samples.",
-            MMLogger.get_current_instance(),
-        )
-
         if self.debug:
+            print_log(
+                f"{self.dataset_name} dataset {self.split} split loaded {len(data_list)} samples, "
+                f"DEBUG MODE ENABLED, ONLY 16 SAMPLES ARE USED",
+                MMLogger.get_current_instance(),
+            )
             return data_list[:16]
         else:
+            print_log(
+                f"{self.dataset_name} dataset {self.split} split loaded {len(data_list)} samples.",
+                MMLogger.get_current_instance(),
+            )
             return data_list
 
 

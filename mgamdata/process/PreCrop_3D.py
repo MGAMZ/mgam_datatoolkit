@@ -10,6 +10,8 @@ from tqdm import tqdm
 
 import numpy as np
 import SimpleITK as sitk
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
 
 from ..process.GeneralPreProcess import RandomCrop3D
 from .NDArray import unsafe_astype
@@ -112,8 +114,9 @@ class PreCropper3D:
         cropper: RandomCrop3D
         os.makedirs(save_folder, exist_ok=True)
         existed_classes = {}
+        cropped_center = []
 
-        for crop_idx, (img_array, anno_array) in enumerate(
+        for crop_idx, (img_array, anno_array, crop_bbox) in enumerate(
             self.Crop3D(cropper, image_itk_path, anno_itk_path)
         ):
             save_path = os.path.join(save_folder, f"{crop_idx}.npz")
@@ -126,10 +129,64 @@ class PreCropper3D:
             existed_classes[os.path.basename(save_path)] = (
                 np.unique(anno_array).tolist() if anno_array is not None else None
             )
+            z1,z2,y1,y2,x1,x2 = crop_bbox
+            cropped_center.append(((z1+z2)/2, (y1+y2)/2, (x1+x2)/2))
 
         num_patches = len(existed_classes)
         anno_available = anno_itk_path is not None and num_patches > 0
 
+        def draw_cropped_center(cropped_center, save_folder):
+            # 创建画布和网格布局
+            fig = plt.figure(figsize=(15, 10))
+            gs = plt.GridSpec(3, 2)
+            
+            # 左侧3D散点图 - 占据整个左列
+            ax1 = fig.add_subplot(gs[:, 0], projection='3d')
+            z_coords = [center[0] for center in cropped_center]
+            y_coords = [center[1] for center in cropped_center]
+            x_coords = [center[2] for center in cropped_center]
+            
+            ax1.scatter(x_coords, y_coords, z_coords, c='b', marker='o')
+            ax1.set_xlabel('X axis')
+            ax1.set_ylabel('Y axis')
+            ax1.set_zlabel('Z axis')
+            ax1.set_title('3D Distribution')
+            
+            # 右上 - XY投影
+            ax2 = fig.add_subplot(gs[0, 1])
+            ax2.scatter(x_coords, y_coords, c='r', marker='o')
+            ax2.set_xlabel('X axis')
+            ax2.set_ylabel('Y axis')
+            ax2.set_title('XY Projection')
+            ax2.grid(True)
+            
+            # 右中 - YZ投影
+            ax3 = fig.add_subplot(gs[1, 1])
+            ax3.scatter(y_coords, z_coords, c='g', marker='o')
+            ax3.set_xlabel('Y axis')
+            ax3.set_ylabel('Z axis')
+            ax3.set_title('YZ Projection')
+            ax3.grid(True)
+            
+            # 右下 - XZ投影
+            ax4 = fig.add_subplot(gs[2, 1])
+            ax4.scatter(x_coords, z_coords, c='purple', marker='o')
+            ax4.set_xlabel('X axis')
+            ax4.set_ylabel('Z axis')
+            ax4.set_title('XZ Projection')
+            ax4.grid(True)
+            
+            # 调整布局
+            plt.tight_layout()
+            
+            # 保存图像
+            plt.savefig(
+                os.path.join(save_folder, "CroppedCenter.png"), 
+                dpi=300, 
+                bbox_inches='tight')
+            plt.close()
+
+        draw_cropped_center(cropped_center, save_folder)
         json.dump(
             {
                 "series_id": os.path.basename(save_folder),
@@ -137,6 +194,7 @@ class PreCropper3D:
                 "num_patches": num_patches,
                 "anno_available": anno_available,
                 "class_within_patch": existed_classes,
+                "cropped_center": cropped_center,
             },
             open(
                 os.path.join(save_folder, "SeriesMeta.json"),
@@ -150,11 +208,13 @@ class PreCropper3D:
             )
             for sample_basepath in existed_classes.keys()
         ]
+        
         return {
             os.path.basename(save_folder): {
                 "num_patches": num_patches,
                 "anno_available": anno_available,
                 "sample_paths": path_index,
+                "cropped_center": cropped_center,
             }
         }
 
@@ -223,7 +283,9 @@ class PreCropper3D:
                 cropper.cat_max_ratio = 1.0
 
             crop_bbox = cropper.crop_bbox(data)
-
+            if crop_bbox is None:
+                return
+            
             if anno_itk_path is not None:
                 cropped_ann: np.ndarray = cropper.crop(anno_array, crop_bbox)
                 cropped_ann = unsafe_astype(cropped_ann, np.uint8)
@@ -231,16 +293,16 @@ class PreCropper3D:
                 if self.all_index_ensured(cropped_ann):
                     cropped_img: np.ndarray = cropper.crop(image_array, crop_bbox)
                     cropped_img = unsafe_astype(cropped_img, np.int16)
-                    yield cropped_img, cropped_ann
+                    yield cropped_img, cropped_ann, crop_bbox
                 else:
                     tqdm.write(
                         f"deprecated due to failing to ensure index: {anno_itk_path} | crop_idx: {i}"
                     )
 
             else:
-                cropped_image_array: np.ndarray = cropper.crop(image_array, crop_bbox)
-                cropped_image_array = unsafe_astype(cropped_image_array, np.int16)
-                yield cropped_image_array, None
+                cropped_img: np.ndarray = cropper.crop(image_array, crop_bbox)
+                cropped_img = unsafe_astype(cropped_img, np.int16)
+                yield cropped_img, None, crop_bbox
 
     def main(self):
         self.arg_parse()

@@ -628,6 +628,7 @@ class DiceLoss_3D(DiceLoss):
         if self.ignore_1st_index:
             pred = pred[:, 1:, ...].contiguous()
             target = target[:, 1:, ...].contiguous()
+        
         return super().forward(pred, target, *args, **kwargs)
 
     def forward(self, pred: Tensor, target: Tensor, *args, **kwargs):
@@ -638,12 +639,15 @@ class DiceLoss_3D(DiceLoss):
 
         if self.batch_z is not None:
             batch_loss = []
+            
             for z in range(0, pred.shape[-3], self.batch_z):
-                pred_z = pred[..., z : z + self.batch_z, :, :]
-                target_z = target[..., z : z + self.batch_z, :, :]
-                batch_loss.append(
-                    self.forward_one_patch(pred_z, target_z, *args, **kwargs)
+                batch_z_loss = self.forward_one_patch(
+                    pred=pred[..., z : z + self.batch_z, :, :], 
+                    target=target[..., z : z + self.batch_z, :, :], 
+                    *args, **kwargs
                 )
+                batch_loss.append(batch_z_loss)
+            
             return torch.stack(batch_loss).mean()
 
         else:

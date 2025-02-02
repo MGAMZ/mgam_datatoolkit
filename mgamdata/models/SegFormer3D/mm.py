@@ -4,7 +4,7 @@ import torch
 from torch import nn
 from mmengine.model import BaseModule
 from .SegFormer3D import PatchEmbedding, TransformerBlock, cube_root, SegFormerDecoderHead
-
+from ...mm.mmseg_Dev3D import BaseDecodeHead_3D
 
 class SegFormer3D_Encoder_MM(BaseModule):
     def __init__(
@@ -18,8 +18,11 @@ class SegFormer3D_Encoder_MM(BaseModule):
         mlp_ratios: list = [2, 2, 2, 2],
         num_heads: list = [1, 2, 5, 8],
         depths: list = [2, 2, 2, 2],
+        freeze: bool = False,
+        *args, **kwargs,
     ):
-        super().__init__()
+        super().__init__(*args, **kwargs)
+        self.freeze = freeze
 
         # 替换为 3D PatchEmbedding (假设此类内部使用 nn.Conv3d)
         self.embeds = nn.ModuleList([
@@ -52,6 +55,10 @@ class SegFormer3D_Encoder_MM(BaseModule):
         self.blocks = nn.ModuleList(self.blocks)
         self.norms = nn.ModuleList(self.norms)
 
+        if self.freeze:
+            self.eval()
+            self.requires_grad_(False)
+
     def forward(self, x):
         out = []
         for stage_idx in range(4):
@@ -68,17 +75,25 @@ class SegFormer3D_Encoder_MM(BaseModule):
         return out
 
 
-class SegFormer3D_Decoder_MM(SegFormerDecoderHead, BaseModule):
+class SegFormer3D_Decoder_MM(BaseDecodeHead_3D):
     def __init__(
         self, 
+        num_classes=3, 
         embed_dims:list[int]=[64, 128, 320, 512],
         head_embed_dims:int=256,
         *args, **kwargs
     ):
         super().__init__(
+            in_channels=embed_dims,
+            channels=head_embed_dims,
+            num_classes=num_classes,
+            input_transform="multiple_select",
+            in_index=[0, 1, 2, 3],
+            *args, **kwargs)
+        self.segformer = SegFormerDecoderHead(
             input_feature_dims=embed_dims[::-1],
             decoder_head_embedding_dim=head_embed_dims,
-            *args, **kwargs
+            num_classes=num_classes,
         )
 
     # SegFormer3D doesn't support torch._dynamo.compile @ 2.5.0.
@@ -88,9 +103,10 @@ class SegFormer3D_Decoder_MM(SegFormerDecoderHead, BaseModule):
     def forward(self, *args, **kwargs):
         num_input_elements = len(args)
         if num_input_elements == 1:
-            assert len(args[0]) == 4
-            return (super().forward(*args[0]), )
+            assert len(args[0]) == 4, f"Invalid number of inputs for SegFormer3D_Decoder_MM: {len(args[0])}"
+            segformer_out = self.segformer.forward(*args[0])
         elif num_input_elements == 4:
-            return (super().forward(*args), )
+            segformer_out = self.segformer.forward(*args)
         else:
             raise ValueError(f"Invalid number of inputs for SegFormer3D_Decoder_MM: {num_input_elements}")
+        return (segformer_out, )

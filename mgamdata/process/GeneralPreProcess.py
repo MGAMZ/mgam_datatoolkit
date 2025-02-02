@@ -476,7 +476,7 @@ class RandomCrop3D(BaseTransform):
         self.std_threshold = std_threshold
         self.ignore_index = ignore_index
 
-    def crop_bbox(self, results: dict, failed_times: int = 0) -> tuple:
+    def crop_bbox(self, results: dict) -> tuple:
         """get a crop bounding box.
 
         Args:
@@ -517,6 +517,7 @@ class RandomCrop3D(BaseTransform):
             ccm_check_ = None
             std_check_ = None
             
+            # crop check: category max ratio
             if self.cat_max_ratio is not None and self.cat_max_ratio < 1.0:
                 seg_temp = self.crop(ann, crop_bbox)
                 labels, cnt = np.unique(seg_temp, return_counts=True)
@@ -527,21 +528,24 @@ class RandomCrop3D(BaseTransform):
                     ccm_check_ = np.max(cnt) / np.sum(cnt)
                     continue
             
+            # crop check: std threshold
             if self.std_threshold is not None:
                 img_temp = self.crop(img, crop_bbox)
                 if img_temp.std() < self.std_threshold:
                     std_check_ = img_temp.std()
                     continue
             
-            break
+            # when pass all check
+            return crop_bbox
         
         else:
             warnings.warn(Fore.YELLOW + \
                           f"Cannot find a valid crop bbox after {self.CROP_RETRY+1} trials. " + \
                           f"Last check result: ccm_check={ccm_check_}, std_check={std_check_}." + \
                           Style.RESET_ALL)
+            return None
         
-        return crop_bbox
+        
 
     def crop(self, img: np.ndarray, crop_bbox: tuple) -> np.ndarray:
         """Crop from ``img``

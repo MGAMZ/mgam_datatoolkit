@@ -79,9 +79,9 @@ class ReconHead(BaseModule):
 class Reconstructor(AutoEncoderSelfSup):
     head: ReconHead
     
-    def __init__(self, embed_dims:int, test_cfg:dict, *args, **kwargs):
+    def __init__(self, recon_channels:int, test_cfg:dict, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.embed_dims = embed_dims
+        self.recon_channels = recon_channels
         self.test_cfg = test_cfg
     
     def _stack_datasamples(self, data_samples: list[ReconDataSample]) -> tuple[Tensor, Tensor]:
@@ -124,12 +124,11 @@ class Reconstructor(AutoEncoderSelfSup):
         z_stride, y_stride, x_stride = self.test_cfg.stride  # type: ignore
         z_crop, y_crop, x_crop = self.test_cfg.crop_size  # type: ignore
         batch_size, _, z_img, y_img, x_img = inputs.size()
-        out_channels = self.embed_dims
         z_grids = max(z_img - z_crop + z_stride - 1, 0) // z_stride + 1
         y_grids = max(y_img - y_crop + y_stride - 1, 0) // y_stride + 1
         x_grids = max(x_img - x_crop + x_stride - 1, 0) // x_stride + 1
         preds = torch.zeros(
-            size=(batch_size, out_channels, z_img, y_img, x_img),
+            size=(batch_size, self.recon_channels, z_img, y_img, x_img),
             dtype=torch.float16,
             device=accu_device,
             pin_memory=False,
