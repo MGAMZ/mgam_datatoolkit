@@ -9,7 +9,6 @@ import torch
 
 from mmengine.logging import print_log
 from mmengine.config import Config
-from mmengine.analysis import get_model_complexity_info
 from mmengine.runner.checkpoint import find_latest_checkpoint
 
 from mgamdata.mm.mmeng_PlugIn import DynamicRunnerSelection
