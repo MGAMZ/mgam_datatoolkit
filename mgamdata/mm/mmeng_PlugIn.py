@@ -657,11 +657,11 @@ class mgam_TensorboardVisBackend(TensorboardVisBackend):
 
 
 class GeneralVisHook(Hook):
-    def __init__(self, interval:int, enable:bool=True, *args, **kwargs):
+    def __init__(self, interval:int, enable:bool=True):
         self.interval = interval
         self.enable = enable
         self._visualizer:Visualizer = Visualizer.get_current_instance()
-        super().__init__(*args, **kwargs)
+        super().__init__()
     
     def after_val_iter(self,
                        runner:Runner,

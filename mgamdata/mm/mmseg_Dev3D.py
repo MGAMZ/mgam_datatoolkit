@@ -18,10 +18,11 @@ from mmseg.datasets.transforms import PackSegInputs
 from mmseg.models.data_preprocessor import SegDataPreProcessor
 from mmseg.models.segmentors.encoder_decoder import EncoderDecoder
 from mmseg.models.decode_heads.decode_head import BaseDecodeHead
-from mmseg.models.losses.dice_loss import DiceLoss
 from mmseg.models.losses.accuracy import accuracy
 from mmseg.visualization.local_visualizer import SegLocalVisualizer
 from mmseg.structures.seg_data_sample import SegDataSample, PixelData
+
+from ..criterions.segment import DiceLoss_3D
 
 
 
@@ -425,6 +426,7 @@ class BaseDecodeHead_3D(BaseDecodeHead):
         self,
         loss_gt_key: str = "gt_sem_seg",
         deep_supervision_weight_truth: int = 2,
+        loss_decode: dict = dict(type=DiceLoss_3D),
         *args,
         **kwargs,
     ):
@@ -433,7 +435,7 @@ class BaseDecodeHead_3D(BaseDecodeHead):
             "gt_sem_seg_one_hot",
         ], f"loss_gt_key currently supports ['gt_sem_seg', 'gt_sem_seg_one_hot'], \
               but got {loss_gt_key}"
-        super().__init__(*args, **kwargs)
+        super().__init__(loss_decode=loss_decode, *args, **kwargs)
         self.loss_gt_key = loss_gt_key
         self.deep_supervision_weight_truth = deep_supervision_weight_truth
         self.conv_seg = torch.nn.Conv3d(self.channels, self.out_channels, kernel_size=1)
@@ -586,72 +588,6 @@ class BaseDecodeHead_3D(BaseDecodeHead):
             data_sample.get(gt_key).data for data_sample in batch_data_samples
         ]
         return torch.stack(gt_semantic_segs, dim=0)
-
-
-class DiceLoss_3D(DiceLoss):
-    def __init__(
-        self,
-        ignore_1st_index: bool = False,
-        batch_z: int | None = None,
-        *args,
-        **kwargs,
-    ):
-        super().__init__(*args, **kwargs)
-        self.ignore_1st_index = ignore_1st_index
-        self.batch_z = batch_z
-
-    def _expand_onehot_labels_dice_3D(self, pred: Tensor, target: Tensor) -> Tensor:
-        """Expand onehot labels to match the size of prediction for 3D Volumes.
-
-        Args:
-            pred (torch.Tensor): The prediction, has a shape (N, num_class, D, H, W).
-            target (torch.Tensor): The learning label of the prediction,
-                has a shape (N, D, H, W).
-
-        Returns:
-            torch.Tensor: The target after one-hot encoding,
-                has a shape (N, num_class, D, H, W).
-        """
-        num_classes = pred.shape[1]
-        one_hot_target = torch.clamp(target, min=0, max=num_classes)
-        one_hot_target = torch.nn.functional.one_hot(
-            one_hot_target.to(torch.int64), num_classes + 1
-        )
-        one_hot_target = one_hot_target[..., :num_classes].permute(0, 4, 1, 2, 3)
-        return one_hot_target
-
-    def forward_one_patch(self, pred: Tensor, target: Tensor, *args, **kwargs):
-        if pred.shape != target.shape:
-            target = self._expand_onehot_labels_dice_3D(pred, target)
-            assert pred.shape == target.shape
-        # pred, target: [N, C, Z, Y, X]
-        if self.ignore_1st_index:
-            pred = pred[:, 1:, ...].contiguous()
-            target = target[:, 1:, ...].contiguous()
-        
-        return super().forward(pred, target, *args, **kwargs)
-
-    def forward(self, pred: Tensor, target: Tensor, *args, **kwargs):
-        # pred: [N, C, Z, Y, X]
-        assert (
-            pred.shape[-3:] == target.shape[-3:]
-        ), f"The [Z, Y, X] of pred {pred.shape} and target {target.shape} must be the same."
-
-        if self.batch_z is not None:
-            batch_loss = []
-            
-            for z in range(0, pred.shape[-3], self.batch_z):
-                batch_z_loss = self.forward_one_patch(
-                    pred=pred[..., z : z + self.batch_z, :, :], 
-                    target=target[..., z : z + self.batch_z, :, :], 
-                    *args, **kwargs
-                )
-                batch_loss.append(batch_z_loss)
-            
-            return torch.stack(batch_loss).mean()
-
-        else:
-            return self.forward_one_patch(pred, target, *args, **kwargs)
 
 
 class Seg3DVisualizationHook(SegVisualizationHook):

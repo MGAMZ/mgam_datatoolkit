@@ -1,4 +1,5 @@
 import pdb
+from warnings import warn
 
 import torch
 from torch import nn
@@ -24,7 +25,6 @@ class SegFormer3D_Encoder_MM(BaseModule):
         super().__init__(*args, **kwargs)
         self.freeze = freeze
 
-        # 替换为 3D PatchEmbedding (假设此类内部使用 nn.Conv3d)
         self.embeds = nn.ModuleList([
             PatchEmbedding(
                 in_channel=(in_channels if i == 0 else embed_dims[i-1]),
@@ -78,14 +78,18 @@ class SegFormer3D_Encoder_MM(BaseModule):
 class SegFormer3D_Decoder_MM(BaseDecodeHead_3D):
     def __init__(
         self, 
-        num_classes=3, 
+        num_classes:int|None=None, 
         embed_dims:list[int]=[64, 128, 320, 512],
         head_embed_dims:int=256,
         *args, **kwargs
     ):
+        if num_classes is None:
+            warn("num_classes is not provided, set to head_embed_dims by default.")
+            num_classes = head_embed_dims
+            
         super().__init__(
-            in_channels=embed_dims,
-            channels=head_embed_dims,
+            in_channels=embed_dims, 
+            channels=head_embed_dims, 
             num_classes=num_classes,
             input_transform="multiple_select",
             in_index=[0, 1, 2, 3],

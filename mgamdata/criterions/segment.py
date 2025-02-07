@@ -3,12 +3,11 @@ from typing import Union
 
 import torch
 import numpy as np
+from torch import Tensor
 from torch.nn.functional import interpolate
-from scipy.spatial.distance import directed_hausdorff
 from monai.metrics import compute_hausdorff_distance
 
-from mmseg.models.losses.dice_loss import dice_loss
-from mmseg.models.losses import accuracy
+from mmseg.models.losses.dice_loss import dice_loss, DiceLoss
 
 from ..utils.DeviceSide import get_max_vram_gpu_id
 
@@ -64,7 +63,7 @@ def accuracy_array(y_pred:np.ndarray, y_true:np.ndarray):
 
 
 
-def accuracy_tensor(y_pred:torch.Tensor, y_true:torch.Tensor):
+def accuracy_tensor(y_pred:Tensor, y_true:Tensor):
     y_pred, y_true = AlignDimension(y_pred, y_true)
     correct = (y_pred == y_true).sum().item()
     total = y_true.numel()
@@ -120,6 +119,72 @@ def evaluation_hausdorff_distance_3D(gt,
     
     torch.cuda.empty_cache()
     return value
+
+
+class DiceLoss_3D(DiceLoss):
+    def __init__(
+        self,
+        ignore_1st_index: bool = False,
+        batch_z: int | None = None,
+        *args,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.ignore_1st_index = ignore_1st_index
+        self.batch_z = batch_z
+
+    def _expand_onehot_labels_dice_3D(self, pred: Tensor, target: Tensor) -> Tensor:
+        """Expand onehot labels to match the size of prediction for 3D Volumes.
+
+        Args:
+            pred (Tensor): The prediction, has a shape (N, num_class, D, H, W).
+            target (Tensor): The learning label of the prediction,
+                has a shape (N, D, H, W).
+
+        Returns:
+            Tensor: The target after one-hot encoding,
+                has a shape (N, num_class, D, H, W).
+        """
+        num_classes = pred.shape[1]
+        one_hot_target = torch.clamp(target, min=0, max=num_classes)
+        one_hot_target = torch.nn.functional.one_hot(
+            one_hot_target.to(torch.int64), num_classes + 1
+        )
+        one_hot_target = one_hot_target[..., :num_classes].permute(0, 4, 1, 2, 3)
+        return one_hot_target
+
+    def forward_one_patch(self, pred: Tensor, target: Tensor, *args, **kwargs):
+        if pred.shape != target.shape:
+            target = self._expand_onehot_labels_dice_3D(pred, target)
+            assert pred.shape == target.shape
+        # pred, target: [N, C, Z, Y, X]
+        if self.ignore_1st_index:
+            pred = pred[:, 1:, ...].contiguous()
+            target = target[:, 1:, ...].contiguous()
+        
+        return super().forward(pred, target, *args, **kwargs)
+
+    def forward(self, pred: Tensor, target: Tensor, *args, **kwargs):
+        # pred: [N, C, Z, Y, X]
+        assert (
+            pred.shape[-3:] == target.shape[-3:]
+        ), f"The [Z, Y, X] of pred {pred.shape} and target {target.shape} must be the same."
+
+        if self.batch_z is not None:
+            batch_loss = []
+            
+            for z in range(0, pred.shape[-3], self.batch_z):
+                batch_z_loss = self.forward_one_patch(
+                    pred=pred[..., z : z + self.batch_z, :, :], 
+                    target=target[..., z : z + self.batch_z, :, :], 
+                    *args, **kwargs
+                )
+                batch_loss.append(batch_z_loss)
+            
+            return torch.stack(batch_loss).mean()
+
+        else:
+            return self.forward_one_patch(pred, target, *args, **kwargs)
 
 
 
