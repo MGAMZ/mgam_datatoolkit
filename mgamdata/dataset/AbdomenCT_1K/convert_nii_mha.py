@@ -7,5 +7,5 @@ class AbdomenCT1K_formatter(format_from_nnUNet):
         return os.path.basename(label_path).replace(".nii.gz", "").replace("Case_", "")
     
 if __name__ == "__main__":
-    formatter = AbdomenCT1K_formatter.start_from_argparse()
+    formatter = AbdomenCT1K_formatter()
     formatter.execute()

@@ -6,6 +6,7 @@ import json
 import multiprocessing as mp
 from abc import abstractmethod
 from collections.abc import Sequence
+from re import A
 from textwrap import indent
 from tqdm import tqdm
 
@@ -21,19 +22,8 @@ from ..io.dcm_toolkit import read_dcm_as_sitk
 
 
 class StandardFileFormatter:
-    def __init__(
-        self,
-        data_root: str,
-        dest_root: str,
-        spacing: Sequence[float | int] | None = None,
-        size: Sequence[int] | None = None,
-        use_mp: bool = False,
-    ) -> None:
-        self.data_root = data_root
-        self.dest_root = dest_root
-        self.spacing = spacing
-        self.size = size
-        self.use_mp = use_mp
+    def __init__(self) -> None:
+        self.args = self.argparse().parse_args()
 
     @abstractmethod
     def tasks(self) -> list:
@@ -46,8 +36,8 @@ class StandardFileFormatter:
     def convert_one_sample(self, args):
         image_path, label_path, dest_folder, series_id, spacing, size = args
         convertion_log = {
-            "img": os.path.relpath(image_path, self.data_root) if image_path is not None else None,
-            "ann": os.path.relpath(label_path, self.data_root) if label_path is not None else None,
+            "img": os.path.relpath(image_path, self.args.data_root) if image_path is not None else None,
+            "ann": os.path.relpath(label_path, self.args.data_root) if label_path is not None else None,
             "id": series_id,
         }
 
@@ -114,7 +104,10 @@ class StandardFileFormatter:
     
     @staticmethod
     def convert_one_sample_nii(image_path, label_path):
-        input_image_mha = nii_to_sitk(image_path, "image")
+        if image_path is not None and os.path.exists(image_path):
+            input_image_mha = nii_to_sitk(image_path, "image")
+        else:
+            input_image_mha = None
         if label_path is not None and os.path.exists(label_path):
             input_label_mha = nii_to_sitk(label_path, "label")
         else:
@@ -125,7 +118,7 @@ class StandardFileFormatter:
         task_list = self.tasks()
         per_sample_log = []
 
-        if self.use_mp:
+        if self.args.use_mp:
             with mp.Pool() as pool:
                 for result in tqdm(
                     pool.imap_unordered(self.convert_one_sample, task_list),
@@ -144,41 +137,29 @@ class StandardFileFormatter:
         
         convertion_log = {
             "date": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "data_root": self.data_root, 
-            "dest_root": self.dest_root,
-            "spacing": self.spacing,
-            "size": self.size,
+            "data_root": self.args.data_root, 
+            "dest_root": self.args.dest_root,
+            "spacing": self.args.spacing,
+            "size": self.args.size,
             "per_sample_log": per_sample_log,
         }
-        json.dump(convertion_log, open(os.path.join(self.dest_root, "convertion_log.json"), "w"), indent=4)
-        print(f"Converted {len(per_sample_log)} series. Saved to {self.dest_root}.")
+        json.dump(convertion_log, open(os.path.join(self.args.dest_root, "convertion_log.json"), "w"), indent=4)
+        print(f"Converted {len(per_sample_log)} series. Saved to {self.args.dest_root}.")
 
-    @classmethod
-    def start_from_argparse(cls):
-        parser = argparse.ArgumentParser(
-            description="Convert all NIfTI files in a directory to MHA format."
-        )
+    def argparse(self) -> argparse.ArgumentParser:
+        parser = argparse.ArgumentParser(description="Convert all NIfTI files in a directory to MHA format.")
         parser.add_argument("input_dir", type=str, help="Containing NIfTI files.")
         parser.add_argument("output_dir", type=str, help="Save MHA files.")
         parser.add_argument("--mp", action="store_true", help="Use multiprocessing.")
-        parser.add_argument(
-            "--spacing",
-            type=float,
-            nargs=3,
-            default=None,
-            help="Resample to this spacing.",
-        )
-        parser.add_argument(
-            "--size", type=int, nargs=3, default=None, help="Crop to this size."
-        )
-        args = parser.parse_args()
-        return cls(args.input_dir, args.output_dir, args.spacing, args.size, args.mp)
+        parser.add_argument("--spacing", type=float, nargs=3, default=None, help="Resample to this spacing.")
+        parser.add_argument("--size", type=int, nargs=3, default=None, help="Crop to this size.")
+        return parser
 
 
 class format_from_standard(StandardFileFormatter):
     def tasks(self) -> list:
         task_list = []
-        image_folder = os.path.join(self.data_root, "image")
+        image_folder = os.path.join(self.args.data_root, "image")
 
         for series_name in os.listdir(image_folder):
             if series_name.endswith(".nii.gz"):
@@ -189,10 +170,10 @@ class format_from_standard(StandardFileFormatter):
                     (
                         image_path,
                         label_path,
-                        self.dest_root,
+                        self.args.dest_root,
                         series_id,
-                        self.spacing,
-                        self.size,
+                        self.args.spacing,
+                        self.args.size,
                     )
                 )
         return task_list
@@ -201,7 +182,7 @@ class format_from_standard(StandardFileFormatter):
 class format_from_nnUNet(StandardFileFormatter):
     def tasks(self) -> list:
         task_list = []
-        image_folder = os.path.join(self.data_root, "image")
+        image_folder = os.path.join(self.args.data_root, "image")
 
         for series_name in os.listdir(image_folder):
             if series_name.endswith(".nii.gz"):
@@ -214,10 +195,10 @@ class format_from_nnUNet(StandardFileFormatter):
                     (
                         image_path,
                         label_path,
-                        self.dest_root,
+                        self.args.dest_root,
                         series_id,
-                        self.spacing,
-                        self.size,
+                        self.args.spacing,
+                        self.args.size,
                     )
                 )
         return task_list
@@ -234,7 +215,7 @@ class format_from_unsup_datasets(StandardFileFormatter):
         task_list = []
         id = 0
         deprecated_dcm = 0
-        for root, dirs, files in tqdm(os.walk(self.data_root), desc="Searching"):
+        for root, dirs, files in tqdm(os.walk(self.args.data_root), desc="Searching"):
             dcm_files = [f for f in files if f.lower().endswith('.dcm')]
             nii_files = [f for f in files if f.lower().endswith('.nii') or f.lower().endswith('.nii.gz')]
 
@@ -247,10 +228,10 @@ class format_from_unsup_datasets(StandardFileFormatter):
                     (
                         first_dcm,
                         label_path,
-                        self.dest_root,
+                        self.args.dest_root,
                         id,
-                        self.spacing,
-                        self.size,
+                        self.args.spacing,
+                        self.args.size,
                     )
                 )
                 id += 1
@@ -266,10 +247,10 @@ class format_from_unsup_datasets(StandardFileFormatter):
                     (
                         nii_path,
                         label_path,
-                        self.dest_root,
+                        self.args.dest_root,
                         id,
-                        self.spacing,
-                        self.size,
+                        self.args.spacing,
+                        self.args.size,
                     )
                 )
                 id += 1

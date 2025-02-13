@@ -55,7 +55,7 @@ class TCGA_Formatter(StandardFileFormatter):
         deprecated_dcm = 0
         samples = self.TCGA_meta.get_all_filtered_sample(attr="Modality", val="CT")
         for seriesUID, dcms_folder in tqdm(samples, desc="Searching"):
-            dcms_folder = os.path.join(self.data_root, str(dcms_folder).replace("\\", "/"))
+            dcms_folder = os.path.join(self.args.data_root, str(dcms_folder).replace("\\", "/"))
             if not os.path.exists(dcms_folder):
                 print(Fore.YELLOW, f"Folder not found: {dcms_folder}", Style.RESET_ALL)
                 continue
@@ -72,10 +72,10 @@ class TCGA_Formatter(StandardFileFormatter):
                     (
                         dcm_files[0], # Need only one sample, the loader will automatically determine all slices.
                         label_path,
-                        self.dest_root,
+                        self.args.dest_root,
                         seriesUID,
-                        self.spacing,
-                        self.size,
+                        self.args.spacing,
+                        self.args.size,
                     )
                 )
             else:
@@ -90,5 +90,5 @@ class TCGA_Formatter(StandardFileFormatter):
 
 
 if __name__ == "__main__":
-    formatter = TCGA_Formatter.start_from_argparse()
+    formatter = TCGA_Formatter()
     formatter.execute()

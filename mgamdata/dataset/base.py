@@ -53,9 +53,8 @@ class mgam_BaseSegDataset(BaseSegDataset):
             return new_palette
 
     @abstractmethod
-    def sample_iterator(
-        self,
-    ) -> Generator[tuple[str, str], None, None] | Iterable[tuple[str, str]]: ...
+    def sample_iterator(self) -> Generator[tuple[str, str], None, None] | Iterable[tuple[str, str]]: 
+        ...
 
     def load_data_list(self):
         """
@@ -187,7 +186,7 @@ class mgam_Standard_Precropped_Npz(mgam_Standard_Npz_Structure, mgam_Standard_3D
     pass
 
 
-class mgam_SemiSup_Precropped_Npz(mgam_Standard_Precropped_Npz):
+class mgam_SemiSup_Precropped_Npz(mgam_SemiSup_3D_Mha):
     def __init__(self, mode: Literal["sup", "semi", "unsup"], *args, **kwargs) -> None:
         self.mode = mode
         self.precrop_meta = json.load(
@@ -219,10 +218,10 @@ class mgam_SemiSup_Precropped_Npz(mgam_Standard_Precropped_Npz):
                 )
             except FileNotFoundError:
                 pdb.set_trace()
+            
             patch_npz_files = series_meta["class_within_patch"].keys()
-            for sample in [
-                os.path.join(series_folder, file) for file in patch_npz_files
-            ]:
+            for sample in [os.path.join(series_folder, file) 
+                           for file in patch_npz_files]:
                 if sample.endswith(".npz"):
                     yield (
                         os.path.join(series_folder, sample),

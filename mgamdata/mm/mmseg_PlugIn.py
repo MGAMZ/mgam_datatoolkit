@@ -1,19 +1,16 @@
 import os.path as osp
 import pdb
 import warnings
-import matplotlib.axes
 import matplotlib.figure
 from abc import abstractmethod
 from prettytable import PrettyTable
 from collections import OrderedDict
 
-import cv2
 import torch
 import numpy as np
 from skimage.exposure import equalize_hist
 import matplotlib
 from matplotlib import pyplot as plt
-from matplotlib.colors import Normalize
 
 import mmcv
 import mmengine

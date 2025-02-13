@@ -219,16 +219,3 @@ class LoadCTPreCroppedSampleFromNpz(BaseTransform):
 
         return results
 
-
-@deprecated("`PackSegInputs` will perform the same operation.")
-class EnsureChannelDim(BaseTransform):
-    def transform(self, results):
-        # preprocessing on image requires [..., C]
-        # the C will be move to the head in `PackSegInputs` transformation.
-        if "img" in results:
-            if len(results["img"].shape) == 2:
-                results["img"] = results["img"][..., None]
-        if "gt_seg_map" in results:
-            if len(results["gt_seg_map"].shape) == 2:
-                results["gt_seg_map"] = results["gt_seg_map"][None, ...]
-        return results

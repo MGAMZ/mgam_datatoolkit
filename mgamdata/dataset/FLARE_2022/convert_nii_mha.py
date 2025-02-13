@@ -5,13 +5,13 @@ class FLARE2022_formatter(StandardFileFormatter):
     @property
     def _unsup_folders(self):
         return [
-            os.path.join(self.data_root, "Training", "FLARE_UnlabeledCase1-1000"),
-            os.path.join(self.data_root, "Training", "FLARE_UnlabeledCase1001-2000"),
+            os.path.join(self.args.data_root, "Training", "FLARE_UnlabeledCase1-1000"),
+            os.path.join(self.args.data_root, "Training", "FLARE_UnlabeledCase1001-2000"),
         ]
     
     @property
     def _sup_folder(self):
-        return os.path.join(self.data_root, "Training", "FLARE_LabeledCase50")
+        return os.path.join(self.args.data_root, "Training", "FLARE_LabeledCase50")
     
     @staticmethod
     def _series_id(image_path, label_path:str|None):
@@ -29,10 +29,10 @@ class FLARE2022_formatter(StandardFileFormatter):
                         (
                             image_path,
                             None,
-                            self.dest_root,
+                            self.args.dest_root,
                             series_id,
-                            self.spacing,
-                            self.size,
+                            self.args.spacing,
+                            self.args.size,
                         )
                     )
         
@@ -47,15 +47,15 @@ class FLARE2022_formatter(StandardFileFormatter):
                     (
                         image_path,
                         label_path,
-                        self.dest_root,
+                        self.args.dest_root,
                         series_id,
-                        self.spacing,
-                        self.size,
+                        self.args.spacing,
+                        self.args.size,
                     )
                 )
         
         return task_list
 
 if __name__ == "__main__":
-    formatter = FLARE2022_formatter.start_from_argparse()
+    formatter = FLARE2022_formatter()
     formatter.execute()

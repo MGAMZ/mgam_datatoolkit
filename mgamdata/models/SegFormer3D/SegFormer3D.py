@@ -1,9 +1,6 @@
 import torch
 import math
-import copy
 from torch import nn
-from einops import rearrange
-from functools import partial
 
 def build_segformer3d_model(config):
     model = SegFormer3D(

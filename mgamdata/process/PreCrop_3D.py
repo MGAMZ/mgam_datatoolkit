@@ -21,7 +21,7 @@ class PreCropper3D:
     def __init__(self):
         self.main()
 
-    def arg_parse(self):
+    def arg_parse(self) -> argparse.ArgumentParser:
         argparser = argparse.ArgumentParser("Pre-Random-Crop 3D")
         argparser.add_argument(
             "source_mha_folder", type=str, help="The folder containing mha files."
@@ -90,7 +90,7 @@ class PreCropper3D:
             default=None,
             help="The threshold for std to determine whether a slice is valid.",
         )
-        self.args = argparser.parse_args()
+        return argparser
 
     @abstractmethod
     def parse_task(self) -> list[tuple[RandomCrop3D, str, str, int, str]]:
@@ -108,6 +108,58 @@ class PreCropper3D:
             return True
         else:
             return any(index not in label for index in self.args.ensure_index)
+
+    @staticmethod
+    def _draw_cropped_center(cropped_center, save_folder):
+        # 创建画布和网格布局
+        fig = plt.figure(figsize=(15, 10))
+        gs = plt.GridSpec(3, 2)
+        
+        # 左侧3D散点图 - 占据整个左列
+        ax1 = fig.add_subplot(gs[:, 0], projection='3d')
+        z_coords = [center[0] for center in cropped_center]
+        y_coords = [center[1] for center in cropped_center]
+        x_coords = [center[2] for center in cropped_center]
+        
+        ax1.scatter(x_coords, y_coords, z_coords, c='b', marker='o')
+        ax1.set_xlabel('X axis')
+        ax1.set_ylabel('Y axis')
+        ax1.set_zlabel('Z axis')
+        ax1.set_title('3D Distribution')
+        
+        # 右上 - XY投影
+        ax2 = fig.add_subplot(gs[0, 1])
+        ax2.scatter(x_coords, y_coords, c='r', marker='o')
+        ax2.set_xlabel('X axis')
+        ax2.set_ylabel('Y axis')
+        ax2.set_title('XY Projection')
+        ax2.grid(True)
+        
+        # 右中 - YZ投影
+        ax3 = fig.add_subplot(gs[1, 1])
+        ax3.scatter(y_coords, z_coords, c='g', marker='o')
+        ax3.set_xlabel('Y axis')
+        ax3.set_ylabel('Z axis')
+        ax3.set_title('YZ Projection')
+        ax3.grid(True)
+        
+        # 右下 - XZ投影
+        ax4 = fig.add_subplot(gs[2, 1])
+        ax4.scatter(x_coords, z_coords, c='purple', marker='o')
+        ax4.set_xlabel('X axis')
+        ax4.set_ylabel('Z axis')
+        ax4.set_title('XZ Projection')
+        ax4.grid(True)
+        
+        # 调整布局
+        plt.tight_layout()
+        
+        # 保存图像
+        plt.savefig(
+            os.path.join(save_folder, "CroppedCenter.png"), 
+            dpi=300, 
+            bbox_inches='tight')
+        plt.close()
 
     def crop_per_series(self, args: tuple) -> dict:
         cropper, image_itk_path, anno_itk_path, save_folder = args
@@ -127,7 +179,8 @@ class PreCropper3D:
             )
 
             existed_classes[os.path.basename(save_path)] = (
-                np.unique(anno_array).tolist() if anno_array is not None else None
+                np.unique(anno_array).tolist() 
+                if anno_array is not None else None
             )
             z1,z2,y1,y2,x1,x2 = crop_bbox
             cropped_center.append(((z1+z2)/2, (y1+y2)/2, (x1+x2)/2))
@@ -135,58 +188,7 @@ class PreCropper3D:
         num_patches = len(existed_classes)
         anno_available = anno_itk_path is not None and num_patches > 0
 
-        def draw_cropped_center(cropped_center, save_folder):
-            # 创建画布和网格布局
-            fig = plt.figure(figsize=(15, 10))
-            gs = plt.GridSpec(3, 2)
-            
-            # 左侧3D散点图 - 占据整个左列
-            ax1 = fig.add_subplot(gs[:, 0], projection='3d')
-            z_coords = [center[0] for center in cropped_center]
-            y_coords = [center[1] for center in cropped_center]
-            x_coords = [center[2] for center in cropped_center]
-            
-            ax1.scatter(x_coords, y_coords, z_coords, c='b', marker='o')
-            ax1.set_xlabel('X axis')
-            ax1.set_ylabel('Y axis')
-            ax1.set_zlabel('Z axis')
-            ax1.set_title('3D Distribution')
-            
-            # 右上 - XY投影
-            ax2 = fig.add_subplot(gs[0, 1])
-            ax2.scatter(x_coords, y_coords, c='r', marker='o')
-            ax2.set_xlabel('X axis')
-            ax2.set_ylabel('Y axis')
-            ax2.set_title('XY Projection')
-            ax2.grid(True)
-            
-            # 右中 - YZ投影
-            ax3 = fig.add_subplot(gs[1, 1])
-            ax3.scatter(y_coords, z_coords, c='g', marker='o')
-            ax3.set_xlabel('Y axis')
-            ax3.set_ylabel('Z axis')
-            ax3.set_title('YZ Projection')
-            ax3.grid(True)
-            
-            # 右下 - XZ投影
-            ax4 = fig.add_subplot(gs[2, 1])
-            ax4.scatter(x_coords, z_coords, c='purple', marker='o')
-            ax4.set_xlabel('X axis')
-            ax4.set_ylabel('Z axis')
-            ax4.set_title('XZ Projection')
-            ax4.grid(True)
-            
-            # 调整布局
-            plt.tight_layout()
-            
-            # 保存图像
-            plt.savefig(
-                os.path.join(save_folder, "CroppedCenter.png"), 
-                dpi=300, 
-                bbox_inches='tight')
-            plt.close()
-
-        draw_cropped_center(cropped_center, save_folder)
+        self._draw_cropped_center(cropped_center, save_folder)
         json.dump(
             {
                 "series_id": os.path.basename(save_folder),
@@ -236,7 +238,7 @@ class PreCropper3D:
         else:
             anno_array = None
 
-        # Deprecat too small volume
+        # Deprecate too small volume
         minimum_required_size = np.array(cropper.crop_size)
         if self.args.cut_edge is not None:
             minimum_required_size += np.array(self.args.cut_edge) * 2
@@ -305,7 +307,8 @@ class PreCropper3D:
                 yield cropped_img, None, crop_bbox
 
     def main(self):
-        self.arg_parse()
+        self.args = self.arg_parse().parse_args()
+        
         os.makedirs(self.args.dest_npz_folder, exist_ok=True)
         crop_meta_path = os.path.join(self.args.dest_npz_folder, "crop_meta.json")
         json.dump(vars(self.args), open(crop_meta_path, "w"), indent=4)
@@ -400,9 +403,7 @@ class SemiSupervisedMhaCropper3D(PreCropper3D):
                         ),
                         image_mha_path,
                         label_mha_path if os.path.exists(label_mha_path) else None,
-                        os.path.join(
-                            self.args.dest_npz_folder, series.replace(".mha", "")
-                        ),
+                        os.path.join(self.args.dest_npz_folder, series.replace(".mha", ""))
                     )
                 )
 
