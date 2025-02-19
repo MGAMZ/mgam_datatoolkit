@@ -1,3 +1,4 @@
+import os
 import pdb
 import warnings
 from abc import abstractmethod
@@ -612,7 +613,7 @@ class Seg3DVisualizationHook(SegVisualizationHook):
 
         # img: [Z, Y, X, 1] -> [Z, Y, X, 3]
         img = np.repeat(img, 3, axis=-1)
-        series_id = outputs[0].metainfo["series_id"]
+        series_id = os.path.basename(outputs[0].metainfo["img_path"]).rstrip(".mha")
         window_name = f"val_{series_id}"
 
         if (total_curr_iter % self.interval == 0) or (total_curr_iter == 1):
@@ -652,7 +653,7 @@ class Seg3DVisualizationHook(SegVisualizationHook):
             img = data_batch["inputs"][0].permute(1, 2, 3, 0).numpy()
             # img: [Z, Y, X, 1] -> [Z, Y, X, 3]
             img = np.repeat(img, 3, axis=-1)
-            series_id = outputs[0].metainfo["series_id"]
+            series_id = os.path.basename(outputs[0].metainfo["img_path"]).rstrip(".mha")
             window_name = f"val_{series_id}"
 
             self._visualizer.add_datasample(

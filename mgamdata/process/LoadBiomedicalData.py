@@ -196,9 +196,8 @@ class LoadCTPreCroppedSampleFromNpz(BaseTransform):
         assert all([load_type in ["img", "anno"] for load_type in self.load_type])
 
     def transform(self, results):
-        assert (
-            results["img_path"] == results["seg_map_path"]
-        ), f"img_path: {results['img_path']}, seg_map_path: {results['seg_map_path']}"
+        assert results["img_path"] == results["seg_map_path"], \
+            f"img_path: {results['img_path']}, seg_map_path: {results['seg_map_path']}"
         sample_path = results["img_path"]
         sample = np.load(sample_path)
 

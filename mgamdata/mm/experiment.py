@@ -102,7 +102,7 @@ class experiment:
             # Turn on visualization
             if visualization_hook:
                 visualization_hook['draw'] = True
-            if self.get('visualizer', None):
+            if self.cfg.get('visualizer', None):
                 self.cfg.visualizer['save_dir'] = self.work_dir
 
     def modify_cfg_to_skip_train(self):
@@ -130,6 +130,7 @@ class experiment:
 
     def modify_cfg_to_set_test_work_dir(self):
         self.cfg.work_dir = self.test_work_dir
+        self.cfg.visualizer.save_dir = self.test_work_dir
 
     @staticmethod
     def IsTrained(cfg) -> bool:

@@ -77,7 +77,7 @@ class auto_runner:
         parser.add_argument(
             "--test-draw-interval",
             type=int,
-            default=None,
+            default=1,
             help="测试时可视化样本的间距",
         )
         parser.add_argument(
