@@ -236,12 +236,16 @@ class MedNeXtUpBlock(MedNeXtBlock):
 
         if self.dim == "2d":
             x1_padded = torch.nn.functional.interpolate(
-                x1, size=[x1.size(-2)+1, x1.size(-1)+1], mode="bilinear", align_corners=False
+                x1, 
+                size=[x1.size(-2)+1, x1.size(-1)+1], 
+                mode="bilinear", 
+                align_corners=False
             )
-            
             # x1 = torch.nn.functional.pad(x1, (1, 0, 1, 0))
         elif self.dim == "3d":
             x1_padded = torch.nn.functional.pad(x1, (1, 0, 1, 0, 1, 0))
+        else:
+            raise ValueError("Invalid dimension")
 
         if self.resample_do_res:
             res = self.res_conv(x)
