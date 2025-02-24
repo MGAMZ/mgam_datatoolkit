@@ -522,9 +522,7 @@ class RandomCrop3D(BaseTransform):
                 seg_temp = self.crop(ann, crop_bbox)
                 labels, cnt = np.unique(seg_temp, return_counts=True)
                 cnt = cnt[labels != self.ignore_index]
-                if (len(cnt) < 1) or (
-                    (np.max(cnt) / np.sum(cnt)) > self.cat_max_ratio
-                ):
+                if (len(cnt) <= 1) or ((np.max(cnt) / np.sum(cnt)) > self.cat_max_ratio):
                     ccm_check_ = np.max(cnt) / np.sum(cnt)
                     continue
             
@@ -545,8 +543,6 @@ class RandomCrop3D(BaseTransform):
                           Style.RESET_ALL)
             return None
         
-        
-
     def crop(self, img: np.ndarray, crop_bbox: tuple) -> np.ndarray:
         """Crop from ``img``
 

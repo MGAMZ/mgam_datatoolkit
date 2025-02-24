@@ -23,73 +23,29 @@ class PreCropper3D:
 
     def arg_parse(self) -> argparse.ArgumentParser:
         argparser = argparse.ArgumentParser("Pre-Random-Crop 3D")
-        argparser.add_argument(
-            "source_mha_folder", type=str, help="The folder containing mha files."
-        )
-        argparser.add_argument(
-            "dest_npz_folder", type=str, help="The folder to save npz files."
-        )
-        argparser.add_argument(
-            "--crop-size",
-            type=int,
-            nargs=3,
-            required=True,
-            help="The size of cropped volume.",
-        )
-        argparser.add_argument(
-            "--crop-cat-max",
-            type=float,
-            default=1.0,
-            help="Max ratio for single catagory can occupy.",
-        )
-        argparser.add_argument(
-            "--num-cropped-ratio",
-            type=int,
-            default=4,
-            help="The number of cropped volumes per series.",
-        )
-        argparser.add_argument(
-            "--ensure-index",
-            type=int,
-            default=None,
-            nargs="+",
-            help="The index to ensure in segmentation.",
-        )
-        argparser.add_argument(
-            "--ensure-ratio",
-            type=float,
-            default=None,
-            help="The chance for an ensurance to perform.",
-        )
-        argparser.add_argument(
-            "--ignore-index",
-            type=int,
-            default=255,
-            help="The index to ignore in segmentation. "
-            "It will not taken into consideration during "
-            "the determination of whether the cropped patch "
-            "meets the `crop-cat-max` setting.",
-        )
-        argparser.add_argument(
-            "--mp",
-            action="store_true",
-            default=False,
-            help="Whether to use multiprocessing.",
-        )
-        argparser.add_argument(
-            "--cut-edge",
-            type=int,
-            default=[1, 1, 1],
-            nargs="+",
+        argparser.add_argument("source_mha_folder", type=str, help="The folder containing mha files.")
+        argparser.add_argument("dest_npz_folder", type=str, help="The folder to save npz files.")
+        argparser.add_argument("--crop-size", type=int, nargs=3, required=True, 
+                               help="The size of cropped volume.")
+        argparser.add_argument("--crop-cat-max", type=float, default=1.0,
+                               help="Max ratio for single catagory can occupy.")
+        argparser.add_argument("--num-cropped-ratio", type=int, default=4,
+                               help="The number of cropped volumes per series.")
+        argparser.add_argument( "--ensure-index", type=int, default=None, nargs="+", 
+                               help="The index to ensure in segmentation.")
+        argparser.add_argument("--ensure-ratio", type=float, default=None,
+                               help="The chance for an ensurance to perform.")
+        argparser.add_argument("--ignore-index", type=int, default=255,
+                               help="The index to ignore in segmentation. "
+                               "It will not taken into consideration during "
+                               "the determination of whether the cropped patch "
+                               "meets the `crop-cat-max` setting.")
+        argparser.add_argument("--mp", action="store_true", default=False, help="Whether to use multiprocessing.",)
+        argparser.add_argument("--cut-edge", type=int, default=[1, 1, 1], nargs="+",
             help="The edge size to cut off (delete) in each dimension. "
             "This is to avoid some datasets have invalid slice on the edge of a dcm series.",
         )
-        argparser.add_argument(
-            "--std-thr",
-            type=float,
-            default=None,
-            help="The threshold for std to determine whether a slice is valid.",
-        )
+        argparser.add_argument("--std-thr", type=float, default=None, help="The threshold for std to determine whether a slice is valid.",)
         return argparser
 
     @abstractmethod

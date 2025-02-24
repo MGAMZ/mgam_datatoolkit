@@ -1,5 +1,6 @@
 import torch
 import math
+import numpy as np
 from torch import nn
 
 def build_segformer3d_model(config):
@@ -143,9 +144,10 @@ class PatchEmbedding(nn.Module):
     def forward(self, x):
         # standard embedding patch
         patches = self.patch_embeddings(x)
+        patched_volume_size = patches.shape[2:]
         patches = patches.flatten(2).transpose(1, 2)
         patches = self.norm(patches)
-        return patches
+        return patches, patched_volume_size
 
 
 class SelfAttention(nn.Module):
@@ -190,9 +192,16 @@ class SelfAttention(nn.Module):
             )
             self.sr_norm = nn.LayerNorm(embed_dim)
 
-    def forward(self, x):
+    def forward(self, x, patched_volume_size=None):
         # (batch_size, num_patches, hidden_size)
         B, N, C = x.shape
+        if patched_volume_size is None:
+            d = w = h = cube_root(N)
+        else:
+            t = N / np.prod(patched_volume_size)
+            d = int(t * patched_volume_size[0])
+            w = int(t * patched_volume_size[1])
+            h = int(t * patched_volume_size[2])
 
         # (batch_size, num_head, sequence_length, embed_dim)
         q = (
@@ -202,9 +211,8 @@ class SelfAttention(nn.Module):
         )
 
         if self.sr_ratio > 1:
-            n = cube_root(N)
             # (batch_size, sequence_length, embed_dim) -> (batch_size, embed_dim, patch_D, patch_H, patch_W)
-            x_ = x.permute(0, 2, 1).reshape(B, C, n, n, n)
+            x_ = x.permute(0, 2, 1).reshape(B, C, d, w, h)
             # (batch_size, embed_dim, patch_D, patch_H, patch_W) -> (batch_size, embed_dim, patch_D/sr_ratio, patch_H/sr_ratio, patch_W/sr_ratio)
             x_ = self.sr(x_).reshape(B, C, -1).permute(0, 2, 1)
             # (batch_size, embed_dim, patch_D/sr_ratio, patch_H/sr_ratio, patch_W/sr_ratio) -> (batch_size, sequence_length, embed_dim)
@@ -270,9 +278,9 @@ class TransformerBlock(nn.Module):
         self.norm2 = nn.LayerNorm(embed_dim)
         self.mlp = _MLP(in_feature=embed_dim, mlp_ratio=mlp_ratio, dropout=0.0)
 
-    def forward(self, x):
-        x = x + self.attention(self.norm1(x))
-        x = x + self.mlp(self.norm2(x))
+    def forward(self, x, patched_volume_size=None):
+        x = x + self.attention(self.norm1(x), patched_volume_size)
+        x = x + self.mlp(self.norm2(x), patched_volume_size)
         return x
 
 
@@ -457,9 +465,9 @@ class _MLP(nn.Module):
         self.act_fn = nn.GELU()
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x):
+    def forward(self, x, pached_embed_size=None):
         x = self.fc1(x)
-        x = self.dwconv(x)
+        x = self.dwconv(x, pached_embed_size)
         x = self.act_fn(x)
         x = self.dropout(x)
         x = self.fc2(x)
@@ -474,12 +482,19 @@ class DWConv(nn.Module):
         # added batchnorm (remove it ?)
         self.bn = nn.BatchNorm3d(dim)
 
-    def forward(self, x):
+    def forward(self, x, patched_volume_size=None):
         B, N, C = x.shape
         # (batch, patch_cube, hidden_size) -> (batch, hidden_size, D, H, W)
         # assuming D = H = W, i.e. cube root of the patch is an integer number!
-        n = cube_root(N)
-        x = x.transpose(1, 2).view(B, C, n, n, n)
+        if patched_volume_size is None:
+            d = w = h = cube_root(N)
+        else:
+            t = N / np.prod(patched_volume_size)
+            d = int(t * patched_volume_size[0])
+            w = int(t * patched_volume_size[1])
+            h = int(t * patched_volume_size[2])
+        
+        x = x.transpose(1, 2).view(B, C, d, w, h)
         x = self.dwconv(x)
         # added batchnorm (remove it ?)
         x = self.bn(x)

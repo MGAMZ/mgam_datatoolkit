@@ -63,14 +63,15 @@ class SegFormer3D_Encoder_MM(BaseModule):
         out = []
         for stage_idx in range(4):
             # embedding
-            x = self.embeds[stage_idx](x)
+            x, patched_volume_size = self.embeds[stage_idx](x)
+            patched_volume_size: list[int]
             B, N, C = x.shape
-            for blk in self.blocks[stage_idx]:  # type:ignore
-                x = blk(x)
-            x = self.norms[stage_idx](x)
-            n = cube_root(N)
             
-            x = x.reshape(B, n, n, n, C).permute(0, 4, 1, 2, 3).contiguous()
+            for blk in self.blocks[stage_idx]:  # type:ignore
+                x = blk(x, patched_volume_size)
+            x = self.norms[stage_idx](x)
+            
+            x = x.reshape(B, *patched_volume_size, C).permute(0, 4, 1, 2, 3).contiguous()
             out.append(x)
         return out
 

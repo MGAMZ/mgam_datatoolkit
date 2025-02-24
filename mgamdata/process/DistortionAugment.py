@@ -21,8 +21,6 @@ import cv2
 
 
 
-
-
 def rectangular_to_polar(x, y, center_x, center_y):
     """
     直角坐标由0开始计数
@@ -40,7 +38,6 @@ def rectangular_to_polar(x, y, center_x, center_y):
     return radius, angle
 
 
-
 def polar_to_rectangular(radius, angle, center_x, center_y):
     """
     直角坐标由0开始计数
@@ -54,7 +51,6 @@ def polar_to_rectangular(radius, angle, center_x, center_y):
     y = center_y + radius * math.sin(angle)
     
     return x, y
-
 
 
 class ScanTableRemover(BaseTransform):
@@ -111,7 +107,6 @@ class ScanTableRemover(BaseTransform):
                 pixel_spacing=results['dcm_meta']['00280030']['Value']
             )
         return results
-
 
 
 class Distortion(BaseTransform):
@@ -330,7 +325,6 @@ class RangeClipNorm(BaseTransform):
         return results
 
 
-
 class GaussianBlur(BaseTransform):
     def __init__(self, sigma, radius) -> None:
         self.sigma = sigma
@@ -346,7 +340,6 @@ class GaussianBlur(BaseTransform):
         return results
 
 
-
 class OriShapeOverride(BaseTransform):
     def __init__(self, ori_shape:tuple) -> None:
         super().__init__()
@@ -357,7 +350,6 @@ class OriShapeOverride(BaseTransform):
         results['ori_shape'] = self.ori_shape
         results['scale_factor'] = (1,1)
         return results
-
 
 
 class ConfirmShape_HWC(BaseTransform):
@@ -372,7 +364,6 @@ class ConfirmShape_HWC(BaseTransform):
             results['gt_seg_map'] = results['gt_seg_map'][..., np.newaxis]
         
         return results
-
 
 
 class LabelResize(BaseTransform):
