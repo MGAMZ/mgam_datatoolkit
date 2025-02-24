@@ -53,3 +53,6 @@ itk_resample = "mgamdata.process.itk_dataset_resample:main"
 [tool.setuptools]
 packages = ["mgamdata"]
 
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["mgamdata*"]
