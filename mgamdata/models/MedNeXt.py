@@ -892,6 +892,7 @@ class MM_MedNext_Encoder(BaseModule):
             self.requires_grad_(False)
 
     def forward(self, x: torch.Tensor):
+        
         if self.use_checkpoint:
             # [B, D(Opt.), H, W] -> [B, C, D(Opt.), H, W]
             x = checkpoint(self.stem, x, use_reentrant=False)
