@@ -27,15 +27,15 @@ CLASS_MAP_ABBR = {
     3: 'Sub. Fat',
     4: 'Vis. Fat', 
 }
-# Kmeans聚类后的类定义
+# 后分割后的类定义
 CLASS_MAP_AFTER_KMEANS = {
     0: 'background',
-    1: '腰大肌-kmeans肌肉',
-    2: '其他骨骼肌-kmeans肌肉',
+    1: '腰大肌-肌肉',
+    2: '其他骨骼肌-肌肉',
     3: '皮下脂肪',
     4: '内脏脂肪',
-    5: '腰大肌-kmeans脂肪',
-    6: '其他骨骼肌-kmeans脂肪',
+    5: '腰大肌-脂肪',
+    6: '其他骨骼肌-脂肪',
 }
 # 标签颜色映射
 LABEL_COLOR_DICT = {
@@ -450,6 +450,7 @@ GT_FOLDERS_PRIORITY_ORIGINAL_ENGINEERSORT = [
     join(data_root, 'Check_7644', 'mha_original_EngineerSort'),
     join(data_root, 'Check_7461', 'mha_original_EngineerSort'),
     join(data_root, 'Check_6973', 'mha_original_EngineerSort'),
+    join(data_root, 'Inference_250217', 'SegResult')
 ]
 
 
