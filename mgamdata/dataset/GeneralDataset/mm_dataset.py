@@ -12,9 +12,10 @@ class mgam_Standard_2D(mgam_BaseSegDataset):
         # HACK: Most implementations use the more elastic dataset,
         # which is `mgam_SemiSup_2D_png`, and it contains a `mode` parameter.
         kwargs.pop("mode", None)
+        self.suffix = "." + suffix
         super().__init__(*args, **kwargs)
         self.data_root: str
-        self.suffix = "." + suffix
+        
 
     def _split(self):
         all_series = [
