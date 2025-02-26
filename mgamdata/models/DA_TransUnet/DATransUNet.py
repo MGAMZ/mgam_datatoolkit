@@ -509,12 +509,9 @@ class DATrans_Backbone(BaseModule):
 
 from mmseg.models.decode_heads.decode_head import BaseDecodeHead
 class DATrans_Head(BaseDecodeHead):
-    def __init__(self, arch, num_classes, threshold, out_channels=None, **kwargs):
-        if out_channels is None:
-            out_channels = num_classes
+    def __init__(self, arch, num_classes, **kwargs):
         super(DATrans_Head, self).__init__(
             in_channels=128, channels= 56, num_classes=num_classes,
-            out_channels=out_channels, threshold=threshold, 
             init_cfg=None, **kwargs)
         
         config = CONFIGS[arch]

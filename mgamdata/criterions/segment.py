@@ -126,12 +126,14 @@ class DiceLoss_3D(DiceLoss):
         self,
         ignore_1st_index: bool = False,
         batch_z: int | None = None,
+        class_weight: list[float] | None = None,
         *args,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
         self.ignore_1st_index = ignore_1st_index
         self.batch_z = batch_z
+        self.class_weight = class_weight
 
     def _expand_onehot_labels_dice_3D(self, pred: Tensor, target: Tensor) -> Tensor:
         """Expand onehot labels to match the size of prediction for 3D Volumes.
@@ -185,7 +187,6 @@ class DiceLoss_3D(DiceLoss):
 
         else:
             return self.forward_one_patch(pred, target, *args, **kwargs)
-
 
 
 
