@@ -28,6 +28,7 @@ class auto_runner:
         test,
         auto_retry,
         detect_anomaly,
+        test_use_last_ckpt,
     ):
         self.exp_names = exp_names
         self.model_names = model_names
@@ -39,58 +40,25 @@ class auto_runner:
         self.test = test
         self.auto_retry = auto_retry
         self.detect_anomaly = detect_anomaly
+        self.test_use_last_ckpt = test_use_last_ckpt
 
     @classmethod
     def start_from_args(cls):
         parser = argparse.ArgumentParser(description="暮光霭明的OpenMM实验运行器")
         parser.add_argument("exp_name", type=str, nargs="+", help="实验名或实验版本号")
-        parser.add_argument(
-            "--VRamAlloc", type=str, default="pytorch", help="设置内存分配器"
-        )
+        parser.add_argument("--VRamAlloc", type=str, default="pytorch", help="设置内存分配器")
         parser.add_argument("--local-rank", type=int, default=0, help="节点数量")
-        parser.add_argument(
-            "--models",
-            type=str,
-            default=SUPPORTED_MODELS,
-            help="选择实验",
-            nargs="+",
-        )
-        parser.add_argument(
-            "--work-dir-root",
-            type=str,
-            default=MM_WORK_DIR_ROOT,
-            help="存储实验结果的根目录",
-        )
-        parser.add_argument(
-            "--test-work-dir-root",
-            type=str,
-            default=MM_TEST_DIR_ROOT,
-            help="测试时的工作目录",
-        )
-        parser.add_argument(
-            "--config-root",
-            type=str,
-            default=MM_CONFIG_ROOT,
-            help="存储配置文件的根目录",
-        )
+        parser.add_argument("--models", type=str, default=SUPPORTED_MODELS, help="选择实验", nargs="+")
+        parser.add_argument("--work-dir-root", type=str, default=MM_WORK_DIR_ROOT, help="存储实验结果的根目录")
+        parser.add_argument("--test-work-dir-root", type=str, default=MM_TEST_DIR_ROOT, help="测试时的工作目录")
+        parser.add_argument("--config-root", type=str, default=MM_CONFIG_ROOT, help="存储配置文件的根目录",)
         parser.add_argument("--cfg-options", nargs="+", action=DictAction)
-        parser.add_argument(
-            "--test-draw-interval",
-            type=int,
-            default=1,
-            help="测试时可视化样本的间距",
-        )
-        parser.add_argument(
-            "--test", default=False, action="store_true", help="仅测试模式"
-        )
-        parser.add_argument(
-            "--auto-retry", type=int, default=0, help="单个实验出错自动重试次数"
-        )
-        parser.add_argument(
-            "--detect-anomaly", default=False, action="store_true", help="PyTorch检测异常"
-        )
+        parser.add_argument("--test-draw-interval", type=int, default=1, help="测试时可视化样本的间距")
+        parser.add_argument("--test", default=False, action="store_true", help="仅测试模式")
+        parser.add_argument("--auto-retry", type=int, default=0, help="单个实验出错自动重试次数")
+        parser.add_argument("--detect-anomaly", default=False, action="store_true", help="PyTorch检测异常")
+        parser.add_argument("--test-use-last-ckpt", default=False, action="store_true", help="测试时使用最终权重而不是最佳权重")
         args = parser.parse_args()
-
         return cls(
             exp_names=args.exp_name,
             model_names=args.models,
@@ -102,6 +70,7 @@ class auto_runner:
             test=args.test,
             auto_retry=args.auto_retry,
             detect_anomaly=args.detect_anomaly,
+            test_use_last_ckpt=args.test_use_last_ckpt,
         )
 
     def find_full_exp_name(self, exp_name):
@@ -169,6 +138,7 @@ class auto_runner:
                             self.cfg_options,
                             self.test,
                             self.detect_anomaly,
+                            self.test_use_last_ckpt
                         )
 
                     except KeyboardInterrupt:

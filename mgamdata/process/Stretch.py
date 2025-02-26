@@ -4,11 +4,15 @@ import math
 import logging
 from typing_extensions import Literal
 
+import cv2
 import torch
 import numpy as np
 from scipy.ndimage import map_coordinates
 from torch import Tensor
+from mmcv.transforms import BaseTransform
 from mmengine.logging import print_log
+from mmseg.datasets.transforms import PackSegInputs as _PackSegInputs
+
 
 
 def rectangular_to_polar(x, y, center_x, center_y):
@@ -197,3 +201,26 @@ class RadialStretch:
         if not hasattr(self, '_density_map'):
             self._density_map = self.calculate_density_factor_map()
         return self._density_map
+
+
+class LoadDensityMap(BaseTransform):
+    def transform(self, results:dict):
+        density_map_path = results['img_path'].replace('image', "density")
+        if os.path.exists(density_map_path):
+            results["density"] = cv2.imread(density_map_path, cv2.IMREAD_UNCHANGED)
+            results["seg_fields"].append("density")
+        return results
+
+
+class PackSegInputs(_PackSegInputs):
+    def transform(self, results:dict):
+        packed_results = super().transform(results)
+        
+        if "density" in results.keys():
+            density:np.ndarray = results["density"]
+            if density.ndim == 2:
+                density = np.expand_dims(density, -1)
+            density = torch.from_numpy(density.transpose(2, 0, 1))
+            packed_results['data_samples'].set_field(density, "density")
+            
+        return packed_results

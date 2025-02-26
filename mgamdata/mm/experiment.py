@@ -17,7 +17,7 @@ from mgamdata.mm.mmeng_PlugIn import DynamicRunnerSelection
 class experiment:
 
     def __init__(self, config, work_dir, test_work_dir, test_draw_interval,
-                 cfg_options, test_mode, detect_anomaly):
+                 cfg_options, test_mode, detect_anomaly, test_use_last_ckpt):
         self.config = config
         self.work_dir = work_dir
         self.test_work_dir = test_work_dir
@@ -25,6 +25,7 @@ class experiment:
         self.cfg_options = cfg_options
         self.test_mode = test_mode
         self.detect_anomaly = detect_anomaly
+        self.test_use_last_ckpt = test_use_last_ckpt
         
         with torch.autograd.set_detect_anomaly(detect_anomaly):
             self._prepare_basic_config()
@@ -82,11 +83,13 @@ class experiment:
 
         # 模型初始化
         runner = DynamicRunnerSelection(self.cfg)
-        ckpt_path = find_latest_checkpoint(self.work_dir)
-        best_path = glob.glob(osp.join(self.work_dir, 'best*.pth'))
-        assert len(best_path) == 1, f"尝试在 {best_path} 找到最佳模型，但不能确定最佳。"
+        if self.test_use_last_ckpt:
+            ckpt_path = find_latest_checkpoint(self.work_dir)
+        else:
+            ckpt_path = glob.glob(osp.join(self.work_dir, 'best*.pth'))
+        assert len(ckpt_path) == 1, f"尝试在 {ckpt_path} 找到最佳模型，但不能确定最佳。"
         print_log(f"载入检查点: {self.work_dir}", 'current', logging.INFO)
-        runner.load_checkpoint(best_path[0])
+        runner.load_checkpoint(ckpt_path[0])
         print_log(f"载入完成，执行测试: {self.work_dir}", 'current', logging.INFO)
 
         # 执行测试
