@@ -1,6 +1,7 @@
 import os
 import os.path as osp
 import re
+import pdb
 import glob
 import logging
 from colorama import Fore, Style
@@ -87,9 +88,10 @@ class experiment:
             ckpt_path = find_latest_checkpoint(self.work_dir)
         else:
             ckpt_path = glob.glob(osp.join(self.work_dir, 'best*.pth'))
-        assert len(ckpt_path) == 1, f"尝试在 {ckpt_path} 找到最佳模型，但不能确定最佳。"
+            assert len(ckpt_path) == 1, f"尝试在 {ckpt_path} 找到最佳模型，但不能确定最佳。"
+            ckpt_path = ckpt_path[0]
         print_log(f"载入检查点: {self.work_dir}", 'current', logging.INFO)
-        runner.load_checkpoint(ckpt_path[0])
+        runner.load_checkpoint(ckpt_path)
         print_log(f"载入完成，执行测试: {self.work_dir}", 'current', logging.INFO)
 
         # 执行测试
