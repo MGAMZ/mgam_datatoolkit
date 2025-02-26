@@ -35,7 +35,8 @@ dependencies = [
   "timm",
   "opensdpc",
   "colorama",
-  "mmcv>=2.2.0"
+  "mmcv>=2.2.0",
+  "ml_collections"
 ]
 
 [project.optional-dependencies]

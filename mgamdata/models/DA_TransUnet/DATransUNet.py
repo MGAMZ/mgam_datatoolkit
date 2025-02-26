@@ -370,7 +370,7 @@ class DecoderCup(nn.Module):
         in_channels = [head_channels] + list(decoder_channels[:-1])
         out_channels = decoder_channels
 
-        if self.config.n_skip != 0:
+        if "n_skip" in self.config.keys() and self.config.n_skip != 0:
             skip_channels = self.config.skip_channels
             for i in range(4-self.config.n_skip):  # re-select the skip channels according to n_skip
                 skip_channels[3-i]=0
@@ -378,9 +378,8 @@ class DecoderCup(nn.Module):
         else:
             skip_channels=[0,0,0,0]
 
-        blocks = [
-            DecoderBlock(in_ch, out_ch, sk_ch) for in_ch, out_ch, sk_ch in zip(in_channels, out_channels, skip_channels)
-        ]
+        blocks = [DecoderBlock(in_ch, out_ch, sk_ch) 
+                  for in_ch, out_ch, sk_ch in zip(in_channels, out_channels, skip_channels)]
         self.blocks = nn.ModuleList(blocks)
 
     def forward(self, hidden_states, features=None):

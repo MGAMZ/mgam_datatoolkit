@@ -147,12 +147,15 @@ class RadialStretch:
             raise RuntimeError(f"Stretch get unsupported type: {type(stretched_matrix)}")
 
         # 映射
-        map_coordinates(image_matrix, 
-                        self.proj_map.transpose(2,0,1), 
-                        output=stretched_matrix, 
-                        mode='constant', 
-                        cval=pad_val if type=='img' else seg_pad_val, 
-                        prefilter=True)
+        try:
+            map_coordinates(image_matrix, 
+                            self.proj_map.transpose(2,0,1), 
+                            output=stretched_matrix, 
+                            mode='constant', 
+                            cval=pad_val if type=='img' else seg_pad_val, 
+                            prefilter=True)
+        except Exception as e:
+            pdb.set_trace()
 
         if isinstance(image_matrix, Tensor):
             stretched_matrix = torch.from_numpy(stretched_matrix).to(dtype=image_matrix.dtype,
