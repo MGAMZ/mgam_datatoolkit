@@ -7,19 +7,20 @@ from ..base import mgam_BaseSegDataset
 
 
 
-class mgam_Standard_2D_png(mgam_BaseSegDataset):
-    def __init__(self, *args, **kwargs) -> None:
+class mgam_Standard_2D(mgam_BaseSegDataset):
+    def __init__(self, suffix:str="png", *args, **kwargs) -> None:
         # HACK: Most implementations use the more elastic dataset,
         # which is `mgam_SemiSup_2D_png`, and it contains a `mode` parameter.
         kwargs.pop("mode", None)
         super().__init__(*args, **kwargs)
         self.data_root: str
+        self.suffix = "." + suffix
 
     def _split(self):
         all_series = [
-            file.replace(".png", "")
+            file.replace(self.suffix, "")
             for file in os.listdir(os.path.join(self.data_root, "label"))
-            if file.endswith(".png")
+            if file.endswith(self.suffix)
         ]
         all_series = sorted(
             all_series, key=lambda x: abs(int(re.search(r"\d+", x).group()))
@@ -40,7 +41,7 @@ class mgam_Standard_2D_png(mgam_BaseSegDataset):
 
     def sample_iterator(self):
         for series in self._split():
-            image_png_path = os.path.join(self.data_root, "image", series + ".png")
-            label_png_path = os.path.join(self.data_root, "label", series + ".png")
+            image_png_path = os.path.join(self.data_root, "image", series + self.suffix)
+            label_png_path = os.path.join(self.data_root, "label", series + self.suffix)
             if os.path.exists(image_png_path) and os.path.exists(label_png_path):
                 yield (image_png_path, label_png_path)
