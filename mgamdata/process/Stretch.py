@@ -11,6 +11,7 @@ from scipy.ndimage import map_coordinates
 from torch import Tensor
 from mmcv.transforms import BaseTransform
 from mmengine.logging import print_log
+from mmengine.optim.optimizer import AmpOptimWrapper
 from mmseg.datasets.transforms import PackSegInputs as _PackSegInputs
 
 
@@ -224,3 +225,4 @@ class PackSegInputs(_PackSegInputs):
             packed_results['data_samples'].set_field(density, "density")
             
         return packed_results
+

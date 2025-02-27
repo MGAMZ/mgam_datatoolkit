@@ -1,8 +1,11 @@
 import pdb
+from typing_extensions import Callable
+
 import torch
-import torch.nn as nn
+from torch import nn, Tensor
 from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint
+from torch.utils.hooks import RemovableHandle
 
 from mmengine.model import BaseModule
 from mmseg.models.decode_heads.decode_head import BaseDecodeHead
@@ -102,7 +105,7 @@ class MedNeXtBlock(nn.Module):
                     torch.zeros(1, exp_r * in_channels, 1), requires_grad=True
                 )
 
-    def forward(self, x, dummy_tensor=None) -> torch.Tensor:
+    def forward(self, x, dummy_tensor=None) -> Tensor:
         x1 = x
         x1 = self.conv1(x1)
         x1 = self.act(self.conv2(self.norm(x1)))
@@ -230,7 +233,7 @@ class MedNeXtUpBlock(MedNeXtBlock):
             groups=in_channels,
         )
 
-    def forward(self, x, dummy_tensor=None) -> torch.Tensor:
+    def forward(self, x, dummy_tensor=None) -> Tensor:
         x1 = super().forward(x)
         # Asymmetry but necessary to match shape
 
@@ -597,7 +600,7 @@ class MedNeXt(nn.Module):
         self.out_0 = OutBlock(in_channels=n_channels, n_classes=n_classes, dim=dim)
 
         # Used to fix PyTorch checkpointing bug
-        self.dummy_tensor = nn.Parameter(torch.tensor([1.0]), requires_grad=True)
+        self.dummy_tensor = nn.Parameter(Tensor([1.0]), requires_grad=True)
 
         if deep_supervision:
             self.out_1 = OutBlock(
@@ -891,8 +894,10 @@ class MM_MedNext_Encoder(BaseModule):
             self.eval()
             self.requires_grad_(False)
 
-    def forward(self, x: torch.Tensor):
-        
+        # HACK Use for grad visualization
+        # self.register_backward_hook(grad_vis_hook)
+
+    def forward(self, x: Tensor):
         if self.use_checkpoint:
             # [B, D(Opt.), H, W] -> [B, C, D(Opt.), H, W]
             x = checkpoint(self.stem, x, use_reentrant=False)
@@ -917,8 +922,77 @@ class MM_MedNext_Encoder(BaseModule):
             x_res_3 = self.enc_block_3(x)
             x = self.down_3(x_res_3)
             x = self.bottleneck(x)
-
+        
+        # HACK Use for activation map visualization
+        # vis_act_map(x_res_0, x_res_1, x_res_2, x_res_3, x)
         return (x_res_0, x_res_1, x_res_2, x_res_3, x)
+
+# HACK Use for grad visualization
+def grad_vis_hook(module:nn.Module, grad_input:Tensor, grad_output:Tensor):
+    """可视化MM_MedNext_Encoder的输出梯度
+    
+    Args:
+        module: 调用该hook的模块
+        grad_input: 输入的梯度（tuple）
+        grad_output: 输出的梯度（tuple）
+    """
+    import os
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import Normalize
+    from datetime import datetime
+    
+    # 创建保存路径
+    save_dir = os.path.join("visualization")
+    os.makedirs(save_dir, exist_ok=True)
+    
+    # 从模块的前向传播输出中获取各层特征图
+    feature_names = ['x_res_0', 'x_res_1', 'x_res_2', 'x_res_3', 'x']
+    grad = grad_output[0].mean(dim=(0,1)).detach().cpu().numpy()
+    
+    fig, ax = plt.figure(figsize=(10, 8)), plt.gca()
+    im = ax.imshow(grad,
+                   cmap='winter',
+                   alpha=0.7,
+                   norm=Normalize(vmin=np.percentile(grad, 50),
+                                  vmax=np.percentile(grad, 95)))
+    plt.colorbar(im)
+    ax.text(0, 20, 
+            f"Std: {grad.std():.5f}", 
+            fontsize=16, 
+            color='white')
+    
+    save_path = os.path.join(save_dir, "grad_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".png")
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    print(f"已保存梯度可视化: {save_path}")
+
+# HACK Use for activation map visualization
+def vis_act_map(x_res_0:Tensor, x_res_1:Tensor, x_res_2:Tensor, x_res_3:Tensor, x:Tensor):
+    x_res_0 = x_res_0.mean(dim=(0,1)).cpu().numpy()
+    x_res_1 = x_res_1.mean(dim=(0,1)).cpu().numpy()
+    x_res_2 = x_res_2.mean(dim=(0,1)).cpu().numpy()
+    x_res_3 = x_res_3.mean(dim=(0,1)).cpu().numpy()
+    x = x.mean(dim=(0,1)).cpu().numpy()
+    
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import Normalize
+
+    fig, axes = plt.subplots(1,5, figsize=(15,5))
+    norm = Normalize(vmin=-0.01, vmax=0.05)
+    norm = Normalize()
+    for i, arr in enumerate([x_res_0, x_res_1, x_res_2, x_res_3, x]):
+        axes[i].set_title(f"Layer {i}")
+        axes[i].imshow(arr, cmap="winter", norm=norm, alpha=0.9)
+        print(f"Layer {i} std: {arr.var()}")
+    
+    cbar_ax = fig.add_axes(rect=(0.15, 0.05, 0.7, 0.03))
+    fig.colorbar(plt.cm.ScalarMappable(norm=norm, cmap="winter"), 
+                 cax=cbar_ax, orientation="horizontal", alpha=0.9)
+    
+    fig.tight_layout()
+    fig.subplots_adjust(left=0.05, right=0.99, top=0.99, bottom=0.01, hspace=0)
+    fig.savefig("visualization/ActivationMap.png", dpi=300)
+    exit(1)
 
 
 class MM_MedNext_Decoder(BaseModule):
