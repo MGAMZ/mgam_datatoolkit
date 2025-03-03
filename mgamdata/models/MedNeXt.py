@@ -895,7 +895,8 @@ class MM_MedNext_Encoder(BaseModule):
             self.requires_grad_(False)
 
         # HACK Use for grad visualization
-        # self.register_backward_hook(grad_vis_hook)
+        # self.register_backward_hook(grad_hist_and_pixelwise_vis_hook)
+        self.register_backward_hook(log_grad)
 
     def forward(self, x: Tensor):
         if self.use_checkpoint:
@@ -925,11 +926,15 @@ class MM_MedNext_Encoder(BaseModule):
         
         # HACK Use for activation map visualization
         # vis_act_map(x_res_0, x_res_1, x_res_2, x_res_3, x)
+        # vis_tSNE(x_res_0, x_res_1, x_res_2, x_res_3, x)
+        # vis_PCA(x_res_0, x_res_1, x_res_2, x_res_3, x)
+        log_act(x_res_0, x_res_1, x_res_2, x_res_3, x)
+        
         return (x_res_0, x_res_1, x_res_2, x_res_3, x)
 
 # HACK Use for grad visualization
-def grad_vis_hook(module:nn.Module, grad_input:Tensor, grad_output:Tensor):
-    """可视化MM_MedNext_Encoder的输出梯度
+def grad_hist_and_pixelwise_vis_hook(module:nn.Module, grad_input:Tensor, grad_output:Tensor):
+    """可视化MM_MedNext_Encoder的输入和输出梯度
     
     Args:
         module: 调用该hook的模块
@@ -941,30 +946,84 @@ def grad_vis_hook(module:nn.Module, grad_input:Tensor, grad_output:Tensor):
     import matplotlib.pyplot as plt
     from matplotlib.colors import Normalize
     from datetime import datetime
+    from matplotlib.font_manager import FontProperties
     
     # 创建保存路径
     save_dir = os.path.join("visualization")
     os.makedirs(save_dir, exist_ok=True)
+    font = FontProperties(fname="/mnt/c/Windows/Fonts/simhei.ttf", size=14)
+
+    grad_in = grad_input[0].mean(dim=(0,1)).detach().cpu().numpy()
+    grad_out = grad_output[0].mean(dim=(0,1)).detach().cpu().numpy()
     
-    # 从模块的前向传播输出中获取各层特征图
-    feature_names = ['x_res_0', 'x_res_1', 'x_res_2', 'x_res_3', 'x']
-    grad = grad_output[0].mean(dim=(0,1)).detach().cpu().numpy()
+    # 计算统一的最大最小值用于归一化
+    all_grads = np.concatenate([grad_in.flatten(), grad_out.flatten()])
+    vmin = np.percentile(all_grads, 50)
+    vmax = np.percentile(all_grads, 95)
     
-    fig, ax = plt.figure(figsize=(10, 8)), plt.gca()
-    im = ax.imshow(grad,
-                   cmap='winter',
+    # 创建图形和网格
+    fig = plt.figure(figsize=(8, 6))
+    gs = fig.add_gridspec(3, 2, height_ratios=[0.05, 1, 0.15])
+    
+    # 第一行：颜色条
+    cbar_ax = fig.add_subplot(gs[0, :])
+    norm = Normalize(vmin=vmin, vmax=vmax)
+    cb = plt.colorbar(
+        plt.cm.ScalarMappable(norm=norm, cmap='winter'), 
+        cax=cbar_ax, 
+        orientation='horizontal',
+        alpha=0.7)
+    cbar_ax.xaxis.set_ticks_position('top')
+    cbar_ax.xaxis.set_label_position('top')
+    
+    # 第二行：热图
+    ax1 = fig.add_subplot(gs[1, 0])
+    im1 = ax1.imshow(grad_in, 
+                   cmap='winter', 
                    alpha=0.7,
-                   norm=Normalize(vmin=np.percentile(grad, 50),
-                                  vmax=np.percentile(grad, 95)))
-    plt.colorbar(im)
-    ax.text(0, 20, 
-            f"Std: {grad.std():.5f}", 
-            fontsize=16, 
-            color='white')
+                   norm=norm)
+    ax1.set_title("输入梯度", fontsize=14, fontproperties=font)
+    ax1.text(0, 20, 
+             f"Std: {grad_in.std():.5f}", 
+             fontsize=12, 
+             color='white')
     
-    save_path = os.path.join(save_dir, "grad_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".png")
+    ax2 = fig.add_subplot(gs[1, 1])
+    im2 = ax2.imshow(grad_out, 
+                   cmap='winter', 
+                   alpha=0.7,
+                   norm=norm)
+    ax2.set_title("输出梯度", fontsize=14, fontproperties=font)
+    ax2.text(0, 20, 
+             f"Std: {grad_out.std():.5f}", 
+             fontsize=12, 
+             color='white', 
+             fontproperties=font)
+    
+    # 第三行：直方图（对数尺度）
+    ax3 = fig.add_subplot(gs[2, 0])
+    ax3.hist(grad_in.flatten(), bins=50, alpha=0.7, color='skyblue')
+    ax3.set_ylabel("频率", fontproperties=font)
+    ax3.set_yscale('log')
+    
+    ax4 = fig.add_subplot(gs[2, 1])
+    ax4.hist(grad_out.flatten(), bins=50, alpha=0.7, color='skyblue')
+    ax4.set_yscale('log')
+    
+    # 设置x轴范围一致
+    x_min = min(grad_in.min(), grad_out.min())
+    x_max = max(grad_in.max(), grad_out.max())
+    ax3.set_xlim(x_min, x_max)
+    ax4.set_xlim(x_min, x_max)
+    
+    plt.tight_layout()
+    
+    # 保存图像
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    save_path = os.path.join(save_dir, f"grad_pixel_hist_vis_{timestamp}.png")
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     print(f"已保存梯度可视化: {save_path}")
+    plt.close()
 
 # HACK Use for activation map visualization
 def vis_act_map(x_res_0:Tensor, x_res_1:Tensor, x_res_2:Tensor, x_res_3:Tensor, x:Tensor):
@@ -993,6 +1052,93 @@ def vis_act_map(x_res_0:Tensor, x_res_1:Tensor, x_res_2:Tensor, x_res_3:Tensor, 
     fig.subplots_adjust(left=0.05, right=0.99, top=0.99, bottom=0.01, hspace=0)
     fig.savefig("visualization/ActivationMap.png", dpi=300)
     exit(1)
+
+# HACK Use for t-SNE analysis
+def vis_tSNE(x_res_0:Tensor, x_res_1:Tensor, x_res_2:Tensor, x_res_3:Tensor, x:Tensor):
+    from sklearn.manifold import TSNE
+    import matplotlib.pyplot as plt
+    import numpy as np
+    
+    x_res_0 = x_res_0.detach().mean(dim=(2,3)).cpu().numpy()
+    x_res_1 = x_res_1.detach().mean(dim=(2,3)).cpu().numpy()
+    x_res_2 = x_res_2.detach().mean(dim=(2,3)).cpu().numpy()
+    x_res_3 = x_res_3.detach().mean(dim=(2,3)).cpu().numpy()
+    x = x.detach().mean(dim=(2,3)).cpu().numpy()
+    
+    tsne = TSNE(n_components=2, random_state=0)
+    x_res_0 = tsne.fit(x_res_0)
+    x_res_1 = tsne.fit(x_res_1)
+    x_res_2 = tsne.fit(x_res_2)
+    x_res_3 = tsne.fit(x_res_3)
+    x = tsne.fit(x)
+    
+    fig, axes = plt.subplots(1,5, figsize=(15,5))
+    for i, arr in enumerate([x_res_0, x_res_1, x_res_2, x_res_3, x]):
+        axes[i].set_title(f"Layer {i}")
+        axes[i].scatter(arr[:, 0], arr[:, 1], alpha=0.9)
+    
+    fig.tight_layout()
+    fig.savefig("visualization/tSNE.png", dpi=300)
+    exit(1)
+
+# HACK Use for PCA
+def vis_PCA(x_res_0:Tensor, x_res_1:Tensor, x_res_2:Tensor, x_res_3:Tensor, x:Tensor):
+    from sklearn.decomposition import PCA
+    import matplotlib.pyplot as plt
+    
+    x_res_0 = x_res_0.detach().mean(dim=(2,3)).cpu().numpy()
+    x_res_1 = x_res_1.detach().mean(dim=(2,3)).cpu().numpy()
+    x_res_2 = x_res_2.detach().mean(dim=(2,3)).cpu().numpy()
+    x_res_3 = x_res_3.detach().mean(dim=(2,3)).cpu().numpy()
+    x = x.detach().mean(dim=(2,3)).cpu().numpy()
+    
+    pca = PCA(n_components=2)
+    x_res_0 = pca.fit_transform(x_res_0)
+    x_res_1 = pca.fit_transform(x_res_1)
+    x_res_2 = pca.fit_transform(x_res_2)
+    x_res_3 = pca.fit_transform(x_res_3)
+    x = pca.fit_transform(x)
+    
+    fig, axes = plt.subplots(1,5, figsize=(15,5))
+    for i, arr in enumerate([x_res_0, x_res_1, x_res_2, x_res_3, x]):
+        axes[i].set_title(f"Layer {i}")
+        axes[i].scatter(arr[:, 0], arr[:, 1], alpha=0.9)
+    
+    fig.tight_layout()
+    fig.savefig("visualization/PCA.png", dpi=300)
+    exit(1)
+
+# HACK
+def log_grad(module:nn.Module, grad_input:Tensor, grad_output:Tensor):
+    import os
+    import numpy as np
+    from time import time
+    save_dir = "visualization/grad"
+    os.makedirs(save_dir, exist_ok=True)
+    save_path = os.path.join(save_dir, f"grad_{time()}.npz")
+    if grad_input[0] is not None and grad_output[0] is not None:
+        np.savez_compressed(
+            save_path, 
+            grad_in=grad_input[0].detach().cpu().numpy(), 
+            grad_out=grad_output[0].detach().cpu().numpy()
+        )
+
+# HACK
+def log_act(x_res_0:Tensor, x_res_1:Tensor, x_res_2:Tensor, x_res_3:Tensor, x:Tensor):
+    import os
+    import numpy as np
+    from time import time
+    save_dir = "visualization/act"
+    os.makedirs(save_dir, exist_ok=True)
+    save_path = os.path.join(save_dir, f"act_{time()}.npz")
+    np.savez_compressed(
+        save_path, 
+        layer0=x_res_0.detach().cpu().numpy(),
+        layer1=x_res_1.detach().cpu().numpy(),
+        layer2=x_res_2.detach().cpu().numpy(),
+        layer3=x_res_3.detach().cpu().numpy(),
+        layer4=x.detach().cpu().numpy()
+    )
 
 
 class MM_MedNext_Decoder(BaseModule):
