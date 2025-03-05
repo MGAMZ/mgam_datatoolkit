@@ -119,6 +119,8 @@ class DiceLoss_3D(torch.nn.Module):
     def __init__(
         self,
         smooth_z_ratio:int|None = None,
+        background_Z_min_weight = 0.01,
+        background_Z_max_weight = 0.1,
         ignore_1st_index: bool = False,
         batch_z: int|None = None,
         eps=1e-5,
@@ -135,6 +137,10 @@ class DiceLoss_3D(torch.nn.Module):
         """
         super().__init__()
         self.smooth_z_ratio = smooth_z_ratio
+        # the final weight is `A * max_weight + min_weight, where A ∈ [0, 1]`
+        # so the actual max weight should be `max_weight - min_weight`
+        self.background_Z_min_weight = background_Z_min_weight
+        self.background_Z_max_weight = background_Z_max_weight - background_Z_min_weight
         self.eps = eps
         self.ignore_index = ignore_index
         self.loss_name = self._loss_name = loss_name
@@ -318,8 +324,8 @@ class DiceLoss_3D(torch.nn.Module):
                 # z_weights[n, left_region] = (z_coords[left_region] - extended_min_z) / half_extension
                 # z_weights[n, right_region] = 1 - (z_coords[right_region] - max_z) / half_extension
                 # 楔形
-                z_weights[n, left_region] = (1 - (z_coords[left_region] - extended_min_z) / half_extension) * 0.2 + 0.05
-                z_weights[n, right_region] = (z_coords[right_region] - max_z) / half_extension * 0.2 + 0.05
+                z_weights[n, left_region] = (1 - (z_coords[left_region] - extended_min_z) / half_extension) * self.background_Z_max_weight + self.background_Z_min_weight
+                z_weights[n, right_region] = (z_coords[right_region] - max_z) / half_extension * self.background_Z_max_weight + self.background_Z_min_weight
                 # 在有效标注区域内，权重为1
                 z_weights[n, middle_region] = 1.0
         
