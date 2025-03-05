@@ -360,9 +360,9 @@ class DiceLoss_3D(torch.nn.Module):
             loss = self.forward_one_patch(pred, target, *args, **kwargs)
 
         if self.smooth_z_ratio is not None:
-            z_weights = self.get_smooth_z_weight(target)
+            z_weights = self.get_smooth_z_weight(target) # [N, Z]
             # self.visualize_z_loss(target, loss, z_weights) # HACK debug
-            weights = z_weights.view(z_weights.size(0), 1, z_weights.size(2), 1, 1).expand_as(loss)
+            weights = z_weights.view(z_weights.size(0), 1, z_weights.size(1), 1, 1).expand_as(loss)
             weighted_loss = (loss * weights)
         
         return weighted_loss.mean()
