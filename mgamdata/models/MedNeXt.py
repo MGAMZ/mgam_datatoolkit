@@ -895,8 +895,8 @@ class MM_MedNext_Encoder(BaseModule):
             self.requires_grad_(False)
 
         # HACK Use for grad visualization
-        # self.register_backward_hook(grad_hist_and_pixelwise_vis_hook)
-        self.register_backward_hook(log_grad)
+        self.register_backward_hook(grad_hist_and_pixelwise_vis_hook)
+        # self.register_backward_hook(log_grad)
 
     def forward(self, x: Tensor):
         if self.use_checkpoint:
@@ -925,10 +925,10 @@ class MM_MedNext_Encoder(BaseModule):
             x = self.bottleneck(x)
         
         # HACK Use for activation map visualization
-        # vis_act_map(x_res_0, x_res_1, x_res_2, x_res_3, x)
+        vis_act_map(x_res_0, x_res_1, x_res_2, x_res_3, x)
         # vis_tSNE(x_res_0, x_res_1, x_res_2, x_res_3, x)
-        # vis_PCA(x_res_0, x_res_1, x_res_2, x_res_3, x)
-        log_act(x_res_0, x_res_1, x_res_2, x_res_3, x)
+        vis_PCA(x_res_0, x_res_1, x_res_2, x_res_3, x)
+        # log_act(x_res_0, x_res_1, x_res_2, x_res_3, x)
         
         return (x_res_0, x_res_1, x_res_2, x_res_3, x)
 
@@ -952,13 +952,15 @@ def grad_hist_and_pixelwise_vis_hook(module:nn.Module, grad_input:Tensor, grad_o
     save_dir = os.path.join("visualization")
     os.makedirs(save_dir, exist_ok=True)
     font = FontProperties(fname="/mnt/c/Windows/Fonts/simhei.ttf", size=14)
+    cmap = "GnBu"
+    alpha = 0.8
 
     grad_in = grad_input[0].mean(dim=(0,1)).detach().cpu().numpy()
     grad_out = grad_output[0].mean(dim=(0,1)).detach().cpu().numpy()
     
     # 计算统一的最大最小值用于归一化
     all_grads = np.concatenate([grad_in.flatten(), grad_out.flatten()])
-    vmin = np.percentile(all_grads, 50)
+    vmin = np.percentile(all_grads, 65)
     vmax = np.percentile(all_grads, 95)
     
     # 创建图形和网格
@@ -969,18 +971,18 @@ def grad_hist_and_pixelwise_vis_hook(module:nn.Module, grad_input:Tensor, grad_o
     cbar_ax = fig.add_subplot(gs[0, :])
     norm = Normalize(vmin=vmin, vmax=vmax)
     cb = plt.colorbar(
-        plt.cm.ScalarMappable(norm=norm, cmap='winter'), 
+        plt.cm.ScalarMappable(norm=norm, cmap=cmap), 
         cax=cbar_ax, 
         orientation='horizontal',
-        alpha=0.7)
+        alpha=alpha)
     cbar_ax.xaxis.set_ticks_position('top')
     cbar_ax.xaxis.set_label_position('top')
     
     # 第二行：热图
     ax1 = fig.add_subplot(gs[1, 0])
     im1 = ax1.imshow(grad_in, 
-                   cmap='winter', 
-                   alpha=0.7,
+                   cmap=cmap, 
+                   alpha=alpha,
                    norm=norm)
     ax1.set_title("输入梯度", fontsize=14, fontproperties=font)
     ax1.text(0, 20, 
@@ -990,8 +992,8 @@ def grad_hist_and_pixelwise_vis_hook(module:nn.Module, grad_input:Tensor, grad_o
     
     ax2 = fig.add_subplot(gs[1, 1])
     im2 = ax2.imshow(grad_out, 
-                   cmap='winter', 
-                   alpha=0.7,
+                   cmap=cmap, 
+                   alpha=alpha,
                    norm=norm)
     ax2.set_title("输出梯度", fontsize=14, fontproperties=font)
     ax2.text(0, 20, 
@@ -1002,12 +1004,12 @@ def grad_hist_and_pixelwise_vis_hook(module:nn.Module, grad_input:Tensor, grad_o
     
     # 第三行：直方图（对数尺度）
     ax3 = fig.add_subplot(gs[2, 0])
-    ax3.hist(grad_in.flatten(), bins=50, alpha=0.7, color='skyblue')
+    ax3.hist(grad_in.flatten(), bins=50, alpha=alpha, color='skyblue')
     ax3.set_ylabel("频率", fontproperties=font)
     ax3.set_yscale('log')
     
     ax4 = fig.add_subplot(gs[2, 1])
-    ax4.hist(grad_out.flatten(), bins=50, alpha=0.7, color='skyblue')
+    ax4.hist(grad_out.flatten(), bins=50, alpha=alpha, color='skyblue')
     ax4.set_yscale('log')
     
     # 设置x轴范围一致
@@ -1016,9 +1018,8 @@ def grad_hist_and_pixelwise_vis_hook(module:nn.Module, grad_input:Tensor, grad_o
     ax3.set_xlim(x_min, x_max)
     ax4.set_xlim(x_min, x_max)
     
-    plt.tight_layout()
-    
     # 保存图像
+    plt.tight_layout()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     save_path = os.path.join(save_dir, f"grad_pixel_hist_vis_{timestamp}.png")
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
@@ -1026,32 +1027,33 @@ def grad_hist_and_pixelwise_vis_hook(module:nn.Module, grad_input:Tensor, grad_o
     plt.close()
 
 # HACK Use for activation map visualization
-def vis_act_map(x_res_0:Tensor, x_res_1:Tensor, x_res_2:Tensor, x_res_3:Tensor, x:Tensor):
-    x_res_0 = x_res_0.mean(dim=(0,1)).cpu().numpy()
-    x_res_1 = x_res_1.mean(dim=(0,1)).cpu().numpy()
-    x_res_2 = x_res_2.mean(dim=(0,1)).cpu().numpy()
-    x_res_3 = x_res_3.mean(dim=(0,1)).cpu().numpy()
-    x = x.mean(dim=(0,1)).cpu().numpy()
+def vis_act_map(x_res_0:Tensor, x_res_1:Tensor, x_res_2:Tensor,
+                x_res_3:Tensor, x:Tensor,
+                cmap="GnBu", alpha=0.8):
+    x_res_0 = x_res_0.mean(dim=(0,1)).detach().cpu().numpy()
+    x_res_1 = x_res_1.mean(dim=(0,1)).detach().cpu().numpy()
+    x_res_2 = x_res_2.mean(dim=(0,1)).detach().cpu().numpy()
+    x_res_3 = x_res_3.mean(dim=(0,1)).detach().cpu().numpy()
+    x = x.mean(dim=(0,1)).detach().cpu().numpy()
     
     import matplotlib.pyplot as plt
     from matplotlib.colors import Normalize
 
     fig, axes = plt.subplots(1,5, figsize=(15,5))
-    norm = Normalize(vmin=-0.01, vmax=0.05)
+    norm = Normalize(vmin=-0.03, vmax=0.05)
     norm = Normalize()
     for i, arr in enumerate([x_res_0, x_res_1, x_res_2, x_res_3, x]):
         axes[i].set_title(f"Layer {i}")
-        axes[i].imshow(arr, cmap="winter", norm=norm, alpha=0.9)
+        axes[i].imshow(arr, norm=norm, cmap=cmap, alpha=alpha)
         print(f"Layer {i} std: {arr.var()}")
     
     cbar_ax = fig.add_axes(rect=(0.15, 0.05, 0.7, 0.03))
-    fig.colorbar(plt.cm.ScalarMappable(norm=norm, cmap="winter"), 
-                 cax=cbar_ax, orientation="horizontal", alpha=0.9)
+    fig.colorbar(plt.cm.ScalarMappable(norm=norm, cmap=cmap),
+                 cax=cbar_ax, orientation="horizontal", alpha=alpha)
     
     fig.tight_layout()
     fig.subplots_adjust(left=0.05, right=0.99, top=0.99, bottom=0.01, hspace=0)
     fig.savefig("visualization/ActivationMap.png", dpi=300)
-    exit(1)
 
 # HACK Use for t-SNE analysis
 def vis_tSNE(x_res_0:Tensor, x_res_1:Tensor, x_res_2:Tensor, x_res_3:Tensor, x:Tensor):
@@ -1079,7 +1081,6 @@ def vis_tSNE(x_res_0:Tensor, x_res_1:Tensor, x_res_2:Tensor, x_res_3:Tensor, x:T
     
     fig.tight_layout()
     fig.savefig("visualization/tSNE.png", dpi=300)
-    exit(1)
 
 # HACK Use for PCA
 def vis_PCA(x_res_0:Tensor, x_res_1:Tensor, x_res_2:Tensor, x_res_3:Tensor, x:Tensor):
@@ -1106,7 +1107,6 @@ def vis_PCA(x_res_0:Tensor, x_res_1:Tensor, x_res_2:Tensor, x_res_3:Tensor, x:Te
     
     fig.tight_layout()
     fig.savefig("visualization/PCA.png", dpi=300)
-    exit(1)
 
 # HACK
 def log_grad(module:nn.Module, grad_input:Tensor, grad_output:Tensor):

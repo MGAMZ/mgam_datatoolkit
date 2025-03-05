@@ -3,9 +3,6 @@ import math
 import random
 import os
 import pdb
-from typing import Dict
-from typing import List
-from typing import Tuple
 from multiprocessing import Pool, cpu_count, Lock
 from multiprocessing.managers import BaseManager
 from tqdm import tqdm
@@ -68,7 +65,7 @@ class ScanTableRemover(BaseTransform):
         self.PixelSpacing_offset = 1
 
     def process(self, pixel_array:np.ndarray, table_height:float, 
-                recon_center_cord:Tuple[float,float], 
+                recon_center_cord:tuple[float,float], 
                 pixel_spacing:float|np.ndarray):
         if len(pixel_spacing) == 2:	# type:ignore
             if pixel_spacing[0] == pixel_spacing[1]:	# type:ignore
@@ -97,7 +94,7 @@ class ScanTableRemover(BaseTransform):
         return pixel_array
 
 
-    def transform(self, results: Dict) -> Dict:
+    def transform(self, results: dict) -> dict:
         # 某些没有完整dcm序列的病例不可以进行床体移除，因为其所依赖的相关Metadata不存在。
         if results['dcm_meta']:
             results['img'] = self.process(
@@ -189,8 +186,7 @@ class Distortion(BaseTransform):
         cv2_map1, cv2_map2 = cls.init_cv2_map(img_shape, tform)
         return tform, cv2_map1, cv2_map2
 
-
-    def multiprocess_distort(self, Imgarray_list:list) -> List[np.ndarray]:
+    def multiprocess_distort(self, Imgarray_list:list) -> list[np.ndarray]:
         if not hasattr(self, 'p'):
             self._init_pool()
         distorted_imgs = []
@@ -227,7 +223,6 @@ class Distortion(BaseTransform):
                 borderValue=pad_val
             )
         return distorted
-
 
     def transform(self, results: dict) -> dict:
         # 在开始时或每隔一段时间，刷新映射矩阵
@@ -331,7 +326,7 @@ class GaussianBlur(BaseTransform):
         self.radius = radius
         super().__init__()
     
-    def transform(self, results: Dict) -> Dict | Tuple[List, List] | None:
+    def transform(self, results: dict) -> dict | tuple[list, list] | None:
         results['img'] = gaussian_filter(results['img'], 
                                          sigma=self.sigma, 
                                          order=3,
