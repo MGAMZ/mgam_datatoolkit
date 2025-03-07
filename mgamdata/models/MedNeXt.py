@@ -895,7 +895,7 @@ class MM_MedNext_Encoder(BaseModule):
             self.requires_grad_(False)
 
         # HACK Use for grad visualization
-        self.register_backward_hook(grad_hist_and_pixelwise_vis_hook)
+        # self.register_backward_hook(grad_hist_and_pixelwise_vis_hook)
         # self.register_backward_hook(log_grad)
 
     def forward(self, x: Tensor):
@@ -925,9 +925,9 @@ class MM_MedNext_Encoder(BaseModule):
             x = self.bottleneck(x)
         
         # HACK Use for activation map visualization
-        vis_act_map(x_res_0, x_res_1, x_res_2, x_res_3, x)
+        # vis_act_map(x_res_0, x_res_1, x_res_2, x_res_3, x)
         # vis_tSNE(x_res_0, x_res_1, x_res_2, x_res_3, x)
-        vis_PCA(x_res_0, x_res_1, x_res_2, x_res_3, x)
+        # vis_PCA(x_res_0, x_res_1, x_res_2, x_res_3, x)
         # log_act(x_res_0, x_res_1, x_res_2, x_res_3, x)
         
         return (x_res_0, x_res_1, x_res_2, x_res_3, x)
