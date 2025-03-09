@@ -40,9 +40,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-nvidia = [
+full = [
   "deepspeed",
   "tensorrt",
+  "mamba-ssm",
 ]
 
 [project.scripts]
