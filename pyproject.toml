@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mgamdata"
-version = "1.9.2.250302"
+version = "1.9.2.250310"
 requires-python = ">= 3.12"
 description = "mgam's data toolkit for a better world!"
 readme = "README.md"
@@ -40,9 +40,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-nvidia = [
+full = [
   "deepspeed",
   "tensorrt",
+  "mamba-ssm",
 ]
 
 [project.scripts]
