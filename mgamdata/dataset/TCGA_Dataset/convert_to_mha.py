@@ -38,7 +38,7 @@ class TCGA_Formatter(StandardFileFormatter):
     MINIMUM_DCM_SLICES = 16
 
     def execute(self):
-        meta_path = os.path.join(self.data_root, "metadata.csv")
+        meta_path = os.path.join(self.args.data_root, "metadata.csv")
         assert os.path.exists(meta_path), (
             "A standard TCGA dataset downloaded using NBIA Data Retriever "
             "must have a metadata.csv in the root directory"

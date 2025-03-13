@@ -118,7 +118,7 @@ class StandardFileFormatter:
         task_list = self.tasks()
         per_sample_log = []
 
-        if self.args.use_mp:
+        if self.args.mp:
             with mp.Pool() as pool:
                 for result in tqdm(
                     pool.imap_unordered(self.convert_one_sample, task_list),
@@ -148,8 +148,8 @@ class StandardFileFormatter:
 
     def argparse(self) -> argparse.ArgumentParser:
         parser = argparse.ArgumentParser(description="Convert all NIfTI files in a directory to MHA format.")
-        parser.add_argument("input_dir", type=str, help="Containing NIfTI files.")
-        parser.add_argument("output_dir", type=str, help="Save MHA files.")
+        parser.add_argument("data_root", type=str, help="Containing NIfTI files.")
+        parser.add_argument("dest_root", type=str, help="Save MHA files.")
         parser.add_argument("--mp", action="store_true", help="Use multiprocessing.")
         parser.add_argument("--spacing", type=float, nargs=3, default=None, help="Resample to this spacing.")
         parser.add_argument("--size", type=int, nargs=3, default=None, help="Crop to this size.")
