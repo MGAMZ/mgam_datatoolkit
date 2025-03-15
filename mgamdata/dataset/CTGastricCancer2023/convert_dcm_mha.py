@@ -13,7 +13,7 @@ import numpy as np
 import SimpleITK as sitk
 
 from mgamdata.io.dcm_toolkit import read_dcm_as_sitk
-from mgamdata.io.sitk_toolkit import sitk_resample_to_spacing_v2, sitk_resample_to_size
+from mgamdata.io.sitk_toolkit import sitk_resample_to_spacing, sitk_resample_to_size
 
 
 def nrrd_to_ItkLabel(
@@ -86,9 +86,9 @@ def convert_one_case(args):
 
     if spacing is not None:
         assert size is None, "Cannot set both spacing and size."
-        input_image_mha = sitk_resample_to_spacing_v2(input_image_mha, spacing, "image")
+        input_image_mha = sitk_resample_to_spacing(input_image_mha, spacing, "image")
         if input_label_mha is not None:
-            input_label_mha = sitk_resample_to_spacing_v2(input_image_mha, spacing, "label")
+            input_label_mha = sitk_resample_to_spacing(input_image_mha, spacing, "label")
     if size is not None:
         assert spacing is None, "Cannot set both spacing and size."
         input_image_mha = sitk_resample_to_size(input_image_mha, size, "image")
@@ -110,7 +110,7 @@ def convert_and_save_nii_to_mha(
     size: Sequence[float | int] | None = None,
 ):
     task_list = []
-    for roots, dirs, files in os.walk(input_dir):
+    for roots, dirs, files in tqdm(os.walk(input_dir), desc="Scanning", dynamic_ncols=True):
         for file in files:
             if file.endswith(".dcm"):
                 dcms_under_folder = [
@@ -147,7 +147,7 @@ def convert_and_save_nii_to_mha(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Convert all NIfTI files in a directory to MHA format.")
+    parser = argparse.ArgumentParser()
     parser.add_argument("input_dir", type=str, help="Containing dcm files.")
     parser.add_argument("output_dir", type=str, help="Save MHA files.")
     parser.add_argument("--mp", action="store_true", help="Use multiprocessing.")

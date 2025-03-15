@@ -107,15 +107,16 @@ class ScanTableRemover(BaseTransform):
 
 
 class Distortion(BaseTransform):
-    def __init__(self, 
+    def __init__(self,
                  global_rotate:float,
-                 amplitude:float, 
-                 frequency:float, 
-                 grid_dense:int, 
-                 in_array_shape:tuple, 
-                 refresh_interval:int, 
+                 amplitude:float,
+                 frequency:float,
+                 grid_dense:int,
+                 in_array_shape:tuple,
+                 refresh_interval:int,
                  pad_val:int=-1024,
-                 use_cv2:bool=True, 
+                 seg_pad_val:int=0,
+                 use_cv2:bool=True,
                  const:bool=False,
                  ) -> None:
         self.global_rotate = global_rotate  # 随机全局旋转
@@ -127,22 +128,11 @@ class Distortion(BaseTransform):
         self.refresh_interval = refresh_interval  # 映射矩阵刷新间隔
         self.refresh_counter = 0
         self.const = const # 控制是否要固定AF参数
-        self.tform, self.cv2_map1, self.cv2_map2 = self.refresh_affine_map(
+        self.tform, (self.cv2_map1, self.cv2_map2) = self.refresh_affine_map(
             in_array_shape, grid_dense, amplitude, frequency, global_rotate, const)
         self.use_cv2 = use_cv2
         self.pad_val = pad_val
         super().__init__()
-
-    @staticmethod
-    def init_cv2_map(img_shape, tform):
-        src = np.mgrid[0:img_shape[0], 0:img_shape[1]].astype(np.float32)
-        src = src.transpose(1,2,0)  # (H,W,2)
-        src = src.reshape(img_shape[0]*img_shape[1], 2) # (H*W,2)
-        dst = tform(src)
-        dst = dst.reshape(img_shape[0], img_shape[1], 2) # (H,W,2)
-        cv2_map1 = dst[..., 0].astype(np.float32)
-        cv2_map2 = dst[..., 1].astype(np.float32)
-        return cv2_map1, cv2_map2
 
     # 为分段仿射变换生成映射矩阵
     # 有时候为了固定AF参数，需要使用const来关闭随机参数
@@ -181,32 +171,30 @@ class Distortion(BaseTransform):
                 # 存入dst
                 dst[x, y, :] = (src_x, src_y)
 
+        def calc_cv2_map(img_shape, tform):
+            src = np.mgrid[0:img_shape[0], 0:img_shape[1]].astype(np.float32)
+            src = src.transpose(1,2,0)  # (H,W,2)
+            src = src.reshape(img_shape[0]*img_shape[1], 2) # (H*W,2)
+            dst = tform(src)
+            dst = dst.reshape(img_shape[0], img_shape[1], 2) # (H,W,2)
+            cv2_map1 = dst[..., 0].astype(np.float32)
+            cv2_map2 = dst[..., 1].astype(np.float32)
+            return cv2_map1, cv2_map2
+        
         tform = PiecewiseAffineTransform()
         tform.estimate(src.reshape(-1,2), dst.reshape(-1,2))
-        cv2_map1, cv2_map2 = cls.init_cv2_map(img_shape, tform)
-        return tform, cv2_map1, cv2_map2
-
-    def multiprocess_distort(self, Imgarray_list:list) -> list[np.ndarray]:
-        if not hasattr(self, 'p'):
-            self._init_pool()
-        distorted_imgs = []
-        fetcher = self.p.imap(self.distort, Imgarray_list)
-        for distorted_img in tqdm(fetcher, desc='MultiProcess Distortion', total=len(Imgarray_list)):
-            distorted_imgs.append(distorted_img)
-
-        if not self.const:
-            self.refresh_counter += 1
-            if self.refresh_counter % self.refresh_interval == 0:
-                self.refresh_affine_map()
+        cv2_map1, cv2_map2 = calc_cv2_map(img_shape, tform)
         
-        return distorted_imgs
+        return tform, (cv2_map1, cv2_map2)
 
     # 执行
-    def distort(self, Imgarray:np.ndarray):
+    @staticmethod
+    def distort(tform, Imgarray:np.ndarray, order, pad_val):
         return warp(image=Imgarray, 
-                    inverse_map=self.tform, 
-                    order=3,
-                    preserve_range=True)
+                    inverse_map=tform, 
+                    order=order,
+                    preserve_range=True,
+                    cval=pad_val)
 
     @staticmethod
     def distort_cv2(Imgarray:np.ndarray, 
@@ -214,22 +202,23 @@ class Distortion(BaseTransform):
                     map2:np.ndarray, 
                     pad_val:int,
                     interpolation):
-        distorted = cv2.remap(
-                src=Imgarray,
-                map1=map1.astype(np.float32),
-                map2=map2.astype(np.float32),
-                interpolation=interpolation,
-                borderMode=cv2.BORDER_CONSTANT,
-                borderValue=pad_val
-            )
-        return distorted
+        return cv2.remap(src=Imgarray,
+                         map1=map1.astype(np.float32),
+                         map2=map2.astype(np.float32),
+                         interpolation=interpolation,
+                         borderMode=cv2.BORDER_CONSTANT,
+                         borderValue=pad_val)
 
     def transform(self, results: dict) -> dict:
         # 在开始时或每隔一段时间，刷新映射矩阵
         if (not self.const) and (self.refresh_counter % self.refresh_interval == 0):
-            self.tform, self.cv2_map1, self.cv2_map2 = self.refresh_affine_map(
-                self.img_shape, self.grid_dense, self.amplitude, 
-                self.frequency, self.global_rotate, self.const)
+            self.tform, (self.cv2_map1, self.cv2_map2) = self.refresh_affine_map(
+                self.img_shape, 
+                self.grid_dense, 
+                self.amplitude, 
+                self.frequency, 
+                self.global_rotate, 
+                self.const)
         
         if self.use_cv2:
             results['img'] = self.distort_cv2(
@@ -243,20 +232,20 @@ class Distortion(BaseTransform):
                     results['gt_seg_map'], 
                     self.cv2_map1, 
                     self.cv2_map2, 
-                    0,
+                    self.seg_pad_val,
                     interpolation=cv2.INTER_NEAREST)
         else:
-            results['img'] = warp(
-                image=results['img'], 
-                inverse_map=self.tform, 
+            results['img'] = self.distort(
+                tform=self.tform,
+                Imgarray=results['img'],
                 order=1,
-                preserve_range=True)
+                pad_val=self.pad_val)
             if 'gt_seg_map' in results:
-                results['gt_seg_map'] = warp(
-                    image=results['gt_seg_map'], 
-                    inverse_map=self.tform, 
+                results['gt_seg_map'] = self.distort(
+                    tform=self.tform,
+                    Imgarray=results['gt_seg_map'],
                     order=0,
-                    preserve_range=True)
+                    pad_val=self.seg_pad_val)
         
         self.refresh_counter += 1
         return results

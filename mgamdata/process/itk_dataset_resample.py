@@ -1,5 +1,6 @@
 import os
 import argparse
+import json
 from tqdm import tqdm
 from collections.abc import Sequence
 from multiprocessing import Pool
@@ -120,10 +121,10 @@ def parse_args():
     return parser.parse_args()
 
 
-def main():
-    args = parse_args()
-    resample_standard_dataset(args.source_root, args.spacing, args.dest_root, args.mp)
-
-
 if __name__ == '__main__':
-    main()
+    args = parse_args()
+    json.dump(vars(args),
+              open(os.path.join(args.dest_root, "resample_configs.json"), "w"), 
+              indent=4
+    )
+    resample_standard_dataset(args.source_root, args.spacing, args.dest_root, args.mp)
