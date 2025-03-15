@@ -14,8 +14,8 @@ def read_dcm_as_sitk(dcm_path: str) -> tuple[list[pydicom.FileDataset], sitk.Ima
     """
     itk_reader = sitk.ImageSeriesReader()
     series_ids = sitk.ImageSeriesReader.GetGDCMSeriesIDs(
-        os.path.dirname(dcm_path), useSeriesDetails=True
-    )
+        os.path.dirname(dcm_path), 
+        useSeriesDetails=True)
     if not series_ids:
         raise ValueError(f"No DICOM series found in {dcm_path}.")
     series_file_names = sitk.ImageSeriesReader.GetGDCMSeriesFileNames(

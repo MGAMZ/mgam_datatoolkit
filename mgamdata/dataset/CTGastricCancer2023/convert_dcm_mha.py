@@ -56,17 +56,23 @@ def convert_one_case(args):
     dcms, series_output_folder, spacing, size = args
     output_image_folder = os.path.join(series_output_folder, "image")
     output_label_folder = os.path.join(series_output_folder, "label")
-    label_path = os.path.join(
-        os.path.dirname(dcms[0]).replace("img", "label"), "mask.nrrd"
-    )
+    label_path = os.path.join(os.path.dirname(dcms[0]).replace("img", "label"), "mask.nrrd")
 
-    # 原始扫描转换为SimpleITK格式并保存
-    # 类分离的标注文件合并后保存
-    input_image_dcm, input_image_mha = read_dcm_as_sitk(dcms[0])
-    series_id = input_image_dcm[0].SeriesInstanceUID
-    
+    # 构建路径，保持文件存储结构不变
+    # 按照SeriesUID存储，以及自动跳过
+    series_id = pydicom.dcmread(dcms[0]).SeriesInstanceUID
+    output_image_mha_path = os.path.join(output_image_folder, f"{series_id}.mha")
+    output_label_mha_path = os.path.join(output_label_folder, f"{series_id}.mha")
+    os.makedirs(output_image_folder, exist_ok=True)
+    os.makedirs(output_label_folder, exist_ok=True)
+    if os.path.exists(output_image_mha_path) and os.path.exists(output_label_mha_path):
+        tqdm.write(f"Skip {series_id}, already exists.")
+        return
+
+    # 读取
     try:
         failed = None
+        input_image_dcm, input_image_mha = read_dcm_as_sitk(dcms[0])
         input_label_mha = nrrd_to_ItkLabel(input_image_dcm, input_image_mha, label_path)
     except Exception as e:
         failed = {
@@ -76,14 +82,7 @@ def convert_one_case(args):
             'reason': e}
         input_label_mha = None
 
-    # 构建路径，保持文件存储结构不变
-    output_image_mha_path = os.path.join(output_image_folder, f"{series_id}.mha")
-    output_label_mha_path = os.path.join(output_label_folder, f"{series_id}.mha")
-    os.makedirs(output_image_folder, exist_ok=True)
-    os.makedirs(output_label_folder, exist_ok=True)
-    if os.path.exists(output_image_mha_path) and os.path.exists(output_label_mha_path):
-        return
-
+    # 重采样
     if spacing is not None:
         assert size is None, "Cannot set both spacing and size."
         input_image_mha = sitk_resample_to_spacing(input_image_mha, spacing, "image")
@@ -95,6 +94,7 @@ def convert_one_case(args):
         if input_label_mha is not None:
             input_label_mha = sitk_resample_to_size(input_image_mha, size, "label")
 
+    # 写入
     sitk.WriteImage(input_image_mha, output_image_mha_path, useCompression=True)
     if input_label_mha is not None:
         sitk.WriteImage(input_label_mha, output_label_mha_path, useCompression=True)

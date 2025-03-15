@@ -16,9 +16,7 @@ import SimpleITK as sitk
 STANDARD_DIRECTION = [1, 0, 0, 0, 1, 0, 0, 0, 1]
 STANDARD_ORIGIN = [0, 0, 0]
 PIXEL_TYPE = lambda field: sitk.sitkInt16 if field == "image" else sitk.sitkUInt8
-INTERPOLATOR = lambda field: (
-    sitk.sitkBSpline5 if field == "image" else sitk.sitkNearestNeighbor
-)
+INTERPOLATOR = lambda field: sitk.sitkBSpline5 if field == "image" else sitk.sitkNearestNeighbor
 
 
 def sitk_resample_to_spacing(

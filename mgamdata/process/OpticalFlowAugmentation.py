@@ -1,4 +1,3 @@
-import logging
 import os
 import pdb
 import pickle
@@ -9,14 +8,14 @@ from copy import deepcopy
 from io import BytesIO
 from multiprocessing import Lock, Pool
 from multiprocessing.managers import BaseManager
-from typing import Any, Dict, List, Tuple
+from typing import Any
 from abc import abstractmethod
 
 import cv2
 import numpy as np
 import torch
 from cv2.cuda import fastNlMeansDenoising
-from mmengine import ConfigDict
+from mmengine.config import ConfigDict
 from mmengine.utils import ManagerMixin
 from mmseg.registry import TRANSFORMS
 from mmseg.models.data_preprocessor import SegDataPreProcessor
@@ -204,7 +203,7 @@ class Server(mgam_Socket_Protocol):
         print('Received Connection Request')
         print('Ready to Receive Init Paramaters')
         data = self.client_socket.recv(self.MAX_RECV_ONCE)
-        params:Dict = pickle.loads(data)
+        params:dict = pickle.loads(data)
         OF_name = params.pop('type')
         self.OF:OpticalFlow_BaseLabelAugment = eval(OF_name)(**params)
         print(f"Launched OF {self.OF} with param {params}")
@@ -231,11 +230,11 @@ class Server(mgam_Socket_Protocol):
 
 MP_LOCK = Lock()
 class OpticalFlow_BaseLabelAugment:
-    def __init__(self, size:Tuple[int, int]):
+    def __init__(self, size:tuple[int, int]):
         self.H, self.W = size
 
     # 返回每一个gap取值的双向光流
-    # List[Tuple[cv2.typing.MatLike, cv2.typing.MatLike]]
+    # list[tuple[cv2.typing.MatLike, cv2.typing.MatLike]]
     def Bidirectional_OpticalFlow_Calc(self, serial:np.ndarray):
         raise NotImplementedError
 
@@ -288,7 +287,7 @@ class NvidiaOpticalFlow_LabelAugment(OpticalFlow_BaseLabelAugment):
             )
     
     def Bidirectional_OpticalFlow_Calc(self, serial:np.ndarray
-            ) -> List[Tuple[cv2.Mat, cv2.Mat]]:
+            ) -> list[tuple[cv2.Mat, cv2.Mat]]:
         assert len(serial) % 2 == 1
         center_idx = len(serial) // 2   # 轴位置下标和两侧对称长度恰好是一致的
         self.refresh(pos=True, neg=True)  # 如果有TemperalHint，不重新建立对象可能导致非预期光流提取
@@ -314,7 +313,7 @@ class NvidiaOpticalFlow_LabelAugment(OpticalFlow_BaseLabelAugment):
             flow_cache.append((pos_flow.download(), neg_flow.download()))
         
         # 多进程返回值必须是可Pickle的, GPUMAT不支持pickle
-        return flow_cache   # List[Tuple[Tensor[H,W,2], Tensor[H,W,2]]]
+        return flow_cache   # list[tuple[Tensor[H,W,2], Tensor[H,W,2]]]
 
     def Unidirectional_OpticalFlow_Calc(self, serial: np.ndarray):
         try:
@@ -353,12 +352,12 @@ class NvidiaOpticalFlow_LabelAugment(OpticalFlow_BaseLabelAugment):
 # ------------------LK--------------------
 
 class LKDenseOpticalFlow_LabelAugment(OpticalFlow_BaseLabelAugment):
-    def __init__(self, size:Tuple[int,int], *args, **kwargs):
+    def __init__(self, size:tuple[int,int], *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.OF = cv2.calcOpticalFlowFarneback()
     
     def Bidirectional_OpticalFlow_Calc(self, serial:np.ndarray
-        ) -> List[Tuple[cv2.Mat, cv2.Mat]]:
+        ) -> list[tuple[cv2.Mat, cv2.Mat]]:
         super().Bidirectional_OpticalFlow_Calc(serial)
         flow_cache = []
         center_idx = len(serial) // 2   # 轴位置下标和两侧对称长度恰好是一致的
@@ -714,11 +713,11 @@ class BatchSlice_PreProcessor(SegDataPreProcessor):
         super().__init__(*args, **kwargs)
 
     # 将每个样本的slice维度合并到batch维度中去，以符合mmseg的数据流框架
-    def forward(self, data: Dict, training:bool=False):
+    def forward(self, data: dict, training:bool=False):
         # S: image_slice_per_sample
         # B: batch
-        # data['inputs']: List[B, Tensor[S*C,H,W]]
-        # data['data_samples']: List[B, Tensor[S,H,W]]
+        # data['inputs']: list[B, Tensor[S*C,H,W]]
+        # data['data_samples']: list[B, Tensor[S,H,W]]
         # data['data_samples'][0].gt_sem_seg.data: Tensor[S,H,W]
         B = len(data['inputs'])
         SC,H,W = data['inputs'][0].shape
@@ -748,8 +747,8 @@ class OpticalFlowAugmentor_Transform(BaseTransform):
                  WarpMethod:str,
                  ExtrapolateMode:str,
                  image_channels:int, 
-                 label_size:Tuple[int, int],
-                 size:Tuple[int, int],
+                 label_size:tuple[int, int],
+                 size:tuple[int, int],
                  enabled:bool=True,
                  vis:bool=True,
                  ):
@@ -847,7 +846,7 @@ class OpticalFlowAugmentor_Transform(BaseTransform):
         return arr.astype(np.uint8)
 
     # 将每个样本的slice维度合并到batch维度中去，以符合mmseg的数据流框架
-    def transform(self, results:Dict) -> Dict[str, Any]:
+    def transform(self, results:dict) -> dict[str, Any]:
         H, W, SC= results['img'].shape
         S = SC // self.C
         if S == 1: return results    # 当识别出不增强的时候，跳过所有步骤
@@ -930,7 +929,7 @@ class OpticalFlowAugmentor_RandomDistance(OpticalFlowAugmentor_Transform):
                 os.remove(os.path.join(root, file))
 
 
-    def transform(self, results:Dict) -> Dict[str, Any]:
+    def transform(self, results:dict) -> dict[str, Any]:
         H, W, SC= results['img'].shape
         S = SC // self.C
 

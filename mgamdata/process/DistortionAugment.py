@@ -113,14 +113,13 @@ class Distortion(BaseTransform):
                  frequency:float,
                  grid_dense:int,
                  in_array_shape:tuple,
-                 refresh_interval:int,
+                 refresh_interval:int|None=None,
                  pad_val:int=-1024,
                  seg_pad_val:int=0,
                  use_cv2:bool=True,
                  const:bool=False,
                  ) -> None:
         self.global_rotate = global_rotate  # 随机全局旋转
-        # 使用正弦函数建立极径与扭曲角之间的关系
         self.amplitude = amplitude  # 振幅
         self.frequency = frequency  # 频率
         self.img_shape = in_array_shape  # 输入矩阵的尺寸
@@ -128,18 +127,16 @@ class Distortion(BaseTransform):
         self.refresh_interval = refresh_interval  # 映射矩阵刷新间隔
         self.refresh_counter = 0
         self.const = const # 控制是否要固定AF参数
-        self.tform, (self.cv2_map1, self.cv2_map2) = self.refresh_affine_map(
-            in_array_shape, grid_dense, amplitude, frequency, global_rotate, const)
         self.use_cv2 = use_cv2
         self.pad_val = pad_val
+        self.seg_pad_val = seg_pad_val
         super().__init__()
 
     # 为分段仿射变换生成映射矩阵
     # 有时候为了固定AF参数，需要使用const来关闭随机参数
-    @classmethod
-    def refresh_affine_map(cls, img_shape, grid_dense, amplitude, frequency, global_rotate, const):
-        src_cols = np.linspace(0, img_shape[0], grid_dense)
-        src_rows = np.linspace(0, img_shape[1], grid_dense)
+    def refresh_affine_map(self, const:bool):
+        src_cols = np.linspace(0, self.img_shape[0], self.grid_dense)
+        src_rows = np.linspace(0, self.img_shape[1], self.grid_dense)
         # 构建网格, src_rows, src_cols形状为(grid_dense, grid_dense)
         # src_rows为网格在源图中的行坐标, src_cols为网格在源图中的列坐标
         src_rows, src_cols = np.meshgrid(src_rows, src_cols)
@@ -147,27 +144,27 @@ class Distortion(BaseTransform):
         src = np.stack([src_cols, src_rows], axis=2)
         dst = np.zeros_like(src)
 
-        amplitude = (1 if const else random.random()*2-1) * amplitude
-        frequency = (1 if const else random.random()*2-1) * frequency
-        global_rotate = (1 if const else random.random()*2-1) * global_rotate
+        amplitude = (1 if const else random.random()*2-1) * self.amplitude
+        frequency = (1 if const else random.random()*2-1) * self.frequency
+        global_rotate = (1 if const else random.random()*2-1) * self.global_rotate
         
-        for x in range(grid_dense):
-            for y in range(grid_dense):
+        for x in range(self.grid_dense):
+            for y in range(self.grid_dense):
                 # index转标准坐标
-                y = grid_dense - y - 1
+                y = self.grid_dense - y - 1
                 # 直角坐标转极坐标
-                radius, angle = rectangular_to_polar(x, y, grid_dense//2, grid_dense//2)
+                radius, angle = rectangular_to_polar(x, y, self.grid_dense//2, self.grid_dense//2)
                 # 映射网格坐标系转换为源坐标系
-                radius *= img_shape[0] / grid_dense
+                radius *= self.img_shape[0] / self.grid_dense
                 # 极径扭曲
-                angle += math.pi/8 * amplitude * np.sin(radius/img_shape[0] * frequency * 2 * math.pi)
+                angle += math.pi/8 * amplitude * np.sin(radius/self.img_shape[0] * frequency * 2 * math.pi)
                 # 全局旋转
                 angle += global_rotate * math.pi/2
                 # 极坐标转换为直角坐标
-                src_x, src_y = polar_to_rectangular(radius, angle, img_shape[0]/2, img_shape[1]/2)
+                src_x, src_y = polar_to_rectangular(radius, angle, self.img_shape[0]/2, self.img_shape[1]/2)
                 # 标准坐标转index
-                src_y = img_shape[0] - src_y - 1
-                y = grid_dense - y - 1
+                src_y = self.img_shape[0] - src_y - 1
+                y = self.grid_dense - y - 1
                 # 存入dst
                 dst[x, y, :] = (src_x, src_y)
 
@@ -183,23 +180,22 @@ class Distortion(BaseTransform):
         
         tform = PiecewiseAffineTransform()
         tform.estimate(src.reshape(-1,2), dst.reshape(-1,2))
-        cv2_map1, cv2_map2 = calc_cv2_map(img_shape, tform)
+        cv2_map1, cv2_map2 = calc_cv2_map(self.img_shape, tform)
         
         return tform, (cv2_map1, cv2_map2)
 
-    # 执行
     @staticmethod
     def distort(tform, Imgarray:np.ndarray, order, pad_val):
-        return warp(image=Imgarray, 
-                    inverse_map=tform, 
+        return warp(image=Imgarray,
+                    inverse_map=tform,
                     order=order,
                     preserve_range=True,
                     cval=pad_val)
 
     @staticmethod
-    def distort_cv2(Imgarray:np.ndarray, 
+    def distort_cv2(Imgarray:np.ndarray,
                     map1:np.ndarray,
-                    map2:np.ndarray, 
+                    map2:np.ndarray,
                     pad_val:int,
                     interpolation):
         return cv2.remap(src=Imgarray,
@@ -211,13 +207,16 @@ class Distortion(BaseTransform):
 
     def transform(self, results: dict) -> dict:
         # 在开始时或每隔一段时间，刷新映射矩阵
-        if (not self.const) and (self.refresh_counter % self.refresh_interval == 0):
+        if (not self.const
+            and self.refresh_interval is not None
+            and self.refresh_counter % self.refresh_interval == 0
+        ):
             self.tform, (self.cv2_map1, self.cv2_map2) = self.refresh_affine_map(
-                self.img_shape, 
-                self.grid_dense, 
-                self.amplitude, 
-                self.frequency, 
-                self.global_rotate, 
+                self.img_shape,
+                self.grid_dense,
+                self.amplitude,
+                self.frequency,
+                self.global_rotate,
                 self.const)
         
         if self.use_cv2:
