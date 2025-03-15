@@ -9,6 +9,7 @@ import SimpleITK as sitk
 from mgamdata.io.sitk_toolkit import sitk_resample_to_spacing
 
 
+
 def resample_one_sample(args) -> tuple[sitk.Image, sitk.Image|None] | None:
     """
     Resample a single sample image and its corresponding label image to a specified spacing.
@@ -57,7 +58,7 @@ def resample_standard_dataset(
     image_itk_paths = [
         os.path.join(source_image_folder, f)
         for f in os.listdir(source_image_folder)
-        if f.endswith(".mha")
+        if f.endswith((".mha", ".nii", ".nii.gz", "mhd"))
     ]
     label_itk_paths = [i.replace("image", "label") 
                        for i in image_itk_paths]
