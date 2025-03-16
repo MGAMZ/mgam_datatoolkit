@@ -22,9 +22,7 @@ class GastricCancer(mgam_BaseSegDataset):
             for file in os.listdir(os.path.join(self.data_root, "label"))
             if file.endswith(".tiff")
         ]
-        all_series = sorted(
-            all_series, key=lambda x: abs(int(re.search(r"\d+", x).group()))
-        )
+        all_series = sorted(all_series, key=lambda x: abs(int(re.search(r"\d+", x).group())))
         np.random.shuffle(all_series)
         total = len(all_series)
         train_end = int(total * self.SPLIT_RATIO[0])

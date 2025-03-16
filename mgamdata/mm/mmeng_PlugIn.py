@@ -491,8 +491,7 @@ class RuntimeInfoHook(_RuntimeInfoHook):
     ) -> None:
         if outputs is not None:
             for key, value in outputs.items():
-                if 'loss' in key:
-                    runner.message_hub.update_scalar(f"train/{key}", value)
+                runner.message_hub.update_scalar(f"train/{key}", value)
 
 
 def multi_sample_collate(data_batch: Sequence[dict]):

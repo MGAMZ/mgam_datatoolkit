@@ -55,6 +55,8 @@ class LoadAnnoFromOpenCV(BaseTransform):
         if "seg_map_path" in results:
             mask_path = results["seg_map_path"]
             mask = cv2.imread(mask_path, cv2.IMREAD_UNCHANGED)
+            if mask is None:
+                raise FileNotFoundError(f"File not found: {mask_path}")
             if results.get("label_map", None) is not None:
                 mask_copy = mask.copy()
                 for old_id, new_id in results["label_map"].items():

@@ -1,11 +1,9 @@
 import pdb
-from typing_extensions import Callable
 
 import torch
 from torch import nn, Tensor
 from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint
-from torch.utils.hooks import RemovableHandle
 
 from mmengine.model import BaseModule
 from mmseg.models.decode_heads.decode_head import BaseDecodeHead
@@ -55,9 +53,7 @@ class MedNeXtBlock(nn.Module):
         if norm_type == "group":
             self.norm = nn.GroupNorm(num_groups=in_channels, num_channels=in_channels)
         elif norm_type == "layer":
-            self.norm = LayerNorm(
-                normalized_shape=in_channels, data_format="channels_first"
-            )
+            raise NotImplementedError("LayerNorm not deprecated.")
 
         # Second convolution (Expansion) layer with 1x1x1
         self.conv2 = conv(

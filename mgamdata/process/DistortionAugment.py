@@ -174,15 +174,15 @@ class Distortion(BaseTransform):
             src = src.reshape(img_shape[0]*img_shape[1], 2) # (H*W,2)
             dst = tform(src)
             dst = dst.reshape(img_shape[0], img_shape[1], 2) # (H,W,2)
-            cv2_map1 = dst[..., 0].astype(np.float32)
-            cv2_map2 = dst[..., 1].astype(np.float32)
-            return cv2_map1, cv2_map2
+            cv2_mapY = dst[..., 0].astype(np.float32)
+            cv2_mapX = dst[..., 1].astype(np.float32)
+            return cv2_mapY, cv2_mapX
         
         tform = PiecewiseAffineTransform()
         tform.estimate(src.reshape(-1,2), dst.reshape(-1,2))
-        cv2_map1, cv2_map2 = calc_cv2_map(self.img_shape, tform)
+        cv2_mapY, cv2_mapX = calc_cv2_map(self.img_shape, tform)
         
-        return tform, (cv2_map1, cv2_map2)
+        return tform, (cv2_mapX, cv2_mapY)
 
     @staticmethod
     def distort(tform, Imgarray:np.ndarray, order, pad_val):

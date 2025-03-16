@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mgamdata"
-version = "1.9.6.250316"
+version = "1.9.7.250316"
 requires-python = ">= 3.12"
 description = "mgam's data toolkit for a better world!"
 readme = "README.md"
@@ -35,7 +35,6 @@ dependencies = [
   "timm",
   "opensdpc",
   "colorama",
-  "mmcv>=2.2.0",
   "ml_collections"
 ]
 

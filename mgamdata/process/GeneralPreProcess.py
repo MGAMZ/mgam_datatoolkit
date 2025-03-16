@@ -309,19 +309,26 @@ class ExpandOneHot(BaseTransform):
         self,
         num_classes: int,
         ignore_index: int = 255,
+        inplace: bool = False
     ):
         self.num_classes = num_classes
         self.ignore_index = ignore_index
+        self.inplace = inplace
 
     def transform(self, results):
         mask = results["gt_seg_map"]  # [...]
         # NOTE The ignored index is remapped to the last class.
         if self.ignore_index is not None:
             mask[mask == self.ignore_index] = self.num_classes
-        # # eye: Identity Matrix [num_classes+1, num_classes+1]
+        # eye: Identity Matrix [num_classes+1, num_classes+1]
         mask_channel = np.eye(self.num_classes + 1)[mask]
         mask_channel = np.moveaxis(mask_channel, -1, 0).astype(np.uint8)
-        results["gt_seg_map_one_hot"] = mask_channel[:-1]  # [num_classes, ...]
+        
+        if self.inplace:
+            results["gt_seg_map"] = mask_channel[:-1]
+        else:
+            results["gt_seg_map_one_hot"] = mask_channel[:-1]  # [num_classes, ...]
+        
         return results
 
 
