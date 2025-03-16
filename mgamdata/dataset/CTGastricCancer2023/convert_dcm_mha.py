@@ -154,10 +154,10 @@ def main():
     parser.add_argument("--spacing", type=float, nargs=3, default=None, help="Resample to this spacing.")
     parser.add_argument("--size", type=int, nargs=3, default=None, help="Crop to this size.")
     args = parser.parse_args()
-
+    
+    json.dump(vars(args), open(os.path.join(args.output_dir, "failed.json"), 'w'), indent=4)
     exceptions = convert_and_save_nii_to_mha(args.input_dir, args.output_dir, args.mp, args.spacing, args.size)
-    json.dump(exceptions, open(os.path.join(args.output_dir, "failed.json"), 'w'), indent=4)
-
+    print(f"Failed: {len(exceptions)}")
 
 if __name__ == "__main__":
     main()

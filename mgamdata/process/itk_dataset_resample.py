@@ -55,11 +55,13 @@ def resample_one_sample(args) -> tuple[sitk.Image, sitk.Image|None] | None:
         sitk.WriteImage(label_resampled, target_label_path, useCompression=True)
     return image_resampled, label_resampled if label_itk else None
 
+
 def resample_standard_dataset(
     source_root: str, 
     params: Sequence[float|int], 
     dest_root: str, 
     mp: bool = False, 
+    workers: int|None = None, 
     use_size: bool = False
 ):
     """
@@ -101,7 +103,7 @@ def resample_standard_dataset(
         ]
         
         with (
-            Pool() as pool,
+            Pool(processes=workers) as pool,
             tqdm(
                 total=len(image_itk_paths),
                 desc="Resampling",
@@ -136,11 +138,13 @@ def resample_standard_dataset(
             )
             pbar.update(len(image_itk_paths))
 
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Resample a standard dataset.")
     parser.add_argument("source_root", type=str, help="The root folder of the source dataset.")
     parser.add_argument("dest_root", type=str, help="The root folder of the destination dataset.")
     parser.add_argument("--mp", action="store_true", help="Whether to use multiprocessing.")
+    parser.add_argument("--workers", type=int, default=None, help="The number of workers for multiprocessing.")
     
     # 互斥参数
     group = parser.add_mutually_exclusive_group(required=True)
@@ -161,6 +165,7 @@ def main():
         args.size,
         args.dest_root,
         args.mp, 
+        args.workers,
         use_size=args.size is not None)
 
 
