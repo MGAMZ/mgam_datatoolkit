@@ -15,7 +15,7 @@ def parse_args():
     parser.add_argument('input_dir', type=str, help='Input directory containing image and label folders')
     parser.add_argument('output_dir', type=str, help='Output directory for extracted 2D slices')
     parser.add_argument('--mp', action='store_true', help='Enable multiprocessing')
-    parser.add_argument('--num_workers', type=int, default=None)
+    parser.add_argument('--num-workers', type=int, default=None)
     return parser.parse_args()
 
 
