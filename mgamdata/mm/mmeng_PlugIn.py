@@ -216,33 +216,34 @@ class mgam_PerClassMetricLogger_OnTest(LoggerHook):
 class LoggerJSON(LoggerHook):
 
     @staticmethod
-    def _itemize_metric_(metrics):
-        if isinstance(metrics, (Tensor, np.ndarray)):
-            return metrics.tolist()
+    def _itemize_metric(metrics):
+        if hasattr(metrics, 'item'):
+            return metrics.item()
         elif isinstance(metrics, Number):
             return metrics
         elif isinstance(metrics, dict):
             for k in metrics.keys():
-                metrics[k] = LoggerJSON._itemize_metric_(metrics[k])
+                metrics[k] = LoggerJSON._itemize_metric(metrics[k])
         elif isinstance(metrics, list):
             for i in range(len(metrics)):
-                metrics[i] = LoggerJSON._itemize_metric_(metrics[i])
+                metrics[i] = LoggerJSON._itemize_metric(metrics[i])
         elif isinstance(metrics, tuple):
             metrics = list(metrics)
             for i in range(len(metrics)):
-                metrics[i] = LoggerJSON._itemize_metric_(metrics[i])
-
+                metrics[i] = LoggerJSON._itemize_metric(metrics[i])
+        elif isinstance(metrics, str):
+            return metrics
+        else:
+            raise NotImplementedError(f"Unsupported type {type(metrics)}: {metrics}")
         return metrics
 
     def after_test_epoch(self, runner, metrics: dict) -> None:
-        self._itemize_metric_(metrics)
         json_save_path = osp.join(
             runner.work_dir,
             f"test_result_epoch{runner.cfg.get('epochs', 0)}_iter{runner.cfg.get('iters', 0)}.json",
         )
-
         with open(json_save_path, "w") as f:
-            json.dump(metrics, f, indent=4)
+            json.dump(self._itemize_metric(metrics), f, indent=4)
 
         super().after_test_epoch(runner, metrics)
 
@@ -325,7 +326,6 @@ class RemasteredFSDP(MMFullyShardedDataParallel):
             return super().__getattr__(name)
         except:
             return getattr(self.module, name)
-
 
 from mmengine.registry import FUNCTIONS, MODEL_WRAPPERS
 from mmengine.model import BaseDataPreprocessor, is_model_wrapper
@@ -691,5 +691,3 @@ class GeneralViser(Visualizer):
     @master_only
     def add_datasample(self, data_sample:dict, step:int|None=None):
         ...
-
-
