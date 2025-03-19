@@ -19,11 +19,9 @@ PIXEL_TYPE = lambda field: sitk.sitkInt16 if field == "image" else sitk.sitkUInt
 INTERPOLATOR = lambda field: sitk.sitkBSpline5 if field == "image" else sitk.sitkNearestNeighbor
 
 
-def sitk_resample_to_spacing(
-    mha: sitk.Image,
-    spacing: Sequence[float],
-    field: Literal["image", "label"],
-):
+def sitk_resample_to_spacing(mha: sitk.Image, 
+                             spacing: list[float], 
+                             field: Literal["image", "label"]):
     """改进后的重采样方法。
 
     Args:
@@ -43,6 +41,10 @@ def sitk_resample_to_spacing(
     original_size = mha.GetSize()
     original_spacing = mha.GetSpacing()
     original_origin = mha.GetOrigin()
+    # Add Z spacing if not provided
+    if len(spacing) == 2:
+        spacing = spacing + [original_spacing[-1]]
+    
     spacing_ratio = [original_spacing[i] / spacing[i] for i in range(3)]
     resampled_size = [int(original_size[i] * spacing_ratio[i]) - 1 for i in range(3)]
     target_origin = [original_origin[d] + 0.5 * (spacing[d] - original_spacing[d])

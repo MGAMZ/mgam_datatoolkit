@@ -189,9 +189,7 @@ class mgam_Standard_Precropped_Npz(mgam_Standard_Npz_Structure, mgam_Standard_3D
 class mgam_SemiSup_Precropped_Npz(mgam_SemiSup_3D_Mha):
     def __init__(self, mode: Literal["sup", "semi", "unsup"], *args, **kwargs) -> None:
         self.mode = mode
-        self.precrop_meta = json.load(
-            open(os.path.join(kwargs["data_root"], "crop_meta.json"), "r")
-        )
+        self.precrop_meta = json.load(open(os.path.join(kwargs["data_root"], "crop_meta.json"), "r"))
         super().__init__(*args, **kwargs)
 
     def _maybe_skip(self, series_id: str):
@@ -213,11 +211,10 @@ class mgam_SemiSup_Precropped_Npz(mgam_SemiSup_3D_Mha):
 
             series_folder: str = os.path.join(self.data_root, series)
             try:
-                series_meta = orjson.loads(
-                    open(os.path.join(series_folder, "SeriesMeta.json"), "r").read()
-                )
+                series_meta = orjson.loads(open(os.path.join(series_folder, "SeriesMeta.json"), "r").read())
             except FileNotFoundError:
-                pdb.set_trace()
+                print_log(f"{series_folder} not found.", MMLogger.get_current_instance())
+                continue
             
             patch_npz_files = series_meta["class_within_patch"].keys()
             for sample in [os.path.join(series_folder, file) 

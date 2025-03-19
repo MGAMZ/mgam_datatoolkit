@@ -7,10 +7,10 @@ import pandas as pd
 from ..RenJi_Sarcopenia import L3_XLSX_PATH
 
 
-def find_L3_slices(seriesUIDs: list[str]|str):
+def find_L3_slices(seriesUIDs: list[str]|str, L3_df:pd.DataFrame|None=None):
     if isinstance(seriesUIDs, str):
         seriesUIDs = [seriesUIDs]
-    L3_df = pd.read_excel(L3_XLSX_PATH)
+    L3_df = pd.read_excel(L3_XLSX_PATH) if L3_df is None else L3_df
     L3_slicess = []
     for seriesUID in seriesUIDs:
         series_anno = L3_df.loc[L3_df['序列编号'] == seriesUID]

@@ -1,4 +1,5 @@
 import pdb
+from typing_extensions import Sequence
 
 import torch
 from torch import nn, Tensor
@@ -8,7 +9,7 @@ from torch.utils.checkpoint import checkpoint
 from mmengine.model import BaseModule
 from mmseg.models.decode_heads.decode_head import BaseDecodeHead
 
-from ..mm.mmseg_Dev3D import BaseDecodeHead_3D
+from ..mm.mmseg_Dev3D import BaseDecodeHead_3D, PixelUnshuffle3D, PixelShuffle3D
 from .utils import pad_ensure_conv_out_same_size
 
 
@@ -738,6 +739,7 @@ class MM_MedNext_Encoder(BaseModule):
         dim="2d",  # 2d or 3d
         grn=False,
         freeze:bool=False,
+        pixel_unshuffle:int|None=None,
         *args,
         **kwargs,
     ):
@@ -747,21 +749,33 @@ class MM_MedNext_Encoder(BaseModule):
         self.freeze = freeze
         assert dim in ["2d", "3d"]
         self.use_checkpoint = use_checkpoint
-
-        if kernel_size is not None:
-            enc_kernel_size = kernel_size
-            dec_kernel_size = kernel_size
-
+        
         if dim == "2d":
             conv = nn.Conv2d
         elif dim == "3d":
             conv = nn.Conv3d
+        
+        # NOTE The stem uses the actual embedding dims.
+        #      The pixel unshuffle will increase the number of channels,
+        #      and is after the stem forward,
+        #      so mednext layers' embed dims are configured to a larger channel.
         self.stem = conv(in_channels, embed_dims, kernel_size=1)
 
         if type(exp_r) == int:
             exp_r = [exp_r] * len(block_counts)
         else:
             assert isinstance(exp_r, list)
+
+        if pixel_unshuffle is not None:
+            if dim == "2d":
+                self.pixel_unshuffle = nn.PixelUnshuffle(pixel_unshuffle)
+                embed_dims *= (pixel_unshuffle ** 2)
+            elif dim == "3d":
+                self.pixel_unshuffle = PixelUnshuffle3D(pixel_unshuffle)
+                embed_dims *= (pixel_unshuffle ** 3)
+        if kernel_size is not None:
+            enc_kernel_size = kernel_size
+            dec_kernel_size = kernel_size
 
         self.enc_block_0 = nn.Sequential(
             *[
@@ -895,9 +909,12 @@ class MM_MedNext_Encoder(BaseModule):
         # self.register_backward_hook(log_grad)
 
     def forward(self, x: Tensor):
+        # [B, 1, Z(Opt.), Y, X] -> [B, C, Z(Opt.), Y, X]
+        x = self.stem(x)
+        if hasattr(self, "pixel_unshuffle"):
+            x = self.pixel_unshuffle(x)
+        
         if self.use_checkpoint:
-            # [B, D(Opt.), H, W] -> [B, C, D(Opt.), H, W]
-            x = checkpoint(self.stem, x, use_reentrant=False)
             x_res_0 = checkpoint(self.enc_block_0, x, use_reentrant=False)
             x = checkpoint(self.down_0, x_res_0, use_reentrant=False)
             x_res_1 = checkpoint(self.enc_block_1, x, use_reentrant=False)
@@ -1153,9 +1170,11 @@ class MM_MedNext_Decoder(BaseModule):
         norm_type="group",
         dim="2d",  # 2d or 3d
         grn=False,
+        pixel_shuffle:int|None=None,
         *args,
         **kwargs,
     ):
+        assert dim in ["2d", "3d"]
         super().__init__(
             *args,
             **kwargs,
@@ -1170,6 +1189,17 @@ class MM_MedNext_Decoder(BaseModule):
             self.checkpoint = lambda f, x: checkpoint(f, x, use_reentrant=False)
         else:
             self.checkpoint = lambda f, x: f(x)
+
+        # NOTE Out projection is not influenced by pixel shuffle operation.
+        #      The tensor will have already been shuffled back to the actual size of input,
+        #      so the out projection will receive the actual embed_dims.
+        self.out_0 = OutBlock(in_channels=embed_dims, n_classes=num_classes, dim=dim)
+        if pixel_shuffle is not None:
+            embed_dims *= (pixel_shuffle ** int(dim[0]))
+            if dim == "2d":
+                self.pixel_shuffle = nn.PixelShuffle(pixel_shuffle)
+            elif dim == "3d":
+                self.pixel_shuffle = PixelShuffle3D(pixel_shuffle)
 
         self.up_3 = MedNeXtUpBlock(
             in_channels=16 * embed_dims,
@@ -1281,8 +1311,6 @@ class MM_MedNext_Decoder(BaseModule):
 
         self.block_counts = block_counts
 
-        # output projections
-        self.out_0 = OutBlock(in_channels=embed_dims, n_classes=num_classes, dim=dim)
         if deep_supervision:
             self.out_1 = OutBlock(
                 in_channels=embed_dims * 2, n_classes=num_classes, dim=dim
@@ -1326,9 +1354,13 @@ class MM_MedNext_Decoder(BaseModule):
         x_up_0 = self.checkpoint(self.up_0, x)
         dec_x = x_res_0 + x_up_0
         x = self.checkpoint(self.dec_block_0, dec_x)
-        x = self.checkpoint(self.out_0, x)
         del x_res_0, x_up_0, dec_x
 
+        # out projection
+        if hasattr(self, "pixel_shuffle"):
+                x = self.pixel_shuffle(x)
+        x = self.checkpoint(self.out_0, x)
+        
         if self.deep_supervision:
             # deep_out element: Tensor[N, C, Z, Y, X]
             return (x, x_ds_1, x_ds_2, x_ds_3, x_ds_4)
@@ -1402,6 +1434,7 @@ class MM_MedNext_Decoder_3D(BaseDecodeHead_3D):
         norm_type="group",
         grn=False,
         freeze:bool=False,
+        pixel_shuffle:int|None=None,
         *args,
         **kwargs,
     ):
@@ -1418,7 +1451,7 @@ class MM_MedNext_Decoder_3D(BaseDecodeHead_3D):
             input_transform="multiple_select",
             in_index=[0, 1, 2, 3, 4],
             *args,
-            **kwargs,
+            **kwargs
         )
         self.freeze = freeze
         self.mednext = MM_MedNext_Decoder(
@@ -1432,6 +1465,7 @@ class MM_MedNext_Decoder_3D(BaseDecodeHead_3D):
             norm_type=norm_type,
             grn=grn,
             dim="3d",
+            pixel_shuffle=pixel_shuffle,
         )
 
         if self.freeze:
@@ -1440,7 +1474,6 @@ class MM_MedNext_Decoder_3D(BaseDecodeHead_3D):
 
     def forward(self, inputs):
         return self.mednext(inputs)
-
 
 # NOTE This class is decrecated and is only used for 
 # NOTE implementations of Sarcopenia project, i.e., weight loading.

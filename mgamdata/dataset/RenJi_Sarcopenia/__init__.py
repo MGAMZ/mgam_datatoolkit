@@ -28,7 +28,7 @@ CLASS_MAP_ABBR = {
     4: 'Vis. Fat', 
 }
 # 后分割后的类定义
-CLASS_MAP_AFTER_KMEANS = {
+CLASS_MAP_AFTER_POSTSEG = {
     0: 'background',
     1: '腰大肌-肌肉',
     2: '其他骨骼肌-肌肉',
@@ -450,7 +450,7 @@ GT_FOLDERS_PRIORITY_ORIGINAL_ENGINEERSORT = [
     join(data_root, 'Check_7644', 'mha_original_EngineerSort'),
     join(data_root, 'Check_7461', 'mha_original_EngineerSort'),
     join(data_root, 'Check_6973', 'mha_original_EngineerSort'),
-    join(data_root, 'Inference_250217', 'SegResult')
+    join(data_root, 'Inference_250217')
 ]
 
 

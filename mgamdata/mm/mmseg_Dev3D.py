@@ -582,12 +582,8 @@ class BaseDecodeHead_3D(BaseDecodeHead):
         )
         return seg_logits
 
-    def _stack_batch_gt(
-        self, batch_data_samples: list[Seg3DDataSample], gt_key
-    ) -> Tensor:
-        gt_semantic_segs = [
-            data_sample.get(gt_key).data for data_sample in batch_data_samples
-        ]
+    def _stack_batch_gt(self, batch_data_samples: list[Seg3DDataSample], gt_key) -> Tensor:
+        gt_semantic_segs = [data_sample.get(gt_key).data for data_sample in batch_data_samples]
         return torch.stack(gt_semantic_segs, dim=0)
 
 
@@ -863,6 +859,11 @@ class PackSeg3DInputs(PackSegInputs):
             )
             data = to_tensor(results["gt_seg_map_one_hot"].astype(np.uint8))
             data_sample.gt_sem_seg_one_hot = VolumeData(data=data)
+
+        for key in results['seg_fields']:
+            if key not in data_sample.keys():
+                other_seg = BaseDataElement(data=to_tensor(results[key]))
+                data_sample.set_field(other_seg, key)
 
         img_meta = {}
         for key in self.meta_keys:

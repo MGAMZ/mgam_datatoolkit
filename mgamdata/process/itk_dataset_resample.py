@@ -162,7 +162,7 @@ def main():
               indent=4)
     resample_standard_dataset(
         args.source_root,
-        args.size,
+        args.size or args.spacing,
         args.dest_root,
         args.mp, 
         args.workers,
