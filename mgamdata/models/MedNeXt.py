@@ -926,7 +926,6 @@ class MM_MedNext_Encoder(BaseModule):
             x = checkpoint(self.bottleneck, x, use_reentrant=False)
 
         else:
-            x = self.stem(x)
             x_res_0 = self.enc_block_0(x)
             x = self.down_0(x_res_0)
             x_res_1 = self.enc_block_1(x)

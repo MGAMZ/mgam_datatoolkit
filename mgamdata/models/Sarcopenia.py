@@ -122,10 +122,13 @@ class L3LocationDecoder(BaseDecodeHead_3D):
         
         z_results = self.forward(inputs) # [B, Z]
         loss = torch.nn.functional.binary_cross_entropy_with_logits(z_results, foreground_Zs)
-        hit = (z_results > self.threshold) == (foreground_Zs > 0)
+        pred = z_results > self.threshold
+        hit = (pred == foreground_Zs).float().mean()
+        iou = (pred & foreground_Zs).sum() / (pred | foreground_Zs).sum()
         
         return {"loss_L3": loss * self.loss_weight,
-                "acc_L3": torch.mean(hit.float())}
+                "acc_L3": hit,
+                "iou_L3": iou}
     
     def predict(self, inputs:list[Tensor], data_samples:list[BaseDataElement]) -> Tensor:
         z_logits = self.forward(inputs)

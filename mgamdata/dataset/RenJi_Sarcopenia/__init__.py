@@ -450,7 +450,7 @@ GT_FOLDERS_PRIORITY_ORIGINAL_ENGINEERSORT = [
     join(data_root, 'Check_7644', 'mha_original_EngineerSort'),
     join(data_root, 'Check_7461', 'mha_original_EngineerSort'),
     join(data_root, 'Check_6973', 'mha_original_EngineerSort'),
-    join(data_root, 'Inference_250217')
+    "/home/zhangyq.sx/mgam_datasets/Sarcopenia_Data/Inference_250213",
 ]
 
 
