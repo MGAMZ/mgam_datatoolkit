@@ -42,32 +42,25 @@ from mmengine.visualization import LocalVisBackend, TensorboardVisBackend, Visua
 from ..utils.DevelopUtils import measure_time, InjectVisualize
 
 
-# support FSDP
+
 def DynamicRunnerSelection(cfg: ConfigType) -> Runner:
     if cfg.dist is True and cfg.MP_mode != "ddp":
         RunnerChoice = FlexibleRunner
     else:
         RunnerChoice = Runner
 
-    class mgam_Runner(RunnerChoice):  # type: ignore
+    class mgam_Runner(RunnerChoice): # type: ignore
         """MGAM Customized MMEngine Runner"""
-
         def __init__(self, **kwargs):
             self.resume_optimizer = kwargs.get("cfg", {}).pop("resume_optimizer", True)
-            self.resume_param_scheduler = kwargs.get("cfg", {}).pop(
-                "resume_param_scheduler", True
-            )
+            self.resume_param_scheduler = kwargs.get("cfg", {}).pop("resume_param_scheduler", True)
             self.custom_env(kwargs.get("env_cfg", {}))
 
             if cfg.MP_mode == "fsdp":
                 strategy = kwargs.get("cfg", {}).pop("strategy", None)
-                auto_strategy = partial(
-                    size_based_auto_wrap_policy, 
-                    min_num_params=int(1e5),
-                )
-                strategy.update(
-                    dict(model_wrapper=dict(auto_wrap_policy=auto_strategy))
-                )
+                auto_strategy = partial(size_based_auto_wrap_policy, 
+                                        min_num_params=int(1e5))
+                strategy.update(dict(model_wrapper=dict(auto_wrap_policy=auto_strategy)))
                 kwargs["strategy"] = strategy
                 kwargs["cfg"]["strategy"] = strategy
 
@@ -83,29 +76,17 @@ def DynamicRunnerSelection(cfg: ConfigType) -> Runner:
 
         def custom_env(self, cfg):
             # Avoid device clash with OpenCV
-            torch.cuda.set_device(cfg.pop("torch_cuda_id", 0))
+            torch.cuda.set_device(cfg.pop("torch_cuda_id", -1))
             # Torch Compile
             cfg.get("torch_logging_level", logging.WARN)
-            torch._logging.set_logs(
-                all=self.str_to_log_level(cfg.pop("torch_logging_level", "WARN"))
-            )
-            torch._logging.set_logs(
-                dynamo=self.str_to_log_level(cfg.pop("dynamo_logging_level", "WARN"))
-            )
-            torch._dynamo.config.cache_size_limit = cfg.pop(
-                "dynamo_cache_size", 1
-            )  # type:ignore
-            torch._dynamo.config.suppress_errors = cfg.pop(
-                "dynamo_supress_errors", False
-            )  # type:ignore
+            torch._logging.set_logs(all=self.str_to_log_level(cfg.pop("torch_logging_level", "WARN")),
+                                    dynamo=self.str_to_log_level(cfg.pop("dynamo_logging_level", "WARN")))
+            torch._dynamo.config.cache_size_limit = cfg.pop("dynamo_cache_size", 1)
+            torch._dynamo.config.suppress_errors = cfg.pop("dynamo_supress_errors", False)
             # cuBLAS matmul
             torch.backends.cuda.matmul.allow_tf32 = cfg.get("allow_tf32", False)
-            torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = cfg.pop(
-                "allow_fp16_reduced_precision_reduction", False
-            )
-            torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = cfg.pop(
-                "allow_bf16_reduced_precision_reduction", True
-            )
+            torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = cfg.pop("allow_fp16_reduced_precision_reduction", False)
+            torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = cfg.pop("allow_bf16_reduced_precision_reduction", True)
             # CUDNN
             torch.backends.cudnn.allow_tf32 = cfg.pop("allow_tf32", False)
             torch.backends.cudnn.benchmark = cfg.pop("benchmark", False)
@@ -117,13 +98,11 @@ def DynamicRunnerSelection(cfg: ConfigType) -> Runner:
                 if key == "num_classes" or key == "out_channels":
                     print_log(
                         f"NumClasses Auto Override {cfg.get('type', 'Unknown')}: {cfg['num_classes']} -> {num_classes}",
-                        "current",
-                    )
+                        "current")
                     cfg[key] = num_classes
                 elif isinstance(value, ConfigType):
                     cfg[key] = mgam_Runner.auto_configure_num_classes_from_Databackend(
-                        value, num_classes
-                    )
+                        value, num_classes)
             return cfg
 
         def load_or_resume(self) -> None:
@@ -136,19 +115,15 @@ def DynamicRunnerSelection(cfg: ConfigType) -> Runner:
             if self._resume and self._load_from is None:
                 # auto resume from the latest checkpoint
                 resume_from = find_latest_checkpoint(self.work_dir)
-                self.logger.info(
-                    f"Auto resumed from the latest checkpoint {resume_from}."
-                )
+                self.logger.info(f"Auto resumed from the latest checkpoint {resume_from}.")
             elif self._resume and self._load_from is not None:
                 # resume from the specified checkpoint
                 resume_from = self._load_from
 
             if resume_from is not None:
-                self.resume(
-                    filename=resume_from,
-                    resume_optimizer=self.resume_optimizer,
-                    resume_param_scheduler=self.resume_param_scheduler,
-                )
+                self.resume(filename=resume_from,
+                            resume_optimizer=self.resume_optimizer,
+                            resume_param_scheduler=self.resume_param_scheduler)
                 self._has_loaded = True
             elif self._load_from is not None:
                 self.load_checkpoint(self._load_from)
@@ -159,7 +134,6 @@ def DynamicRunnerSelection(cfg: ConfigType) -> Runner:
 
 # for debug
 class IterBasedTrainLoop_SupportProfiler(IterBasedTrainLoop):
-
     def __init__(self, profiler: str, *args, **kwargs):
         self.profiler = profiler
         self.profiler_step_count = 0
@@ -169,9 +143,7 @@ class IterBasedTrainLoop_SupportProfiler(IterBasedTrainLoop):
             from torch.profiler import (
                 profile,
                 ProfilerActivity,
-                tensorboard_trace_handler,
-            )
-
+                tensorboard_trace_handler)
             self.prof = profile(
                 activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
                 schedule=torch.profiler.schedule(wait=50, warmup=1, active=2),
@@ -180,8 +152,7 @@ class IterBasedTrainLoop_SupportProfiler(IterBasedTrainLoop):
                 with_stack=False,
                 with_flops=True,
                 with_modules=True,
-                on_trace_ready=tensorboard_trace_handler("./work_dirs/profiler/"),
-            )
+                on_trace_ready=tensorboard_trace_handler("./work_dirs/profiler/"))
             self.prof.start()
 
     def run_iter(self, data_batch) -> None:
@@ -197,7 +168,6 @@ class IterBasedTrainLoop_SupportProfiler(IterBasedTrainLoop):
 
 # support for better class-wise performance logging
 class mgam_PerClassMetricLogger_OnTest(LoggerHook):
-
     def after_test_epoch(self, runner, metrics: dict) -> None:
         PerClassResult_FromIoUMetric = metrics.pop("Perf/PerClass")
         data_df = pd.DataFrame(PerClassResult_FromIoUMetric)  # [Class, metrics...]
@@ -205,16 +175,13 @@ class mgam_PerClassMetricLogger_OnTest(LoggerHook):
         data_df.loc["mean"] = data_df.iloc[:, 1:].mean(axis=0)
         data_df = data_df.round(decimals=2)
         csv_path_suffix = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        csv_save_path = osp.join(
-            runner.log_dir, f"PerClassResult_{csv_path_suffix}.csv"
-        )
+        csv_save_path = osp.join(runner.log_dir, f"PerClassResult_{csv_path_suffix}.csv")
         data_df.to_csv(csv_save_path, index=False)
 
         super().after_test_epoch(runner, metrics)
 
 
 class LoggerJSON(LoggerHook):
-
     @staticmethod
     def _itemize_metric(metrics):
         if hasattr(metrics, 'item'):
@@ -249,7 +216,6 @@ class LoggerJSON(LoggerHook):
 
 # better AMP support
 class AmpPatchAccumulateOptimWarpper(AmpOptimWrapper):
-
     def update_params(  # type: ignore
         self,
         loss: torch.Tensor,
@@ -288,7 +254,6 @@ class RemasteredDDP(MMDistributedDataParallel):
     So I override the following three methods, avoiding the warpper to influence
     the model's data flow design.
     """
-
     def train_step(self, *args, **kwargs):
         return self.module.train_step(*args, **kwargs)
 
@@ -311,7 +276,6 @@ class RemasteredFSDP(MMFullyShardedDataParallel):
     So I override the following three methods, avoiding the warpper to influence
     the model's data flow design.
     """
-
     def train_step(self, *args, **kwargs):
         return self.module.train_step(*args, **kwargs)
 
@@ -368,13 +332,11 @@ class RemasteredFSDP_Strategy(FSDPStrategy):
             assert len(self.model_wrapper_cfg) == 1, "The cfg should only contain a type param."
             self.model_wrapper_cfg.update(
                 module=model, 
-                device_id=int(os.environ['LOCAL_RANK'] )
-            )
+                device_id=int(os.environ['LOCAL_RANK'] ))
         
         model = MODEL_WRAPPERS.build(
             self.model_wrapper, 
-            default_args=self.model_wrapper_cfg
-        )
+            default_args=self.model_wrapper_cfg)
 
         if self.activation_checkpointing is not None:
             if apply_activation_checkpointing is None:
@@ -396,6 +358,7 @@ class RemasteredFSDP_Strategy(FSDPStrategy):
                 if not callable(check_fn):
                     raise TypeError('`check_fn` must be a callable function')
                 apply_activation_checkpointing(model, check_fn=check_fn, **cfg)
+        
         return model
 
     def prepare(
@@ -425,11 +388,8 @@ class RemasteredFSDP_Strategy(FSDPStrategy):
                 (self.optim_wrapper.optimizer,),
                 model_state_dict=self.model_state_dict(),
                 optim_state_dict=self.optim_state_dict(),
-                options=StateDictOptions(
-                    full_state_dict=True,
-                    cpu_offload=True,
-                )
-            )
+                options=StateDictOptions(full_state_dict=True,
+                                         cpu_offload=True))
             
         self.model = self.compile_model(self.model, compile=compile)
 
@@ -444,14 +404,12 @@ class RemasteredFSDP_Strategy(FSDPStrategy):
         optim_wrapper = super().build_optim_wrapper(*args, **kwargs)
         self._scale_lr()
 
-        accumulative_counts = getattr(optim_wrapper,
-                                        '_accumulative_counts', 1)
+        accumulative_counts = getattr(optim_wrapper, '_accumulative_counts', 1)
         if accumulative_counts > 1:
             if 'max_iters' not in self.dispatch_kwargs:
-                raise ValueError(
-                    '"max_iters" must be specified because '
-                    '"accumulative_counts" was set as '
-                    f'{accumulative_counts} which is greater than 1.')
+                raise ValueError('"max_iters" must be specified because '
+                                 '"accumulative_counts" was set as '
+                                 f'{accumulative_counts} which is greater than 1.')
 
             optim_wrapper.initialize_count_status(  # type: ignore
                 self.model, 0, self.dispatch_kwargs['max_iters'])
@@ -461,16 +419,13 @@ class RemasteredFSDP_Strategy(FSDPStrategy):
 
 class RatioSampler(DefaultSampler):
     """随机激活一定比例的样本"""
-
     def __init__(self, use_sample_ratio: float, **kwargs):
         super().__init__(**kwargs)
         self.use_sample_ratio = use_sample_ratio
         self.num_samples_original = super(RatioSampler, self).__len__()
-        print_log(
-            f"RatioSampler used, original num of batches "
-            f"{self.num_samples_original} -> used {len(self)}",
-            MMLogger.get_current_instance(),
-        )
+        print_log(f"RatioSampler used, original num of batches "
+                  f"{self.num_samples_original} -> used {len(self)}",
+                  MMLogger.get_current_instance())
 
     def __iter__(self):
         indices = np.array(list(super().__iter__()))
@@ -505,7 +460,6 @@ def multi_sample_collate(data_batch: Sequence[dict]):
     for IO of an entire sample is too expensive, so it's better
     to augment the sample in time, thus accquiring multiple trainable sub-samples.
     """
-    
     flattened = []
     for item in data_batch:
         if isinstance(item, list):
@@ -543,8 +497,7 @@ class MomentumAvgModel(nn.Module):
         if device is not None:
             self.module = self.module.to(device)
             
-        self.register_buffer('steps',
-                           torch.tensor(0, dtype=torch.long, device=device))
+        self.register_buffer('steps', torch.tensor(0, dtype=torch.long, device=device))
                            
         self.update_buffers = update_buffers
         if update_buffers:
@@ -555,21 +508,18 @@ class MomentumAvgModel(nn.Module):
             }
         else:
             params = dict(self.module.named_parameters())
-            self.avg_parameters = {
-                k: v for k, v in params.items() 
-                if v.numel() > 0
-            }
+            self.avg_parameters = {k: v for k, v in params.items() 
+                                   if v.numel() > 0}
             
         # 动量参数检查
         assert 0.0 < momentum < 1.0, f'momentum must be in range (0.0, 1.0) but got {momentum}'
         if momentum > 0.5:
-            print_log(
-                'The value of momentum in EMA is usually a small number,'
-                'which is different from the conventional notion of '
-                f'momentum but got {momentum}. Please make sure the '
-                f'value is correct.',
-                logger='current', 
-                level=logging.WARNING)
+            print_log('The value of momentum in EMA is usually a small number,'
+                      'which is different from the conventional notion of '
+                      f'momentum but got {momentum}. Please make sure the '
+                      f'value is correct.',
+                      logger='current', 
+                      level=logging.WARNING)
         self.momentum = momentum
         assert gamma > 0, f'gamma must be greater than 0, but got {gamma}'
         self.gamma = gamma
@@ -683,9 +633,8 @@ class GeneralViser(Visualizer):
     
     def _plt2array(self, fig: plt.Figure) -> np.ndarray:
         fig.canvas.draw()
-        return np.frombuffer(fig.canvas.tostring_rgb(), dtype='uint8').reshape(
-            fig.canvas.get_width_height()[::-1] + (3,)
-        )
+        array_img = np.frombuffer(fig.canvas.tostring_rgb(), dtype='uint8')
+        return array_img.reshape(fig.canvas.get_width_height()[::-1] + (3,))
     
     @abstractmethod
     @master_only
