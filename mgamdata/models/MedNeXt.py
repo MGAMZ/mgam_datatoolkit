@@ -1166,10 +1166,10 @@ class MM_MedNext_Decoder(BaseModule):
         block_counts: list = [2,2,2,2,2,2,2,2,2],  # Can be used to test staging ratio:
         # [3,3,9,3] in Swin as opposed to [2,2,2,2,2] in nnUNet
         deep_supervision: bool = False,
-        norm_type="group",
-        dim="2d",  # 2d or 3d
-        grn=False,
-        pixel_shuffle:int|None=None,
+        norm_type = "group",
+        dim = "2d",  # 2d or 3d
+        grn = False,
+        pixel_shuffle: int|None = None,
         *args,
         **kwargs,
     ):
@@ -1379,7 +1379,8 @@ class MM_MedNext_Decoder_2D(BaseDecodeHead):
         use_checkpoint: bool = False,
         norm_type="group",
         grn=False,
-        freeze:bool=False,
+        freeze:bool = False,
+        pixel_shuffle: int|None = None,
         *args,
         **kwargs,
     ):
@@ -1396,8 +1397,8 @@ class MM_MedNext_Decoder_2D(BaseDecodeHead):
             input_transform="multiple_select",
             in_index=[0, 1, 2, 3, 4],
             *args,
-            **kwargs,
-        )
+            **kwargs)
+        
         self.freeze = freeze
         self.mednext = MM_MedNext_Decoder(
             embed_dims=embed_dims,
@@ -1408,9 +1409,9 @@ class MM_MedNext_Decoder_2D(BaseDecodeHead):
             deep_supervision=deep_supervision,
             use_checkpoint=use_checkpoint,
             norm_type=norm_type,
-            grn=grn,
             dim="2d",
-        )
+            grn=grn,
+            pixel_shuffle=pixel_shuffle)
 
         if self.freeze:
             self.eval()
@@ -1450,8 +1451,8 @@ class MM_MedNext_Decoder_3D(BaseDecodeHead_3D):
             input_transform="multiple_select",
             in_index=[0, 1, 2, 3, 4],
             *args,
-            **kwargs
-        )
+            **kwargs)
+        
         self.freeze = freeze
         self.mednext = MM_MedNext_Decoder(
             embed_dims=embed_dims,
@@ -1464,8 +1465,7 @@ class MM_MedNext_Decoder_3D(BaseDecodeHead_3D):
             norm_type=norm_type,
             grn=grn,
             dim="3d",
-            pixel_shuffle=pixel_shuffle,
-        )
+            pixel_shuffle=pixel_shuffle)
 
         if self.freeze:
             self.eval()
