@@ -25,6 +25,7 @@ class L3LocationDecoder(BaseDecodeHead_3D):
                  loss_weight:float=1., 
                  use_checkpoint:bool=False,
                  pixel_shuffle:int|None=None,
+                 detach_with_encoder:bool=True,
                  *args, **kwargs):
         assert len(embed_dims) == len(Z_lengths)
         super().__init__(in_channels=embed_dims,
@@ -40,6 +41,7 @@ class L3LocationDecoder(BaseDecodeHead_3D):
         self.threshold = threshold
         self.loss_weight = loss_weight
         self.use_checkpoint = use_checkpoint
+        self.detach_with_encoder = detach_with_encoder
         
         num_layers = 4
         assert Z_lengths[0] == Z_lengths[-1]*(2**num_layers), \
@@ -75,8 +77,10 @@ class L3LocationDecoder(BaseDecodeHead_3D):
         assert x[0].ndim == 5, "Input tensor should be 5D tensor, [B, C, Z, H, W], BUT got {}".format(x[0].shape)
         assert len(x) == len(self.embed_dims), "Input tensor should have {} layers, BUT got {}".format(len(self.embed_dims), len(x))
         
-        # NOTE Detach from the encoder, not influencing the encoder, improve stability.
-        feat = x[-1].detach() # [B, C, Z, H, W]
+        feat = x[-1] # [B, C, Z, H, W]
+        if self.detach_with_encoder:
+            # NOTE Detach from the encoder, not influencing the encoder, improve stability.
+            feat.detach_() # [B, C, Z, H, W]
         
         if hasattr(self, "pixel_shuffle"):
             feat = self.pixel_shuffle(feat)
@@ -127,7 +131,11 @@ class L3LocationDecoder(BaseDecodeHead_3D):
             pred = z_results > self.threshold
             foreground_Zs = foreground_Zs.bool()
             hit = (pred == foreground_Zs).float().mean()
-            iou = (pred & foreground_Zs).sum() / (pred | foreground_Zs).sum()
+            iou = (pred & foreground_Zs).sum() / ((pred | foreground_Zs).sum() + 1)
+        
+        if torch.distributed.is_initialized():
+            torch.distributed.all_reduce(hit, op=torch.distributed.ReduceOp.AVG)
+            torch.distributed.all_reduce(iou, op=torch.distributed.ReduceOp.AVG)
         
         return {"loss_L3": loss * self.loss_weight,
                 "acc_L3": hit,
@@ -364,6 +372,26 @@ class SarcopeniaSegmentorWithL3Locating(EncoderDecoder_3D):
         super().__init__(*args, **kwargs)
         assert self.with_auxiliary_head, "The model should have auxiliary head, it will locate L3."
 
+    def L3_filter(self, encoder_out, batch_img_metas):
+        self.auxiliary_head: L3LocationDecoder
+        L3_location = self.auxiliary_head.predict(encoder_out, batch_img_metas)[:, None, :, None, None] # [B, Z]
+        B, Z = L3_location.shape
+        continuous_L3_location = torch.zeros_like(L3_location)
+
+        for b in range(B):
+            # 找到掩码中值为 1 的最小和最大下标
+            indices = torch.nonzero(L3_location[b], as_tuple=False).squeeze()
+            if indices.numel() == 0:
+                # 如果该 batch 没有值为 1 的元素，跳过
+                continue
+            min_idx = indices.min()
+            max_idx = indices.max()
+
+            # 将最小和最大下标之间的区间置为 1
+            continuous_L3_location[b, min_idx:max_idx+1] = 1
+
+        return continuous_L3_location
+
     def slide_inference(
         self,
         inputs: Tensor,
@@ -431,10 +459,8 @@ class SarcopeniaSegmentorWithL3Locating(EncoderDecoder_3D):
                     # Invalid pred_seg_logit accumulation on X axis.
                     encoder_out = self.extract_feat(crop_vol)
                     seg_logits = self.decode_head.predict(encoder_out, batch_img_metas, self.test_cfg) # [B, C, Z, Y, X]
-                    self.auxiliary_head: L3LocationDecoder
-                    L3_location = self.auxiliary_head.predict(encoder_out, batch_img_metas)[:, None, :, None, None] # [B, Z]
-                    seg_logits_foreground = (seg_logits*L3_location).to(accu_device, non_blocking=False)
-
+                    L3_mask = self.L3_filter(encoder_out, seg_logits, batch_img_metas)
+                    seg_logits_foreground = (seg_logits*L3_mask).to(accu_device, non_blocking=False)
                     preds[:, :, z1:z2, y1:y2, x1:x2] += seg_logits_foreground
                     count_mat[:, :, z1:z2, y1:y2, x1:x2] += 1
 

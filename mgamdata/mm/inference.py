@@ -1,5 +1,6 @@
 import os
 import pdb
+import scipy as sp
 from tqdm import tqdm
 from collections import defaultdict
 from abc import abstractmethod
@@ -15,7 +16,7 @@ from mmcv.transforms import Compose
 from mmseg.models.segmentors import BaseSegmentor
 from mmseg.apis.inference import init_model, _preprare_data
 
-from ..io.sitk_toolkit import LoadDcmAsSitkImage
+from ..io.sitk_toolkit import LoadDcmAsSitkImage, sitk_resample_to_size, sitk_resample_to_spacing
 
 
 INFERENCER_WORK_DIR = "/fileser51/zhangyiqin.sx/mmseg/work_dirs_inferencer/"
@@ -24,7 +25,7 @@ INFERENCER_WORK_DIR = "/fileser51/zhangyiqin.sx/mmseg/work_dirs_inferencer/"
 class Inferencer:
     def __init__(self, cfg_path, ckpt_path):
         self.model:BaseSegmentor = init_model(cfg_path, ckpt_path)
-        pipeline_without_loading = self.model.cfg.test_pipeline[1:]
+        pipeline_without_loading = self.model.cfg.test_pipeline[1:] # type: ignore
         self.pipeline = Compose(pipeline_without_loading)
         self.model.eval()
         self.model.requires_grad_(False)
@@ -54,10 +55,10 @@ class Inferencer:
         return data, is_batch
 
     def Inference_FromITK(self, itk_image:sitk.Image) -> tuple[sitk.Image, sitk.Image]:
-        image_array = sitk.GetArrayFromImage(itk_image) # [D, H, W]
-        pred = self.Inference_FromNDArray(image_array) # [Class, D, H, W]
+        image_array = sitk.GetArrayFromImage(itk_image) # [Z, Y, X]
+        pred = self.Inference_FromNDArray(image_array) # [Class, Z, Y, X]
         # 后处理
-        pred = pred.argmax(dim=0).to(dtype=torch.uint8, device='cpu').numpy() # [D, H, W]
+        pred = pred.argmax(dim=0).to(dtype=torch.uint8, device='cpu').numpy() # [Z, Y, X]
         itk_pred = sitk.GetImageFromArray(pred)
         itk_pred.CopyInformation(itk_image)
         return itk_image, itk_pred
@@ -194,7 +195,7 @@ class Inference_exported(Inferencer_2D):
 
 class Inference_ONNX(Inference_exported):
     def __init__(self, onnx_path, inference_mode:str='whole', wl=40, ww=400):
-        import onnxruntime as ort
+        import onnxruntime as ort # type: ignore
         self.model = ort.InferenceSession(
             onnx_path,
             providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
@@ -210,3 +211,41 @@ class Inference_ONNX(Inference_exported):
         result = np.array(result).squeeze()[None]
         result = torch.from_numpy(result)
         return result
+
+
+class Inferencer_3D(Inferencer):
+    def __init__(self, spacings=[None,None,None], sizes=[None,None,None], *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        assert len(spacings) == 3, "Spacings must be a list of 3 elements, got: {}.".format(spacings)
+        assert len(sizes) == 3, "Sizes must be a list of 3 elements, got: {}.".format(sizes)
+        assert not any([spacing is not None and size is not None 
+                        for spacing, size in zip(spacings, sizes)]), \
+            "Can not specify spacing and size for one dimension at the same time, got spacings: {}, sizes: {}.".format(spacings, sizes)
+        self.spacings = spacings
+        self.sizes = sizes
+    
+    @torch.inference_mode()
+    def Inference_FromNDArray(self, image_array) -> Tensor:
+        data, is_batch = _preprare_data(image_array, self.model)
+        data = self.model.data_preprocessor(data, False)
+        with torch.autocast('cuda'):
+            img_input = data['inputs'][0][None]
+            img_meta = [d.to_dict() for d in data['data_samples']]
+            seg_result = self.model.inference(img_input, img_meta)
+            return seg_result.squeeze(0) # [N, Class, Z, Y, X] -> [Class, Z, Y, X]
+
+    def Inference_FromITK(self, itk_image:sitk.Image) -> tuple[sitk.Image, sitk.Image]:
+        if any(self.spacings):
+            # the dimension order aligns to Z Y X.
+            # complementation on each dimension
+            ori_spacing = itk_image.GetSpacing()[::-1]
+            ori_size = itk_image.GetSize()[::-1]
+            target_spacing = [target or ori for ori, target in zip(ori_spacing, self.spacings)]
+            target_size = [target or ori for ori, target in zip(ori_size, self.sizes)]
+            # resampling
+            if any(self.spacings):
+                itk_image = sitk_resample_to_spacing(itk_image, target_spacing, "image")
+            if any(self.sizes):
+                itk_image = sitk_resample_to_size(itk_image, target_size, "image")
+            # inference
+            return super().Inference_FromITK(itk_image)

@@ -26,7 +26,7 @@ def sitk_resample_to_spacing(mha: sitk.Image,
 
     Args:
         mha (sitk.Image): 输入sitk.Image
-        spacing (tuple[float,float,float]): 新的spacing
+        spacing (tuple[float,float,float]): 新的spacing [Z,Y,X]
         field (str, optional): 重采样的对象。 可选'image', 'label', 'mask'.
                                本参数将决定插值方法和数据格式。
         standardize (bool, optional): 是否标准化输出的origin和direction. Defaults to False.

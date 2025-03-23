@@ -860,10 +860,11 @@ class PackSeg3DInputs(PackSegInputs):
             data = to_tensor(results["gt_seg_map_one_hot"].astype(np.uint8))
             data_sample.gt_sem_seg_one_hot = VolumeData(data=data)
 
-        for key in results['seg_fields']:
-            if key not in data_sample.keys():
-                other_seg = BaseDataElement(data=to_tensor(results[key]))
-                data_sample.set_field(other_seg, key)
+        if "seg_fields" in results:
+            for key in results['seg_fields']:
+                if key not in data_sample.keys():
+                    other_seg = BaseDataElement(data=to_tensor(results[key]))
+                    data_sample.set_field(other_seg, key)
 
         img_meta = {}
         for key in self.meta_keys:
