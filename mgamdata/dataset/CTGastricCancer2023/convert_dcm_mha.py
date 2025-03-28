@@ -16,6 +16,7 @@ from mgamdata.io.dcm_toolkit import read_dcm_as_sitk
 from mgamdata.io.sitk_toolkit import sitk_resample_to_spacing, sitk_resample_to_size
 
 
+
 def nrrd_to_ItkLabel(
     dcms: list[pydicom.FileDataset], itk_images: sitk.Image, nrrd_path: str
 ):
@@ -60,7 +61,7 @@ def convert_one_case(args):
 
     # 构建路径，保持文件存储结构不变
     # 按照SeriesUID存储，以及自动跳过
-    series_id = pydicom.dcmread(dcms[0]).SeriesInstanceUID
+    series_id = pydicom.dcmread(dcms[3]).SeriesInstanceUID
     output_image_mha_path = os.path.join(output_image_folder, f"{series_id}.mha")
     output_label_mha_path = os.path.join(output_label_folder, f"{series_id}.mha")
     os.makedirs(output_image_folder, exist_ok=True)
@@ -155,9 +156,12 @@ def main():
     parser.add_argument("--size", type=int, nargs=3, default=None, help="Crop to this size.")
     args = parser.parse_args()
     
+    os.makedirs(args.output_dir, exist_ok=True)
     json.dump(vars(args), open(os.path.join(args.output_dir, "failed.json"), 'w'), indent=4)
     exceptions = convert_and_save_nii_to_mha(args.input_dir, args.output_dir, args.mp, args.spacing, args.size)
     print(f"Failed: {len(exceptions)}")
+
+
 
 if __name__ == "__main__":
     main()
