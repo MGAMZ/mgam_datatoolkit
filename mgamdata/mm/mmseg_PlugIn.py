@@ -275,7 +275,7 @@ class SegViser(SegLocalVisualizer):
 
         fig.tight_layout()
         fig.canvas.draw()
-        heatmap = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+        heatmap = np.array(fig.canvas.renderer.buffer_rgba())[:, :, :3]
         heatmap = heatmap.reshape(fig.canvas.get_width_height()[::-1] + (3,))
 
         plt.close(fig)

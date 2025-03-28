@@ -35,7 +35,7 @@ dependencies = [
   "timm",
   "opensdpc",
   "colorama",
-  "ml_collections"
+  "ml_collections",
 ]
 
 [project.optional-dependencies]
@@ -43,6 +43,10 @@ full = [
   "deepspeed",
   "tensorrt",
   "mamba-ssm",
+  "onnx",
+  "onnxruntime",
+  "onnx_graphsurgeon",
+  "colored",
 ]
 
 [project.scripts]

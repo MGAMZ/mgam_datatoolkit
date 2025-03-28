@@ -369,9 +369,9 @@ class DiceLoss_3D(torch.nn.Module):
             z_weights = self.get_smooth_z_weight(target) # [N, Z]
             # self.visualize_z_loss(target, loss, z_weights) # HACK debug
             weights = z_weights.view(z_weights.size(0), 1, z_weights.size(1), 1, 1).expand_as(loss)
-            weighted_loss = (loss * weights)
+            loss = (loss * weights)
         
-        return weighted_loss.mean()
+        return loss.mean()
 
 
 class CrossEntropyLoss_3D(torch.nn.CrossEntropyLoss):

@@ -44,7 +44,7 @@ from ..utils.DevelopUtils import measure_time, InjectVisualize
 
 
 def DynamicRunnerSelection(cfg: ConfigType) -> Runner:
-    if cfg.dist is True and cfg.MP_mode != "ddp":
+    if cfg.get("dist", False) is True and cfg.get("MP_mode", None) != "ddp":
         RunnerChoice = FlexibleRunner
     else:
         RunnerChoice = Runner
@@ -56,7 +56,7 @@ def DynamicRunnerSelection(cfg: ConfigType) -> Runner:
             self.resume_param_scheduler = kwargs.get("cfg", {}).pop("resume_param_scheduler", True)
             self.custom_env(kwargs.get("env_cfg", {}))
 
-            if cfg.MP_mode == "fsdp":
+            if cfg.get("MP_mode", None) == "fsdp":
                 strategy = kwargs.get("cfg", {}).pop("strategy", None)
                 auto_strategy = partial(size_based_auto_wrap_policy, 
                                         min_num_params=int(1e5))

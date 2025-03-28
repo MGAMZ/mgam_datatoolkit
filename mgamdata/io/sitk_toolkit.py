@@ -35,20 +35,21 @@ def sitk_resample_to_spacing(mha: sitk.Image,
         sitk.Image: 重采样后的sitk.Image
     """
     assert field in ["image", "label"], "field must be one of ['image', 'label']"
-
+    assert len(spacing) == 3, f"Spacing must be a 3-tuple, got {spacing}"
+    
     # 计算重采样后的Spacing
     spacing = spacing[::-1]
-    original_size = mha.GetSize()
     original_spacing = mha.GetSpacing()
-    original_origin = mha.GetOrigin()
-    # Add Z spacing if not provided
-    if len(spacing) == 2:
-        spacing = spacing + [original_spacing[-1]]
+    for i in range(3):
+        if spacing[i] == -1:
+            spacing[i] = original_spacing[i]
+        else:
+            assert spacing[i] > 0, f"Spacing must be positive or -1 (Not Changed), but got {spacing}"
     
+    original_size = mha.GetSize()
     spacing_ratio = [original_spacing[i] / spacing[i] for i in range(3)]
     resampled_size = [int(original_size[i] * spacing_ratio[i]) - 1 for i in range(3)]
-    target_origin = [original_origin[d] + 0.5 * (spacing[d] - original_spacing[d])
-                     for d in range(3)]
+    
     # 执行重采样
     try:
         return sitk.Resample(
@@ -68,7 +69,6 @@ def sitk_resample_to_spacing(mha: sitk.Image,
             "original_spacing": original_spacing,
             "spacing": spacing,
             "resampled_size": resampled_size,
-            "target_origin": target_origin,
             "mha": str(mha),
             "field": field,
         }
@@ -120,16 +120,19 @@ def sitk_resample_to_size(
     Returns:
         sitk.Image: 重采样后的sitk.Image
     """
+    assert len(new_size) == 3, f"Size must be a 3-tuple, got {new_size}"
+    
     new_size = new_size[::-1]
     original_size = image.GetSize()
+    for i in range(3):
+        if new_size[i] == -1:
+            new_size[i] = original_size[i]
+        else:
+            assert new_size[i] > 0, f"Size must be positive or -1 (Not Changed), but got {new_size}"
+    
     original_spacing = image.GetSpacing()
-    original_origin = image.GetOrigin()
-    if len(new_size) == 2:
-        new_size = new_size + [original_size[-1]]
     new_spacing = np.divide(original_spacing, np.divide(new_size, original_size))
-    target_origin = [original_origin[d] + 0.5 * (new_spacing[d] - original_spacing[d])
-                     for d in range(3)]
-
+    
     return sitk.Resample(
         image1=image,
         size=new_size,

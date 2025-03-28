@@ -1,6 +1,7 @@
 import pdb
 from typing_extensions import Sequence
 
+import numpy as np
 import torch
 from torch import nn, Tensor
 from torch.nn import functional as F
@@ -733,13 +734,13 @@ class MM_MedNext_Encoder(BaseModule):
         do_res: bool = False,  # Can be used to individually test residual connection
         do_res_up_down: bool = False,  # Additional 'res' connection on up and down convs
         use_checkpoint: bool = False,  # Either inside block or outside block
-        block_counts: list = [2,2,2,2,2,2,2,2,2],  # Can be used to test staging ratio:
+        block_counts: Sequence = [2,2,2,2,2,2,2,2,2],  # Can be used to test staging ratio:
         # [3,3,9,3] in Swin as opposed to [2,2,2,2,2] in nnUNet
         norm_type="group",
         dim="2d",  # 2d or 3d
         grn=False,
         freeze:bool=False,
-        pixel_unshuffle:int|None=None,
+        pixel_unshuffle:Sequence[int]|int|None=None,
         *args,
         **kwargs,
     ):
@@ -765,14 +766,18 @@ class MM_MedNext_Encoder(BaseModule):
             exp_r = [exp_r] * len(block_counts)
         else:
             assert isinstance(exp_r, list)
-
+            
+        # When 3D Model, should specify the pixel_unshuffle ratio for each dimension;
+        # when 2D Model, only support the same ratio on X and Y.
         if pixel_unshuffle is not None:
             if dim == "2d":
+                assert isinstance(pixel_unshuffle, int)
                 self.pixel_unshuffle = nn.PixelUnshuffle(pixel_unshuffle)
-                embed_dims *= (pixel_unshuffle ** 2)
             elif dim == "3d":
                 self.pixel_unshuffle = PixelUnshuffle3D(pixel_unshuffle)
-                embed_dims *= (pixel_unshuffle ** 3)
+            
+            embed_dims *= int(np.prod(pixel_unshuffle))
+
         if kernel_size is not None:
             enc_kernel_size = kernel_size
             dec_kernel_size = kernel_size
@@ -1169,7 +1174,7 @@ class MM_MedNext_Decoder(BaseModule):
         norm_type = "group",
         dim = "2d",  # 2d or 3d
         grn = False,
-        pixel_shuffle: int|None = None,
+        pixel_shuffle: Sequence[int]|int|None = None,
         *args,
         **kwargs,
     ):
@@ -1193,12 +1198,17 @@ class MM_MedNext_Decoder(BaseModule):
         #      The tensor will have already been shuffled back to the actual size of input,
         #      so the out projection will receive the actual embed_dims.
         self.out_0 = OutBlock(in_channels=embed_dims, n_classes=num_classes, dim=dim)
+        
+        # When 3D Model, should specify the pixel_shuffle ratio for each dimension;
+        # when 2D Model, only support the same ratio on X and Y.
         if pixel_shuffle is not None:
-            embed_dims *= (pixel_shuffle ** int(dim[0]))
             if dim == "2d":
+                assert isinstance(pixel_shuffle, int)
                 self.pixel_shuffle = nn.PixelShuffle(pixel_shuffle)
             elif dim == "3d":
                 self.pixel_shuffle = PixelShuffle3D(pixel_shuffle)
+            
+            embed_dims *= int(np.prod(pixel_shuffle))
 
         self.up_3 = MedNeXtUpBlock(
             in_channels=16 * embed_dims,
@@ -1435,6 +1445,7 @@ class MM_MedNext_Decoder_3D(BaseDecodeHead_3D):
         grn=False,
         freeze:bool=False,
         pixel_shuffle:int|None=None,
+        avgpool_XY:bool=False,
         *args,
         **kwargs,
     ):
@@ -1453,6 +1464,7 @@ class MM_MedNext_Decoder_3D(BaseDecodeHead_3D):
             *args,
             **kwargs)
         
+        self.avgpool_XY = avgpool_XY
         self.freeze = freeze
         self.mednext = MM_MedNext_Decoder(
             embed_dims=embed_dims,
@@ -1472,7 +1484,11 @@ class MM_MedNext_Decoder_3D(BaseDecodeHead_3D):
             self.requires_grad_(False)
 
     def forward(self, inputs):
-        return self.mednext(inputs)
+        dec_out = self.mednext(inputs)
+        if self.avgpool_XY:
+            return [x.mean(dim=(-1,-2)) for x in dec_out]
+        else:
+            return dec_out
 
 # NOTE This class is decrecated and is only used for 
 # NOTE implementations of Sarcopenia project, i.e., weight loading.

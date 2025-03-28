@@ -5,7 +5,6 @@ import numpy as np
 import SimpleITK as sitk
 from tqdm import tqdm
 import multiprocessing
-from typing import Tuple, Optional, List, Dict, Any
 
 
 
@@ -18,7 +17,7 @@ def create_sliding_windows(
     volume: np.ndarray, 
     window_size: int, 
     stride: int
-) -> List[Tuple[int, np.ndarray]]:
+) -> list[tuple[int, np.ndarray]]:
     """
     在Z轴方向对3D体积进行滑动窗口采样。
     
@@ -71,7 +70,7 @@ def sample_volume(args):
                 f"图像与标签形状不匹配: image={image.shape}, label={label.shape}"
             )
         if image.shape[0] < window_size:
-            print(f"{image_path} 的Z轴长度小于窗口大小，跳过处理。")
+            tqdm.write(f"{image_path} 的Z轴长度小于窗口大小，跳过处理。")
             return {
                 os.path.basename(image_path.replace('.mha', '')): {
                     "num_patches": 0,
@@ -90,8 +89,8 @@ def sample_volume(args):
         label_windows = create_sliding_windows(label, window_size, stride)
         
         # 用于记录JSON信息
-        existed_classes: Dict[str, List[int]] = {}
-        cropped_center: List[Tuple[float, float, float]] = []
+        existed_classes: dict[str, list[int]] = {}
+        cropped_center: list[tuple[float, float, float]] = []
         
         # 获取Y、X方向尺寸：注：volume.shape 为 [Z, Y, X]
         _, height, width = image.shape
@@ -149,12 +148,12 @@ def sample_volume(args):
 
 
 def process_dataset(
-    data_dir: str, 
-    output_dir: str, 
-    window_size: int, 
-    stride: int, 
-    use_mp: bool = False, 
-    num_workers: Optional[int] = None
+    data_dir: str,
+    output_dir: str,
+    window_size: int,
+    stride: int,
+    use_mp: bool = False,
+    num_workers: int|None = None
 ) -> None:
     """
     对 data_dir 下的 image/ 和 label/ 目录进行遍历，分别执行滑动窗口采样。
@@ -214,7 +213,7 @@ def process_dataset(
     }
     json.dump(cropped_series_meta, 
               open(os.path.join(output_dir, "crop_meta.json"), "w", encoding="utf-8"), indent=4)
-    print(f"全部处理完成")
+    print(f"全部处理完成，采样结果元数据已保存到 {output_dir}/crop_meta.json")
 
 
 def main():

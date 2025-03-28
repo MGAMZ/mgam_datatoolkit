@@ -119,15 +119,16 @@ class LoadMaskFromMHA(LoadFromMHA):
     """
 
     def transform(self, results):
-        mask_path = results["seg_map_path"]
-        mask_mha = sitk.ReadImage(mask_path)
-        mask = self._process_mha(mask_mha, "mask")
-        if results.get("label_map", None) is not None:
-            mask_copy = mask.copy()
-            for old_id, new_id in results["label_map"].items():
-                mask[mask_copy == old_id] = new_id
-        results["gt_seg_map"] = mask  # output: [X, Y, Z]
-        results["seg_fields"].append("gt_seg_map")
+        if "seg_map_path" in results:
+            mask_path = results["seg_map_path"]
+            mask_mha = sitk.ReadImage(mask_path)
+            mask = self._process_mha(mask_mha, "mask")
+            if results.get("label_map", None) is not None:
+                mask_copy = mask.copy()
+                for old_id, new_id in results["label_map"].items():
+                    mask[mask_copy == old_id] = new_id
+            results["gt_seg_map"] = mask  # output: [X, Y, Z]
+            results["seg_fields"].append("gt_seg_map")
         return results
 
 
