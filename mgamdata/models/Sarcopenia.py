@@ -8,6 +8,7 @@ import numpy as np
 import torch
 from torch import Tensor
 from matplotlib.patches import Patch
+from scipy.ndimage import zoom
 
 from mmcv.transforms import BaseTransform
 from mmengine.registry import MODELS
@@ -367,6 +368,7 @@ class L3_Visualizer(SegLocalVisualizer):
         if isinstance(gt_l3, torch.Tensor):
             gt_l3 = gt_l3.cpu().numpy()
         gt_positions = np.where(gt_l3 == 1)[0]
+        gt_positions = zoom(gt_positions, zoom=scale_factor, order=0)
         if len(gt_positions) > 0:
             for scaled_pos in gt_positions:
                 # 半透明绿色
@@ -381,6 +383,7 @@ class L3_Visualizer(SegLocalVisualizer):
         if isinstance(pred_l3, torch.Tensor):
             pred_l3 = pred_l3.cpu().numpy()
         pred_positions = np.where(pred_l3 == 1)[0]
+        pred_positions = zoom(pred_positions, zoom=scale_factor, order=0)
         if len(pred_positions) > 0:
             for scaled_pos in pred_positions:
                 # 半透明红色
