@@ -1,5 +1,6 @@
 import os
 import pdb
+import logging
 from os import path as osp
 from pprint import pprint
 from collections.abc import Sequence, Mapping
@@ -10,6 +11,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 import SimpleITK as sitk
+import pandas as pd
 
 import mmcv
 import mmengine
@@ -25,7 +27,7 @@ from . import (
     ZHEJIANG_HOSPITAL_SERIES_UIDS,
     WENZHOU_HOSPITAL_SERIES_UIDS,
 )
-from ..base import mgam_SemiSup_Precropped_Npz, mgam_SemiSup_3D_Mha
+from ..base import mgam_SemiSup_Precropped_Npz, mgam_SemiSup_3D_Mha, mgam_BaseSegDataset
 
 
 
@@ -287,6 +289,36 @@ def MhaResampleToTarget(source_image:sitk.Image,
 
 class Sarcopenia_base:
     METAINFO = dict(classes=list(CLASS_MAP.values()))
+
+    def __init__(self, L3_anno_xlsx:str|None=None, ensure_L3_anno=None, *args, **kwargs):
+        self.L3_anno_xlsx = L3_anno_xlsx
+        self.ensure_L3_anno = ensure_L3_anno if (ensure_L3_anno is not None) else (L3_anno_xlsx is not None)
+        super().__init__(*args, **kwargs)
+        self.L3_anno = pd.read_excel(L3_anno_xlsx, usecols=['序列编号', 'L3节段起始层数', 'L3节段终止层数', 'L3节段椎弓根层面层数']) \
+                       if L3_anno_xlsx is not None else None
+
+    def load_data_list(self):
+        data_list = mgam_BaseSegDataset.load_data_list(self)
+        if self.L3_anno is None:
+            return data_list
+        
+        # Add L3 annotation to each sample
+        print_log(f"L3 Annotation xlsx file available, adding them into data samples.", MMLogger.get_current_instance())
+        for data in data_list:
+            seriesUID = Path(data['img_path']).stem
+            L3_anno = self.L3_anno[self.L3_anno['序列编号'] == seriesUID]
+            
+            if len(L3_anno) == 0:
+                if self.ensure_L3_anno is True:
+                    raise FileNotFoundError(f"Series: {seriesUID} L3 annotation not found, and ensure_L3_anno is set to True.")
+                else:
+                    print_log(f"Series: {seriesUID} L3 annotation not found.", MMLogger.get_current_instance(), logging.WARNING)
+                    continue
+            else:
+                data['L3_anno'] = L3_anno.iloc[0]['L3节段起始层数', 'L3节段椎弓根层面层数', 'L3节段终止层数', ]
+                data['seg_fields'].append('L3_anno')
+        
+        return data_list
 
 
 class Sarcopenia_Precrop_Npz(Sarcopenia_base, mgam_SemiSup_Precropped_Npz):

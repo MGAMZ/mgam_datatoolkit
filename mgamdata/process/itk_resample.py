@@ -29,12 +29,14 @@ def resample_one_sample(args) -> tuple[sitk.Image, sitk.Image|None] | None:
     """
     image_itk_path, label_itk_path, params, out_image_folder, out_label_folder, use_size = args
 
+    # 路径
     itk_name = os.path.basename(image_itk_path)
     target_image_path = os.path.join(out_image_folder, itk_name)
     target_label_path = os.path.join(out_label_folder, itk_name)
     if os.path.exists(target_image_path) and os.path.exists(target_label_path):
         return None
 
+    # 读取
     image_itk = sitk.ReadImage(image_itk_path)
     label_itk = None
     if os.path.exists(label_itk_path):
@@ -50,10 +52,12 @@ def resample_one_sample(args) -> tuple[sitk.Image, sitk.Image|None] | None:
         if label_itk:
             label_resampled = sitk_resample_to_spacing(label_itk, params, "label")
 
+    # 写入
     target_image_path = target_image_path.replace(".nii.gz", ".mha").replace(".nii", ".mha")
     sitk.WriteImage(image_resampled, target_image_path, useCompression=True)
     if label_itk:
         sitk.WriteImage(label_resampled, target_label_path, useCompression=True)
+    
     return image_resampled, label_resampled if label_itk else None
 
 
