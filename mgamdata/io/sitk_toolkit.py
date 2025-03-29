@@ -146,9 +146,7 @@ def sitk_resample_to_size(
 
 
 def sitk_new_blank_image(size, spacing, direction, origin, default_value=0.0):
-    image = sitk.GetImageFromArray(
-        np.ones(size, dtype=np.float32).T * default_value, isVector=False
-    )
+    image = sitk.GetImageFromArray(np.ones(size, dtype=np.float32).T * default_value, isVector=False)
     image.SetSpacing(spacing)
     image.SetDirection(direction)
     image.SetOrigin(origin)
@@ -161,16 +159,12 @@ def nii_to_sitk(
     value_offset: int | float | None = None,
 ) -> sitk.Image:
     try:
-        sitk_img = sitk.ReadImage(
-            nii_path,
-            outputPixelType=sitk.sitkInt16 if field == "image" else sitk.sitkUInt8,
-        )
+        sitk_img = sitk.ReadImage(nii_path, outputPixelType=sitk.sitkInt16 if field == "image" else sitk.sitkUInt8)
         if value_offset is not None:
-            sitk_img_new = sitk.GetImageFromArray(
-                sitk.GetArrayFromImage(sitk_img) + value_offset
-            )
+            sitk_img_new = sitk.GetImageFromArray(sitk.GetArrayFromImage(sitk_img) + value_offset)
             sitk_img_new.CopyInformation(sitk_img)
             sitk_img = sitk_img_new
+    
     except Exception as e:
         raise ValueError(f"Failed to load NIfTI file: {nii_path}.") from e
 

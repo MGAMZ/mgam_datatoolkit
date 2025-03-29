@@ -1,5 +1,5 @@
 import os
-from ..base_convert import StandardFileFormatter
+from mgamdata.dataset.base_convert import StandardFileFormatter
 
 class KiTS23_formatter(StandardFileFormatter):
     @staticmethod

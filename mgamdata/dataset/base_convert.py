@@ -54,23 +54,19 @@ class StandardFileFormatter:
             or not os.path.exists(label_path):
                 return convertion_log
 
-        try:
-            if isinstance(image_path, str) and ".dcm" in image_path:
-                input_image_mha, input_label_mha = StandardFileFormatter.convert_one_sample_dcm(image_path, label_path)
-            
-            elif ".nii.gz" in image_path:
-                input_image_mha, input_label_mha = StandardFileFormatter.convert_one_sample_nii(image_path, label_path)
-        except Exception as e:
+        if isinstance(image_path, str) and ".dcm" in image_path:
+            input_image_mha, input_label_mha = self.convert_one_sample_dcm(image_path, label_path)
+        elif ".nii.gz" in image_path:
+            input_image_mha, input_label_mha = self.convert_one_sample_nii(image_path, label_path)
+        if input_image_mha is None:
             convertion_log["id"] = "error"
-            convertion_log["error"] = str(e)
+            convertion_log["error"] = "No image found."
             return convertion_log
 
         # resample
         if spacing is not None:
             assert size is None, "Cannot set both spacing and size."
-            input_image_mha = sitk_resample_to_spacing(
-                input_image_mha, spacing, "image"
-            )
+            input_image_mha = sitk_resample_to_spacing(input_image_mha, spacing, "image")
             if not isinstance(input_image_mha, sitk.Image):
                 convertion_log["id"] = "error"
                 convertion_log["error"] = "Resample to spacing failed."
@@ -78,21 +74,16 @@ class StandardFileFormatter:
                 return convertion_log
         elif size is not None:
             assert spacing is None, "Cannot set both spacing and size."
-            input_image_mha = sitk_resample_to_size(
-                input_image_mha, size, "image"
-            )
+            input_image_mha = sitk_resample_to_size(input_image_mha, size, "image")
 
         # Align label to image, if label exists.
         if input_label_mha is not None and os.path.exists(label_path):
-            input_label_mha = sitk_resample_to_image(
-                input_label_mha, input_image_mha, "label"
-            )
+            input_label_mha = sitk_resample_to_image(input_label_mha, input_image_mha, "label")
 
         sitk.WriteImage(input_image_mha, output_image_mha_path, useCompression=True)
         if input_label_mha is not None and os.path.exists(label_path):
-            assert (
-                input_image_mha.GetSize() == input_label_mha.GetSize()
-            ), "Image and label size mismatch."
+            assert (input_image_mha.GetSize() == input_label_mha.GetSize()), \
+                f"Image {input_image_mha.GetSize()} and label {input_label_mha.GetSize()} size mismatch."
             sitk.WriteImage(input_label_mha, output_label_mha_path, useCompression=True)
         
         return convertion_log

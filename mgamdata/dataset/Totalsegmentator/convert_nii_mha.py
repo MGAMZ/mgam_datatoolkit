@@ -13,7 +13,6 @@ from mgamdata.dataset.Totalsegmentator.meta import CLASS_INDEX_MAP
 
 
 
-
 def convert_one_case(args):
     series_input_folder, series_output_folder, spacing, size = args
     # 构建路径，保持文件存储结构不变
@@ -42,7 +41,6 @@ def convert_one_case(args):
     sitk.WriteImage(merged_itk, output_anno_mha_path, useCompression=True)
 
 
-
 def merge_one_case_segmentations(corresponding_itk_image:sitk.Image, 
                                  case_path: str):
     segmentation_path = os.path.join(case_path, 'segmentations')
@@ -57,7 +55,6 @@ def merge_one_case_segmentations(corresponding_itk_image:sitk.Image,
     merged_itk = sitk.GetImageFromArray(merged_array)
     merged_itk.CopyInformation(corresponding_itk_image)
     return merged_itk
-
 
 
 def convert_and_save_nii_to_mha(input_dir: str, 
@@ -87,7 +84,6 @@ def convert_and_save_nii_to_mha(input_dir: str,
                          dynamic_ncols=True,
                          desc="nii2mha"):
             convert_one_case(args)
-
 
 
 def main():
