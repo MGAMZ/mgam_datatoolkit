@@ -15,10 +15,10 @@ from mgamdata.dataset.Totalsegmentator.meta import CLASS_INDEX_MAP
 
 def convert_one_case(args):
     series_input_folder, series_output_folder, spacing, size = args
-    # 构建路径，保持文件存储结构不变
+    sample_id = os.path.basename(series_input_folder)
     input_image_nii_path = os.path.join(series_input_folder, 'ct.nii.gz')
-    output_image_mha_path = os.path.join(series_output_folder, 'ct.mha')
-    output_anno_mha_path = os.path.join(series_output_folder, 'segmentations.mha')
+    output_image_mha_path = os.path.join(series_output_folder, 'image', f'{sample_id}.mha')
+    output_anno_mha_path = os.path.join(series_output_folder, 'label', f'{sample_id}.mha')
     os.makedirs(series_output_folder, exist_ok=True)
     if os.path.exists(output_image_mha_path) and os.path.exists(output_anno_mha_path):
         return
@@ -57,20 +57,20 @@ def merge_one_case_segmentations(corresponding_itk_image:sitk.Image,
     return merged_itk
 
 
-def convert_and_save_nii_to_mha(input_dir: str, 
-                                output_dir: str, 
-                                use_mp: bool,
+def convert_and_save_nii_to_mha(input_dir:str,
+                                output_dir:str,
+                                use_mp:bool,
+                                workers:int|None=None,
                                 spacing:Sequence[float|int]|None=None,
                                 size:Sequence[float|int]|None=None):
     task_list = []
     for series_name in os.listdir(input_dir):
         if os.path.isdir(os.path.join(input_dir, series_name)):
             series_input_folder = os.path.join(input_dir, series_name)
-            series_output_folder = os.path.join(output_dir, series_name)
-            task_list.append((series_input_folder, series_output_folder, spacing, size))
+            task_list.append((series_input_folder, output_dir, spacing, size))
     
     if use_mp:
-        with multiprocessing.Pool() as pool:
+        with multiprocessing.Pool(workers) as pool:
             for _ in tqdm(
                 pool.imap_unordered(convert_one_case, task_list),
                 total=len(task_list),
@@ -91,11 +91,12 @@ def main():
     parser.add_argument('input_dir', type=str, help="Containing NIfTI files.")
     parser.add_argument('output_dir', type=str, help="Save MHA files.")
     parser.add_argument('--mp', action='store_true', help="Use multiprocessing.")
+    parser.add_argument('--workers', type=int, default=multiprocessing.cpu_count(), help="Number of workers.")
     parser.add_argument('--spacing', type=float, nargs=3, default=None, help="Resample to this spacing.")
     parser.add_argument('--size', type=int, nargs=3, default=None, help="Crop to this size.")
     args = parser.parse_args()
     
-    convert_and_save_nii_to_mha(args.input_dir, args.output_dir, args.mp, args.spacing, args.size)
+    convert_and_save_nii_to_mha(args.input_dir, args.output_dir, args.mp, args.workers, args.spacing, args.size)
 
 
 
