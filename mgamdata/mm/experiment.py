@@ -17,12 +17,17 @@ from mgamdata.mm.mmeng_PlugIn import DynamicRunnerSelection
 
 class experiment:
 
-    def __init__(self, config, work_dir, test_work_dir, test_draw_interval,
-                 cfg_options, test_mode, detect_anomaly, test_use_last_ckpt):
+    def __init__(self, 
+                 config, 
+                 work_dir, 
+                 test_work_dir, 
+                 cfg_options, 
+                 test_mode, 
+                 detect_anomaly, 
+                 test_use_last_ckpt):
         self.config = config
         self.work_dir = work_dir
         self.test_work_dir = test_work_dir
-        self.test_draw_interval = test_draw_interval
         self.cfg_options = cfg_options
         self.test_mode = test_mode
         self.detect_anomaly = detect_anomaly
@@ -69,7 +74,6 @@ class experiment:
         # 实验没有结束，初始化模型，调整mmseg配置参数
         print_log(f"启动中，初始化模型: {self.work_dir}", 'current', logging.INFO)
         self.cfg = cfg
-        self.modify_cfg_to_set_visualization()
 
     def _direct_to_test(self):
         # 检查是否处于torchrun模式
@@ -100,16 +104,6 @@ class experiment:
         # model_param_stat(cfg, runner) # 模型参数统计
         print_log(f"测试完成: {self.work_dir}", 'current', logging.INFO)
 
-    def modify_cfg_to_set_visualization(self):
-        default_hooks = self.cfg.default_hooks
-        if self.test_draw_interval:
-            visualization_hook = default_hooks.get('visualization', None)
-            # Turn on visualization
-            if visualization_hook:
-                visualization_hook['draw'] = True
-            if self.cfg.get('visualizer', None):
-                self.cfg.visualizer['save_dir'] = self.work_dir
-
     def modify_cfg_to_skip_train(self):
         # remove train and val cfgs
         self.cfg.train_dataloader = None
@@ -119,12 +113,7 @@ class experiment:
         self.cfg.val_dataloader = None
         self.cfg.val_cfg = None
         self.cfg.val_evaluator = None
-        self.cfg.logger_interval = 10
         self.cfg.resume = False
-        if self.test_draw_interval:
-            self.cfg.default_hooks.visualization.interval = self.test_draw_interval
-        else:
-            self.cfg.default_hooks.visualization.draw = False
 
     def modify_cfg_to_ensure_single_node(self):
         self.cfg.launcher = 'none'

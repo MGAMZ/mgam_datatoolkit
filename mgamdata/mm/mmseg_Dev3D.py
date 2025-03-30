@@ -726,9 +726,7 @@ class Seg3DLocalVisualizer(SegLocalVisualizer):
                 - pred_sem_seg (data:VolumeData): tensor (1, Z, Y, X)
                 - seg_logits (data:VolumeData): tensor (Classes, Z, Y, X)
         """
-        assert image.ndim == 4, (
-            f"The input image must be 4D, but got " f"shape {image.shape}."
-        )
+        assert image.ndim == 4, f"The input image must be 4D, but got " f"shape {image.shape}."
         Z, Y, X, C = image.shape
         name += f"_z{Z}"
         random_selected_z = np.random.randint(0, Z)

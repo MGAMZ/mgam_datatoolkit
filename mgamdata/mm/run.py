@@ -24,7 +24,6 @@ class auto_runner:
         test_work_dir_root,
         config_root,
         cfg_options,
-        test_draw_interval,
         test,
         auto_retry,
         detect_anomaly,
@@ -36,7 +35,6 @@ class auto_runner:
         self.test_work_dir_root = test_work_dir_root
         self.config_root = config_root
         self.cfg_options = cfg_options
-        self.test_draw_interval = test_draw_interval
         self.test = test
         self.auto_retry = auto_retry
         self.detect_anomaly = detect_anomaly
@@ -53,7 +51,6 @@ class auto_runner:
         parser.add_argument("--test-work-dir-root", type=str, default=MM_TEST_DIR_ROOT, help="测试时的工作目录")
         parser.add_argument("--config-root", type=str, default=MM_CONFIG_ROOT, help="存储配置文件的根目录",)
         parser.add_argument("--cfg-options", nargs="+", action=DictAction)
-        parser.add_argument("--test-draw-interval", type=int, default=1, help="测试时可视化样本的间距")
         parser.add_argument("--test", default=False, action="store_true", help="仅测试模式")
         parser.add_argument("--auto-retry", type=int, default=0, help="单个实验出错自动重试次数")
         parser.add_argument("--detect-anomaly", default=False, action="store_true", help="PyTorch检测异常")
@@ -66,7 +63,6 @@ class auto_runner:
             test_work_dir_root=args.test_work_dir_root,
             config_root=args.config_root,
             cfg_options=args.cfg_options,
-            test_draw_interval=args.test_draw_interval,
             test=args.test,
             auto_retry=args.auto_retry,
             detect_anomaly=args.detect_anomaly,
@@ -134,7 +130,6 @@ class auto_runner:
                             config_path,
                             work_dir_path,
                             test_work_dir_path,
-                            self.test_draw_interval,
                             self.cfg_options,
                             self.test,
                             self.detect_anomaly,
