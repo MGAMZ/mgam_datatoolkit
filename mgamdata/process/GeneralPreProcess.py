@@ -345,16 +345,15 @@ class GaussianBlur(BaseTransform):
         self.sigma = sigma
         self.amplify = amplify
         self.blur = partial(
-            cv2.GaussianBlur, ksize=(self.kernel_size, self.kernel_size), sigmaX=sigma
-        )
+            cv2.GaussianBlur, 
+            ksize=(self.kernel_size, self.kernel_size), 
+            sigmaX=sigma)
 
     def transform(self, results: dict):
         if "image" in self.field:
             results["img"] = (self.blur(results["img"]) * self.amplify).astype(np.uint8)
         if "label" in self.field:
-            results["gt_seg_map"] = (
-                self.blur(results["gt_seg_map"]) * self.amplify
-            ).astype(np.float32)
+            results["gt_seg_map"] = (self.blur(results["gt_seg_map"]) * self.amplify).astype(np.float32)
         return results
 
 

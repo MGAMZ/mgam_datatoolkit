@@ -152,30 +152,33 @@ class LoadRoseThyroidSampleFromNpz(BaseTransform):
         assert all([load_type in ["img", "anno"] for load_type in self.load_type])
 
     def transform(self, results):
-        assert (
-            results["img_path"] == results["seg_map_path"]
-        ), f"img_path: {results['img_path']}, seg_map_path: {results['seg_map_path']}"
+        assert (results["img_path"] == results["seg_map_path"]), \
+            f"img_path: {results['img_path']}, seg_map_path: {results['seg_map_path']}"
         sample_path = results["img_path"]
         sample = np.load(sample_path)
 
-        if "img" in self.load_type:
-            results["img"] = sample["img"]
-            results["img_shape"] = results["img"].shape[:-1]
-            results["ori_shape"] = results["img"].shape[:-1]
+        try:
+            if "img" in self.load_type:
+                results["img"] = sample["img"]
+                results["img_shape"] = results["img"].shape[:-1]
+                results["ori_shape"] = results["img"].shape[:-1]
 
-        if "anno" in self.load_type:
-            point_mask = sample["heatmap"]
-            cluster_cls = sample["clustered"]
-            # Support mmseg dataset rule
-            if results.get("label_map", None) is not None:
-                mask_copy = point_mask.copy()
-                for old_id, new_id in results["label_map"].items():
-                    point_mask[mask_copy == old_id] = new_id
-            results["gt_seg_map"] = point_mask
-            results["gt_label"] = cluster_cls
-            results["seg_fields"].append("gt_seg_map")
-
-        return results
+            if "anno" in self.load_type:
+                point_mask = sample["heatmap"]
+                cluster_cls = sample["clustered"]
+                # Support mmseg dataset rule
+                if results.get("label_map", None) is not None:
+                    mask_copy = point_mask.copy()
+                    for old_id, new_id in results["label_map"].items():
+                        point_mask[mask_copy == old_id] = new_id
+                results["gt_seg_map"] = point_mask
+                results["gt_label"] = cluster_cls
+                results["seg_fields"].append("gt_seg_map")
+            
+            return results
+        
+        except Exception as e:
+            raise FileNotFoundError(f"Error when loading {sample_path}") from e
 
 
 class LoadCTPreCroppedSampleFromNpz(BaseTransform):

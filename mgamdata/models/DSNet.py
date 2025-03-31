@@ -4,14 +4,15 @@ Implemented by Yiqin Zhang ~ MGAM.
 Used for Rose Thyroid Cell Count project.
 """
 
+from functools import partial
+
 import torch
 from torchvision.models import vgg16
 from torch import nn
 
 from mmengine.model import BaseModule
-from mmseg.models.decode_heads.decode_head import BaseDecodeHead
-from mmseg.models.utils import resize
-from mmseg.utils import ConfigType, SampleList
+from mmseg.models.decode_heads.decode_head import BaseDecodeHead, accuracy
+from mmseg.utils import SampleList
 
 
 class DDCB(BaseModule):
@@ -73,8 +74,7 @@ class DSNet(BaseDecodeHead):
         self.ddcb3 = DDCB(512, 512)
         self.layer_last = nn.Sequential(
             nn.Conv2d(512, 128, kernel_size=3, padding=1, dilation=1),
-            nn.ReLU(),
-        )
+            nn.ReLU())
         self.post1 = nn.Conv2d(128, 64, kernel_size=3, padding=1, stride=1)
         self.post2 = nn.Conv2d(64, 1, kernel_size=1, stride=1)
 
@@ -87,3 +87,36 @@ class DSNet(BaseDecodeHead):
         x6 = self.post1(x5)
         x7 = self.post2(x6)
         return x7
+
+    def loss_by_feat(self, seg_logits: torch.Tensor, batch_data_samples: SampleList) -> dict:
+        """Compute segmentation loss.
+
+        Args:
+            seg_logits (Tensor): The output from decode head forward function.
+            batch_data_samples (List[:obj:`SegDataSample`]): The seg
+                data samples. It usually includes information such
+                as `metainfo` and `gt_sem_seg`.
+
+        Returns:
+            dict[str, Tensor]: a dictionary of loss components
+        """
+
+        seg_label = self._stack_batch_gt(batch_data_samples).squeeze(1)
+        loss = dict()
+
+        if not isinstance(self.loss_decode, nn.ModuleList):
+            losses_decode = [self.loss_decode]
+        else:
+            losses_decode = self.loss_decode
+        for loss_decode in losses_decode:
+            loss[loss_decode.loss_name] = loss_decode(
+                seg_logits,
+                seg_label,
+                ignore_index=self.ignore_index)
+
+        loss['acc_seg'] = accuracy(seg_logits, seg_label, ignore_index=self.ignore_index)
+        
+        return loss
+
+    def predict_by_feat(self, seg_logits: torch.Tensor, batch_img_metas: list[dict]) -> torch.Tensor:
+        return seg_logits
