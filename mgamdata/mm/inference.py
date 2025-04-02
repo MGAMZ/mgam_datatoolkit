@@ -23,7 +23,8 @@ INFERENCER_WORK_DIR = "/fileser51/zhangyiqin.sx/mmseg/work_dirs_inferencer/"
 
 
 class Inferencer:
-    def __init__(self, cfg_path, ckpt_path):
+    def __init__(self, cfg_path, ckpt_path, allow_tqdm:bool=True):
+        self.allow_tqdm = allow_tqdm
         self.model:BaseSegmentor = init_model(cfg_path, ckpt_path)
         pipeline_without_loading = self.model.cfg.test_pipeline[1:] # type: ignore
         self.pipeline = Compose(pipeline_without_loading)
@@ -83,7 +84,8 @@ class Inferencer:
         for mha_path in tqdm(sorted(mha_files),
                              desc='Inference_FromITKFolder',
                              leave=False,
-                             dynamic_ncols=True):
+                             dynamic_ncols=True,
+                             disable=not self.allow_tqdm):
             itk_image = sitk.ReadImage(mha_path)
             itk_image, itk_pred = self.Inference_FromITK(itk_image)
             tqdm.write(f"Successfully inferenced: {os.path.basename(mha_path)}.")
@@ -106,7 +108,8 @@ class Inferencer_2D(Inferencer):
                                   total=len(inputs),
                                   dynamic_ncols=True,
                                   leave=False,
-                                  mininterval=1):
+                                  mininterval=1,
+                                  disable=not self.allow):
             result:torch.Tensor = self.model.inference(array[None], [sample])
             results.append(result)
 
@@ -134,7 +137,8 @@ class Inference_exported(Inferencer_2D):
                 total=len(image_array),
                 dynamic_ncols=True,
                 leave=False,
-                mininterval=1):
+                mininterval=1,
+                disable=not self.allow_tqdm):
             result = self.inference(array)
             results.append(result)
 
