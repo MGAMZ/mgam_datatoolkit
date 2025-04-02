@@ -30,20 +30,3 @@ class RoseThyroidCount_Precrop_Npz(RoseThyroidCount_base, mgam_Standard_Patched_
             return all_series[-2:]
         else:
             raise RuntimeError(f"Unsupported split: {self.split}")
-
-
-class Normalizer_cell2(BaseTransform):
-    # RGB order
-    def __init__(self, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]):
-        self.mean = np.array([[mean]])
-        self.std = np.array([[std]])
-
-    def transform(self, results:dict):
-        results['img'] = (results['img']/255 - self.mean) / self.std
-        return results
-
-
-class BGR2RGB(BaseTransform):
-    def transform(self, results:dict):
-        results['img'] = results['img'][..., ::-1]
-        return results

@@ -97,9 +97,10 @@ class HeatMapDownSample(BaseTransform):
         self.ratio = ratio
     
     def transform(self, results:dict):
-        img = results["gt_seg_map"]
-        img = cv2.resize(img, (img.shape[1]//self.ratio, img.shape[0]//self.ratio))
-        results["gt_seg_map"] = img * (self.ratio**2)
+        if "gt_seg_map" in results:
+            img = results["gt_seg_map"]
+            img = cv2.resize(img, (img.shape[1]//self.ratio, img.shape[0]//self.ratio))
+            results["gt_seg_map"] = img * (self.ratio**2)
         return results
 
 
@@ -108,10 +109,13 @@ class CellCounter(EncoderDecoder):
         super().__init__(*args, **kwargs)
         self.amplify = amplify
 
-    def postprocess_result(self, seg_logits, data_samples:Sequence[SegDataSample]):
+    def postprocess_result(self, seg_logits, data_samples:Sequence[SegDataSample]|None=None):
         """Delete post-process sigmoid activation when C=1"""
-        batch_size, C, H, W = seg_logits.shape
+        B, C, H, W = seg_logits.shape
         seg_logits = seg_logits / self.amplify
+
+        if data_samples is None:
+            data_samples = [SegDataSample() for _ in range(B)]
 
         for i, i_seg_logits in enumerate(seg_logits):
             data_samples[i].set_data({"seg_logits": PixelData(data=i_seg_logits),
@@ -124,3 +128,21 @@ class CellCounterClassifier(CellCounter):
     def __init__(self, amplify, ClasterClassifier, *args, **kwargs):
         super().__init__(amplify=amplify, *args, **kwargs)
         self.claster_classifier = MODELS.build(ClasterClassifier)
+
+
+class Normalizer_cell2(BaseTransform):
+    # RGB order
+    def __init__(self, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]):
+        self.mean = np.array([[mean]])
+        self.std = np.array([[std]])
+
+    def transform(self, results:dict):
+        results['img'] = (results['img']/255 - self.mean) / self.std
+        return results
+
+
+class BGR2RGB(BaseTransform):
+    def transform(self, results:dict):
+        results['img'] = results['img'][..., ::-1]
+        return results
+

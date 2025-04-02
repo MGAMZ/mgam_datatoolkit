@@ -350,9 +350,9 @@ class GaussianBlur(BaseTransform):
             sigmaX=sigma)
 
     def transform(self, results: dict):
-        if "image" in self.field:
-            results["img"] = (self.blur(results["img"]) * self.amplify).astype(np.uint8)
-        if "label" in self.field:
+        if "image" in self.field and "img" in results:
+            results["img"] = (self.blur(results["img"]) * self.amplify)
+        if "label" in self.field and "gt_seg_map" in results:
             results["gt_seg_map"] = (self.blur(results["gt_seg_map"]) * self.amplify).astype(np.float32)
         return results
 
