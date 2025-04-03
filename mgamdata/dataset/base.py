@@ -109,9 +109,7 @@ class mgam_Standard_3D_Mha(mgam_BaseSegDataset):
             for file in os.listdir(os.path.join(self.data_root_mha, "label"))
             if file.endswith(".mha")
         ]
-        all_series = sorted(
-            all_series, key=lambda x: abs(int(re.search(r"\d+", x).group()))
-        )
+        all_series = sorted(all_series, key=lambda x: abs(int(re.search(r"\d+", x).group())))
         np.random.shuffle(all_series)
         total = len(all_series)
         train_end = int(total * self.SPLIT_RATIO[0])
@@ -146,9 +144,7 @@ class mgam_SemiSup_3D_Mha(mgam_Standard_3D_Mha):
             for file in os.listdir(os.path.join(self.data_root_mha, split_at))
             if file.endswith(".mha")
         ]
-        all_series = sorted(
-            all_series, key=lambda x: abs(int(re.search(r"\d+", x).group()))
-        )
+        all_series = sorted(all_series, key=lambda x: abs(int(re.search(r"\d+", x).group())))
         np.random.shuffle(all_series)
         total = len(all_series)
         train_end = int(total * self.SPLIT_RATIO[0])
@@ -205,7 +201,6 @@ class mgam_SemiSup_Precropped_Npz(mgam_SemiSup_3D_Mha):
             leave=False,
             dynamic_ncols=True,
         ):
-
             if self._maybe_skip(series):
                 continue
 
@@ -213,7 +208,7 @@ class mgam_SemiSup_Precropped_Npz(mgam_SemiSup_3D_Mha):
             try:
                 series_meta = orjson.loads(open(os.path.join(series_folder, "SeriesMeta.json"), "r").read())
             except FileNotFoundError:
-                print_log(f"{series_folder} not found.", MMLogger.get_current_instance())
+                print_log(f"{series} not found.", MMLogger.get_current_instance())
                 continue
             
             patch_npz_files = series_meta["class_within_patch"].keys()

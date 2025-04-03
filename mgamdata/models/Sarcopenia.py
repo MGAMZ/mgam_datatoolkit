@@ -432,25 +432,25 @@ class L3Metric(BaseMetric):
         """
         计算1D场景下的Recall、Precision和HD95。
         """
-        recalls = []
-        precisions = []
-        hd95s = []
+        ious, recalls, precisions, hd95s = [], [], [], []
 
         for (pred, gt) in results:
-            # 将预测和真值视为二值数组：1表示前景，0表示背景
             tp = np.sum((pred == 1) & (gt == 1))
             fp = np.sum((pred == 1) & (gt == 0))
             fn = np.sum((pred == 0) & (gt == 1))
-
+            
+            iou = tp / max(tp + fp + fn, 1e-6)
             precision = tp / max(tp + fp, 1e-6)
             recall = tp / max(tp + fn, 1e-6)
             hd95 = self.compute_hd95_1d(pred, gt)
 
+            ious.append(iou)
             recalls.append(recall)
             precisions.append(precision)
             hd95s.append(hd95)
 
         return {
+            'iou': float(np.mean(ious)),
             'Recall': float(np.mean(recalls)),
             'Precision': float(np.mean(precisions)),
             'HD95': float(np.mean(hd95s))
