@@ -3,6 +3,8 @@ from collections.abc import Sequence
 
 import cv2
 import numpy as np
+import matplotlib.pyplot as plt
+from torch import Tensor
 
 from mmcv.transforms import BaseTransform
 from mmengine.evaluator.metric import BaseMetric
@@ -10,6 +12,8 @@ from mmengine.structures import PixelData
 from mmpretrain.registry import MODELS
 from mmseg.structures import SegDataSample
 from mmseg.models.segmentors import EncoderDecoder
+
+from .visualization import BaseViser, master_only, BaseDataElement
 
 
 
@@ -146,3 +150,93 @@ class BGR2RGB(BaseTransform):
         results['img'] = results['img'][..., ::-1]
         return results
 
+
+class HeatMapViser(BaseViser):
+    def __init__(self, 
+                 name:str="RoseThyroidCellCount_HeatMapViser", 
+                 alpha:float=0.3, 
+                 gt_amplify:float=1.,
+                 *args, **kwargs):
+        super().__init__(name=name, *args, **kwargs)
+        self.alpha = alpha
+        self.gt_amplify = gt_amplify
+
+    def _draw_heatmap(
+        self,
+        image: np.ndarray,
+        gt_seg: BaseDataElement,
+        seg_logit: BaseDataElement,
+    ) -> np.ndarray:
+        gt_seg_array = gt_seg.data.squeeze().cpu().numpy() / self.gt_amplify
+        seg_logit_array = seg_logit.data.squeeze().cpu().numpy()
+        
+        assert (gt_seg_array.shape == seg_logit_array.shape), \
+            f"Shape mismatch: gt_seg_array {gt_seg_array.shape} != sem_seg_array {seg_logit_array.shape}"
+        if image.shape != gt_seg_array.shape:
+            resize_ratio = (image.shape[0] / gt_seg_array.shape[0], image.shape[1] / gt_seg_array.shape[1])
+            gt_seg_array = cv2.resize(gt_seg_array, image.shape[:-1], interpolation=cv2.INTER_NEAREST)
+            gt_seg_array = gt_seg_array / resize_ratio[0] / resize_ratio[1]
+        assert (image.shape[:2] == gt_seg_array.shape[:2]), \
+            f"Shape mismatch: image {image.shape[:2]} != gt_seg_array {gt_seg_array.shape[:2]}"
+
+        fig, axes = plt.subplots(1, 2, figsize=(10, 5))
+
+        # draw gt
+        axes[0].set_title("Ground Truth")
+        axes[0].imshow(image)
+        p1 = axes[0].imshow(gt_seg_array, alpha=self.alpha, cmap="hot")
+        axes[0].text(
+            0.1,
+            0.5,
+            f"Mask Info: "
+            f"\nmean:{gt_seg_array.mean():.5f}\nstd:{gt_seg_array.std():.5f}"
+            f"\nmax:{gt_seg_array.max():.5f}\nmin:{gt_seg_array.min():.5f}"
+            f"\nsum:{gt_seg_array.sum():.5f}",
+            fontsize=12,
+            color="black",
+            transform=axes[0].transAxes,
+        )
+        fig.colorbar(p1, ax=axes[0])
+        
+        # draw pred
+        axes[1].set_title("Prediction")
+        axes[1].imshow(image)
+        p2 = axes[1].imshow(seg_logit_array, alpha=self.alpha, cmap="hot")
+        axes[1].text(
+            0.1,
+            0.5,
+            f"Mask Info: "
+            f"\nmean:{seg_logit_array.mean():.5f}\nstd:{seg_logit_array.std():.5f}"
+            f"\nmax:{seg_logit_array.max():.5f}\nmin:{seg_logit_array.min():.5f}"
+            f"\nsum:{seg_logit_array.sum():.5f}",
+            fontsize=12,
+            color="black",
+            transform=axes[1].transAxes,
+        )
+        fig.colorbar(p2, ax=axes[1])
+
+        fig.tight_layout()
+        heatmap = self.export_fig_to_ndarray(fig)
+        return heatmap
+
+    @master_only
+    def add_datasample(self,
+                       name,
+                       image: np.ndarray,
+                       data_sample: BaseDataElement,
+                       draw_gt: bool = True,
+                       draw_pred: bool = True,
+                       show: bool = False,
+                       wait_time: int = 0,
+                       step: int = 0) -> None:
+        
+        try:
+            sample_file = data_sample.get('img_path')
+            image_arr = np.load(sample_file)['img']
+            drown_array = self._draw_heatmap(image_arr, data_sample.gt_sem_seg, data_sample.seg_logits)
+            self.add_image(name, drown_array, step)
+        
+        except Exception as e:
+            import traceback
+            print("在执行HeatMap可视化时发生错误: ", e)
+            traceback.print_exc()

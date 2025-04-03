@@ -4,13 +4,11 @@ import warnings
 import numpy as np
 import pandas as pd
 
-from ..RenJi_Sarcopenia import L3_XLSX_PATH
 
-
-def find_L3_slices(seriesUIDs: list[str]|str, L3_df:pd.DataFrame|None=None):
+def find_L3_slices(seriesUIDs: list[str]|str, L3_df_path:str):
     if isinstance(seriesUIDs, str):
         seriesUIDs = [seriesUIDs]
-    L3_df = pd.read_excel(L3_XLSX_PATH) if L3_df is None else L3_df
+    L3_df = pd.read_excel(L3_df_path)
     L3_slicess = []
     
     for seriesUID in seriesUIDs:

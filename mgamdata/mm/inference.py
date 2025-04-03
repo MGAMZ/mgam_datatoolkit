@@ -109,7 +109,7 @@ class Inferencer_2D(Inferencer):
                                   dynamic_ncols=True,
                                   leave=False,
                                   mininterval=1,
-                                  disable=not self.allow):
+                                  disable=not self.allow_tqdm):
             result:torch.Tensor = self.model.inference(array[None], [sample])
             results.append(result)
 

@@ -25,7 +25,7 @@ from . import (
     HUANGSHAN_HOSPITAL_SERIES_UIDS,
     RENJI_HOSPITAL_DUPLICATED_SERIES_UIDS,
     ZHEJIANG_HOSPITAL_SERIES_UIDS,
-    WENZHOU_HOSPITAL_SERIES_UIDS,
+    WENZHOU_HOSPITAL_SERIES_UIDS, TEST_7986_SERIES_UIDS
 )
 from ..base import mgam_SemiSup_Precropped_Npz, mgam_SemiSup_3D_Mha, mgam_BaseSegDataset
 
@@ -306,6 +306,8 @@ class Sarcopenia_base:
         print_log(f"L3 Annotation xlsx file available, adding them into data samples.", MMLogger.get_current_instance())
         for data in data_list:
             seriesUID = Path(data['img_path']).stem
+            if seriesUID in TEST_7986_SERIES_UIDS:
+                continue
             L3_anno = self.L3_anno[self.L3_anno['序列编号'] == seriesUID]
             
             if len(L3_anno) == 0:
