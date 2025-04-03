@@ -483,12 +483,12 @@ CONFIGS = {
 
 
 import pdb
-from typing import Iterable
+from typing_extensions import Sequence
 from mmengine.model import BaseModule
 class DATrans_Backbone(BaseModule):
     def __init__(self, arch:str, img_size=256, num_classes=21843, zero_head=False, vis=False):
         super(DATrans_Backbone, self).__init__()
-        if isinstance(img_size, Iterable):
+        if isinstance(img_size, Sequence):
             assert img_size[0] == img_size[1]
             img_size = img_size[0]
         config = CONFIGS[arch]
@@ -510,8 +510,11 @@ from mmseg.models.decode_heads.decode_head import BaseDecodeHead
 class DATrans_Head(BaseDecodeHead):
     def __init__(self, arch, num_classes, **kwargs):
         super(DATrans_Head, self).__init__(
-            in_channels=128, channels= 56, num_classes=num_classes,
-            init_cfg=None, **kwargs)
+            in_channels=128,
+            channels=56,
+            num_classes=num_classes,
+            init_cfg=None,
+            **kwargs)
         
         config = CONFIGS[arch]
         config.n_classes = num_classes
