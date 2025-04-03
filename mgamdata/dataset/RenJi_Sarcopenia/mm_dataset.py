@@ -2,6 +2,7 @@ import os
 import pdb
 import logging
 from os import path as osp
+from re import L
 from regex import F
 from typing_extensions import deprecated
 from tqdm import tqdm
@@ -303,20 +304,26 @@ class Sarcopenia_base:
         
         # Add L3 annotation to each sample
         print_log(f"L3 Annotation xlsx file available, adding them into data samples.", MMLogger.get_current_instance())
-        for data in data_list:
+        to_be_deprecated = []
+        for i, data in enumerate(data_list):
             seriesUID = Path(data['img_path']).stem
             L3_anno = self.L3_anno[self.L3_anno['序列编号'] == seriesUID]
             
             if len(L3_anno) == 0:
                 if self.ensure_L3_anno is True:
-                    raise FileNotFoundError(f"Series: {seriesUID} L3 annotation not found, and ensure_L3_anno is set to True.")
+                    print_log(f"无法找到L3标注，由于强制指定需要标注，样本被抛弃: {seriesUID}.", MMLogger.get_current_instance(), logging.WARNING)
+                    to_be_deprecated.append(i)
                 else:
-                    print_log(f"Series: {seriesUID} L3 annotation not found.", MMLogger.get_current_instance(), logging.WARNING)
+                    print_log(f"无法找到L3标注，但未抛弃样本: {seriesUID}.", MMLogger.get_current_instance(), logging.INFO)
                     continue
             else:
-                data['L3_anno'] = L3_anno.iloc[0]['L3节段起始层数', 'L3节段椎弓根层面层数', 'L3节段终止层数', ]
-                data['seg_fields'].append('L3_anno')
+                # 可能在多个任务集中会对同一个SeriesUID进行标注，仅取最后一个，也即最新的标注。
+                data['L3_anno'] = L3_anno[['L3节段起始层数', 'L3节段椎弓根层面层数', 'L3节段终止层数']].iloc[-1].values
         
+        # Remove deprecated samples
+        if len(to_be_deprecated) > 0:
+            for i in sorted(to_be_deprecated, reverse=True):
+                data_list.pop(i)
         
         return data_list
 

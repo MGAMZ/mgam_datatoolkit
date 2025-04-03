@@ -15,11 +15,11 @@ from mmengine.registry import MODELS
 from mmengine.model import BaseModel
 from mmengine.structures import BaseDataElement
 from mmengine.evaluator.metric import BaseMetric
-from mmengine.hooks import Hook
 from mmengine.runner import Runner
-from mmseg.visualization.local_visualizer import SegLocalVisualizer
 from ..mm.mmseg_Dev3D import (BaseDecodeHead_3D, Seg3DDataSample, Seg3DDataPreProcessor,
                               PixelShuffle3D, EncoderDecoder_3D, VolumeData)
+from ..mm.visualization import BaseViser, BaseVisHook
+
 
 
 class SeriesData(BaseDataElement):
@@ -201,7 +201,7 @@ class L3_Evaluator(BaseMetric):
         return {"Val/acc_L3": np.mean(results)}
 
 
-class L3_VisHook(Hook):
+class L3_VisHook(BaseVisHook):
     def __init__(self, interval:int=1, draw:bool=True):
         self.interval = interval
         self.draw = draw
@@ -278,7 +278,7 @@ class L3_VisHook(Hook):
         """
 
 
-class L3_Visualizer(SegLocalVisualizer):
+class L3_Visualizer(BaseViser):
     def __init__(
         self,
         name,
@@ -341,17 +341,14 @@ class L3_Visualizer(SegLocalVisualizer):
         fig, ax = plt.subplots(figsize=(12, 10))
         ax.imshow(image) # 显示ZY平面图像
         
-        orig_Z = None
         if 'gt_L3' in l3_info:
             orig_Z = len(l3_info['gt_L3'])
         elif 'pred_L3' in l3_info:
             orig_Z = len(l3_info['pred_L3'])
-        
-        if orig_Z is None:
+        else:
             ax.set_title('没有L3数据可用')
             fig.canvas.draw()
-            img_array = np.array(fig.canvas.renderer.buffer_rgba())[:, :, :3]
-            plt.close(fig)
+            img_array = self.export_fig_to_ndarray(fig)
             self.add_image(name, img_array, step=kwargs.get('step', 0))
             return
         
@@ -367,8 +364,8 @@ class L3_Visualizer(SegLocalVisualizer):
         gt_l3 = l3_info['gt_L3']
         if isinstance(gt_l3, torch.Tensor):
             gt_l3 = gt_l3.cpu().numpy()
-        gt_positions = np.where(gt_l3 == 1)[0]
-        gt_positions = zoom(gt_positions, zoom=scale_factor, order=0)
+        gt_l3_resize_to_img = zoom(gt_l3, zoom=scale_factor, order=0)
+        gt_positions = np.where(gt_l3_resize_to_img == 1)[0]
         if len(gt_positions) > 0:
             for scaled_pos in gt_positions:
                 # 半透明绿色
@@ -376,37 +373,39 @@ class L3_Visualizer(SegLocalVisualizer):
                 gt_overlay[scaled_pos, :, 1] = 255  # G
                 gt_overlay[scaled_pos, :, 2] = 0    # B
                 gt_overlay[scaled_pos, :, 3] = 255  # A
-        ax.imshow(gt_overlay, alpha=0.3)
+        ax.imshow(gt_overlay, alpha=0.5)
 
         # 绘制pred_L3
         pred_l3 = l3_info['pred_L3']
         if isinstance(pred_l3, torch.Tensor):
             pred_l3 = pred_l3.cpu().numpy()
-        pred_positions = np.where(pred_l3 == 1)[0]
-        pred_positions = zoom(pred_positions, zoom=scale_factor, order=0)
-        if len(pred_positions) > 0:
-            for scaled_pos in pred_positions:
-                # 半透明红色
-                pred_overlay[scaled_pos, :, 0] = 255  # R
-                pred_overlay[scaled_pos, :, 1] = 0    # G
-                pred_overlay[scaled_pos, :, 2] = 0    # B
-                pred_overlay[scaled_pos, :, 3] = 255  # 不透明
+        pred_l3_resize_to_img = zoom(pred_l3, zoom=scale_factor, order=0)
+        pred_positions = np.where(pred_l3_resize_to_img == 1)[0]
+        try:
+            if len(pred_positions) > 0:
+                for scaled_pos in pred_positions:
+                    # 半透明红色
+                    pred_overlay[scaled_pos, :, 0] = 255  # R
+                    pred_overlay[scaled_pos, :, 1] = 0    # G
+                    pred_overlay[scaled_pos, :, 2] = 0    # B
+                    pred_overlay[scaled_pos, :, 3] = 255  # 不透明
+            ax.imshow(pred_overlay, alpha=0.5)
+        except Exception as e:
+            pdb.set_trace()
+            pass
         
         # 图像元素
-        ax.imshow(pred_overlay, alpha=0.6)
         legend_elements = [Patch(facecolor='green', alpha=0.3, label='GT L3')]
         legend_elements.append(Patch(facecolor='red', label='Pred L3'))
         ax.legend(handles=legend_elements, loc='upper right')
         ax.set_xlabel('Y')
         ax.set_ylabel('Z')
-        plt.tight_layout()
+        fig.tight_layout()
         
         # 输出
         fig.canvas.draw()
-        img_array = np.array(fig.canvas.renderer.buffer_rgba())[:, :, :3]
-        plt.close(fig)
+        img_array = self.export_fig_to_ndarray(fig)
         self.add_image(name, img_array, step=kwargs.get('step', 0))
-        return img_array
 
 
 class L3Metric(BaseMetric):
@@ -485,11 +484,28 @@ class L3Metric(BaseMetric):
 
 
 class gen_L3_label(BaseTransform):
+    """
+    Required Fields:
+        - img: [Z, Y, X, C (May Exist)]
+    
+    Added Fields:
+        - gt_L3: [1, Z]
+    """
     def transform(self, results:dict):
-        if 'gt_seg_map' in results:
-            # [1, Z]
+        if 'L3_anno' in results:
+            Z, Y, X = results['img'].shape[:3]
+            mask = np.zeros((1, Z), dtype=np.uint8)
+            anno_L3_start, anno_L3_mid, anno_L3_end = results['L3_anno']
+            # 鉴影标号是倒序的 NOTE 注意下方start和end调转匹配了，不是简单的减Z
+            # anno_L3_end, anno_L3_mid, anno_L3_start = Z - anno_L3_start, Z - anno_L3_mid, Z - anno_L3_end
+            mask[0, anno_L3_start:anno_L3_end] = 1
+            results['gt_L3'] = mask
+            results['seg_fields'].append('gt_L3')
+        
+        elif 'gt_seg_map' in results:
             results['gt_L3'] = np.any(results['gt_seg_map'], axis=(1,2))[None].astype(np.uint8)
             results['seg_fields'].append('gt_L3')
+        
         return results
 
 
