@@ -2,10 +2,9 @@ import os
 import os.path as osp
 import pdb
 import warnings
-from collections.abc import Sequence
 from glob import glob
 from colorama import Style, Fore
-from typing_extensions import Literal
+from typing_extensions import Literal, deprecated
 
 import pydicom
 import numpy as np
@@ -16,7 +15,7 @@ import SimpleITK as sitk
 STANDARD_DIRECTION = [1, 0, 0, 0, 1, 0, 0, 0, 1]
 STANDARD_ORIGIN = [0, 0, 0]
 PIXEL_TYPE = lambda field: sitk.sitkInt16 if field == "image" else sitk.sitkUInt8
-INTERPOLATOR = lambda field: sitk.sitkBSpline5 if field == "image" else sitk.sitkNearestNeighbor
+INTERPOLATOR = lambda field: sitk.sitkBSpline3 if field == "image" else sitk.sitkNearestNeighbor
 
 
 def sitk_resample_to_spacing(mha: sitk.Image, 
@@ -45,6 +44,9 @@ def sitk_resample_to_spacing(mha: sitk.Image,
             spacing[i] = original_spacing[i]
         else:
             assert spacing[i] > 0, f"Spacing must be positive or -1 (Not Changed), but got {spacing}"
+    
+    if original_spacing == spacing:
+        return mha
     
     original_size = mha.GetSize()
     spacing_ratio = [original_spacing[i] / spacing[i] for i in range(3)]
@@ -129,6 +131,9 @@ def sitk_resample_to_size(
             new_size[i] = original_size[i]
         else:
             assert new_size[i] > 0, f"Size must be positive or -1 (Not Changed), but got {new_size}"
+    
+    if new_size == original_size:
+        return image
     
     original_spacing = image.GetSpacing()
     new_spacing = np.divide(original_spacing, np.divide(new_size, original_size))
@@ -345,6 +350,7 @@ def LoadDcmAsSitkImage_JianYingOrder(dcm_case_path, spacing) -> tuple[
         return resampled_mha, original_spacing, original_size, resampled_size
 
 
+@deprecated("Should determine only one DCM read function.")
 def LoadDcmAsSitkImage(
     mode: str, dcm_case_path: str, spacing: tuple[float, float, float]
 ):
@@ -397,9 +403,7 @@ def LoadMhaAnno(mha_root, patient, ori_spacing, out_spacing, resampled_size):
     return anno_with_class_channel, anno_without_class_channel
 
 
-def merge_masks(
-    mha_paths: list[str], class_index_map: dict[str, int], dtype=np.uint8
-) -> sitk.Image:
+def merge_masks(mha_paths: list[str], class_index_map: dict[str, int], dtype=np.uint8) -> sitk.Image:
     """
     将所有类的掩码合并到一个掩码中并返回SimpleITK图像。
 
@@ -416,9 +420,7 @@ def merge_masks(
             class_name = os.path.basename(seg_file_path)[:-4]
             class_index = class_index_map.get(class_name)
             if class_index is None:
-                raise ValueError(
-                    f"Class name {class_name} not found in class_index_map: {seg_file_path}"
-                )
+                raise ValueError(f"Class name {class_name} not found in class_index_map: {seg_file_path}")
 
             # 读取掩码文件
             mask = sitk.ReadImage(seg_file_path)
