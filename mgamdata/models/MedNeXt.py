@@ -1367,7 +1367,7 @@ class MM_MedNext_Decoder(BaseModule):
 
         # out projection
         if hasattr(self, "pixel_shuffle"):
-                x = self.pixel_shuffle(x)
+            x = self.pixel_shuffle(x)
         x = self.checkpoint(self.out_0, x)
         
         if self.deep_supervision:
@@ -1444,7 +1444,7 @@ class MM_MedNext_Decoder_3D(BaseDecodeHead_3D):
         norm_type="group",
         grn=False,
         freeze:bool=False,
-        pixel_shuffle:int|None=None,
+        pixel_shuffle=None,
         avgpool_XY:bool=False,
         *args,
         **kwargs,

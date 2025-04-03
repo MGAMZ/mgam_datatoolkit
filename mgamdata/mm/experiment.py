@@ -78,8 +78,7 @@ class experiment:
     def _direct_to_test(self):
         # 检查是否处于torchrun模式
         if os.getenv('LOCAL_RANK') is not None:
-            print(
-                f"Running with torchrun. Test mode requires single GPU mode.")
+            print(f"Running with torchrun. Test mode requires single GPU mode.")
 
         # 配置文件调整到test模式
         self.modify_cfg_to_skip_train()

@@ -1,14 +1,19 @@
 import pdb
 from collections.abc import Sequence
 
+import cv2
 import numpy as np
+import matplotlib.pyplot as plt
+from torch import Tensor
 
+from mmcv.transforms import BaseTransform
 from mmengine.evaluator.metric import BaseMetric
 from mmengine.structures import PixelData
 from mmpretrain.registry import MODELS
 from mmseg.structures import SegDataSample
 from mmseg.models.segmentors import EncoderDecoder
-from mmseg.models.utils import resize
+
+from .visualization import BaseViser, master_only, BaseDataElement
 
 
 
@@ -24,6 +29,7 @@ class AccuCount(BaseMetric):
         low_high_threshold: int = 10,  # 细胞数量阈值，默认为10个
         low_abs_error: int = 3,  # 如patch中细胞数量<阈值, 绝对误差不超过3个
         high_rel_error: float = 0.3,  # 如patch中细胞数量>=阈值, 相对误差<=30%
+        eps = 1e-7,
         *args,
         **kwargs,
     ):
@@ -32,6 +38,7 @@ class AccuCount(BaseMetric):
         self.low_high_threshold = low_high_threshold
         self.low_abs_error = low_abs_error
         self.high_rel_error = high_rel_error
+        self.eps = eps
 
     def _patchwise_product_met_rate(self, pred: float, label: float):
         """
@@ -41,7 +48,7 @@ class AccuCount(BaseMetric):
         if label < self.low_high_threshold:
             return np.abs(pred - label) <= self.low_abs_error
         elif label >= self.low_high_threshold:
-            return (np.abs(pred - label) / label) <= self.high_rel_error
+            return (np.abs(pred - label) / (label+self.eps)) <= self.high_rel_error
         else:
             raise RuntimeError(f"Unknown Exception, pred: {pred}, label: {label}.")
 
@@ -60,7 +67,9 @@ class AccuCount(BaseMetric):
             label = data_sample["gt_sem_seg"]["data"].sum().cpu().numpy() / self.amplify
             product_met = self._patchwise_product_met_rate(pred, label)
             self.results.append(
-                {"pred_count": pred, "gt_count": label, "product_met": product_met}
+                {"pred_count": pred, 
+                 "gt_count": label, 
+                 "product_met": product_met}
             )
 
     def compute_metrics(self, results: list[dict[str, np.ndarray]]) -> dict:
@@ -87,82 +96,147 @@ class AccuCount(BaseMetric):
         }
 
 
+class HeatMapDownSample(BaseTransform):
+    def __init__(self, ratio):
+        self.ratio = ratio
+    
+    def transform(self, results:dict):
+        if "gt_seg_map" in results:
+            img = results["gt_seg_map"]
+            img = cv2.resize(img, (img.shape[1]//self.ratio, img.shape[0]//self.ratio))
+            results["gt_seg_map"] = img * (self.ratio**2)
+        return results
+
+
 class CellCounter(EncoderDecoder):
     def __init__(self, amplify:int, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.amplify = amplify
-        # # The ratio of the number of the pixels between input and output.
-        # # The final count relies on the pixel value accumulation.
-        # # During training, some backbone's output has smaller feature map
-        # # output than label map, the MMSeg framework will resize the output to 
-        # # align with the label map, resulting in an modification on total 
-        # # counting.
-        # # In other words, the model will only have to output a relatively 
-        # # small number of pixels, and the final count will be amplified by
-        # # resize operation.
-        # # So, such amplify must be done during inference too.
-        # self.px_ratio_in_out = px_ratio_in_out
 
-    def postprocess_result(self, seg_logits, data_samples):
+    def postprocess_result(self, seg_logits, data_samples:Sequence[SegDataSample]|None=None):
         """Delete post-process sigmoid activation when C=1"""
-        batch_size, C, H, W = seg_logits.shape
+        B, C, H, W = seg_logits.shape
+        seg_logits = seg_logits / self.amplify
 
         if data_samples is None:
-            data_samples = [SegDataSample() for _ in range(batch_size)]
-            only_prediction = True
-        else:
-            only_prediction = False
+            data_samples = [SegDataSample() for _ in range(B)]
 
-        for i in range(batch_size):
-            if not only_prediction:
-                img_meta = data_samples[i].metainfo
-                # remove padding area
-                if "img_padding_size" not in img_meta:
-                    padding_size = img_meta.get("padding_size", [0] * 4)
-                else:
-                    padding_size = img_meta["img_padding_size"]
-                padding_left, padding_right, padding_top, padding_bottom = padding_size
-                # i_seg_logits shape is 1, C, H, W after remove padding
-                i_seg_logits = seg_logits[
-                    i : i + 1,
-                    :,
-                    padding_top : H - padding_bottom,
-                    padding_left : W - padding_right,
-                ]
-
-                flip = img_meta.get("flip", None)
-                if flip:
-                    flip_direction = img_meta.get("flip_direction", None)
-                    assert flip_direction in ["horizontal", "vertical"]
-                    if flip_direction == "horizontal":
-                        i_seg_logits = i_seg_logits.flip(dims=(3,))
-                    else:
-                        i_seg_logits = i_seg_logits.flip(dims=(2,))
-
-                # resize as original shape
-                i_seg_logits = resize(
-                    i_seg_logits,
-                    size=img_meta["ori_shape"],
-                    mode="bilinear",
-                    align_corners=self.align_corners,
-                    warning=False,
-                ).squeeze(0)
-            else:
-                i_seg_logits = seg_logits[i]
-
-            i_seg_logits /= self.amplify
-            data_samples[i].set_data(
-                {
-                    "seg_logits": PixelData(**{"data": i_seg_logits}),
-                    "pred_sem_seg": PixelData(**{"data": i_seg_logits}),
-                }
-            )
+        for i, i_seg_logits in enumerate(seg_logits):
+            data_samples[i].set_data({"seg_logits": PixelData(data=i_seg_logits),
+                                      "pred_sem_seg": PixelData(data=i_seg_logits)})
 
         return data_samples
-
 
 
 class CellCounterClassifier(CellCounter):
     def __init__(self, amplify, ClasterClassifier, *args, **kwargs):
         super().__init__(amplify=amplify, *args, **kwargs)
         self.claster_classifier = MODELS.build(ClasterClassifier)
+
+
+class Normalizer_cell2(BaseTransform):
+    # RGB order
+    def __init__(self, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]):
+        self.mean = np.array([[mean]])
+        self.std = np.array([[std]])
+
+    def transform(self, results:dict):
+        results['img'] = (results['img']/255 - self.mean) / self.std
+        return results
+
+
+class BGR2RGB(BaseTransform):
+    def transform(self, results:dict):
+        results['img'] = results['img'][..., ::-1]
+        return results
+
+
+class HeatMapViser(BaseViser):
+    def __init__(self, 
+                 name:str="RoseThyroidCellCount_HeatMapViser", 
+                 alpha:float=0.3, 
+                 gt_amplify:float=1.,
+                 *args, **kwargs):
+        super().__init__(name=name, *args, **kwargs)
+        self.alpha = alpha
+        self.gt_amplify = gt_amplify
+
+    def _draw_heatmap(
+        self,
+        image: np.ndarray,
+        gt_seg: BaseDataElement,
+        seg_logit: BaseDataElement,
+    ) -> np.ndarray:
+        gt_seg_array = gt_seg.data.squeeze().cpu().numpy() / self.gt_amplify
+        seg_logit_array = seg_logit.data.squeeze().cpu().numpy()
+        
+        assert (gt_seg_array.shape == seg_logit_array.shape), \
+            f"Shape mismatch: gt_seg_array {gt_seg_array.shape} != sem_seg_array {seg_logit_array.shape}"
+        if image.shape != gt_seg_array.shape:
+            resize_ratio = (image.shape[0] / gt_seg_array.shape[0], image.shape[1] / gt_seg_array.shape[1])
+            gt_seg_array = cv2.resize(gt_seg_array, image.shape[:-1], interpolation=cv2.INTER_NEAREST)
+            gt_seg_array = gt_seg_array / resize_ratio[0] / resize_ratio[1]
+        assert (image.shape[:2] == gt_seg_array.shape[:2]), \
+            f"Shape mismatch: image {image.shape[:2]} != gt_seg_array {gt_seg_array.shape[:2]}"
+
+        fig, axes = plt.subplots(1, 2, figsize=(10, 5))
+
+        # draw gt
+        axes[0].set_title("Ground Truth")
+        axes[0].imshow(image)
+        p1 = axes[0].imshow(gt_seg_array, alpha=self.alpha, cmap="hot")
+        axes[0].text(
+            0.1,
+            0.5,
+            f"Mask Info: "
+            f"\nmean:{gt_seg_array.mean():.5f}\nstd:{gt_seg_array.std():.5f}"
+            f"\nmax:{gt_seg_array.max():.5f}\nmin:{gt_seg_array.min():.5f}"
+            f"\nsum:{gt_seg_array.sum():.5f}",
+            fontsize=12,
+            color="black",
+            transform=axes[0].transAxes,
+        )
+        fig.colorbar(p1, ax=axes[0])
+        
+        # draw pred
+        axes[1].set_title("Prediction")
+        axes[1].imshow(image)
+        p2 = axes[1].imshow(seg_logit_array, alpha=self.alpha, cmap="hot")
+        axes[1].text(
+            0.1,
+            0.5,
+            f"Mask Info: "
+            f"\nmean:{seg_logit_array.mean():.5f}\nstd:{seg_logit_array.std():.5f}"
+            f"\nmax:{seg_logit_array.max():.5f}\nmin:{seg_logit_array.min():.5f}"
+            f"\nsum:{seg_logit_array.sum():.5f}",
+            fontsize=12,
+            color="black",
+            transform=axes[1].transAxes,
+        )
+        fig.colorbar(p2, ax=axes[1])
+
+        fig.tight_layout()
+        heatmap = self.export_fig_to_ndarray(fig)
+        return heatmap
+
+    @master_only
+    def add_datasample(self,
+                       name,
+                       image: np.ndarray,
+                       data_sample: BaseDataElement,
+                       draw_gt: bool = True,
+                       draw_pred: bool = True,
+                       show: bool = False,
+                       wait_time: int = 0,
+                       step: int = 0) -> None:
+        
+        try:
+            sample_file = data_sample.get('img_path')
+            image_arr = np.load(sample_file)['img']
+            drown_array = self._draw_heatmap(image_arr, data_sample.gt_sem_seg, data_sample.seg_logits)
+            self.add_image(name, drown_array, step)
+        
+        except Exception as e:
+            import traceback
+            print("在执行HeatMap可视化时发生错误: ", e)
+            traceback.print_exc()

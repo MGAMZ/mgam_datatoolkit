@@ -486,7 +486,7 @@ import pdb
 from typing_extensions import Sequence
 from mmengine.model import BaseModule
 class DATrans_Backbone(BaseModule):
-    def __init__(self, arch:str, img_size=256, num_classes=21843, zero_head=False, vis=False):
+    def __init__(self, arch:str, img_size:int|Sequence[int]=256, num_classes=21843, zero_head=False, vis=False):
         super(DATrans_Backbone, self).__init__()
         if isinstance(img_size, Sequence):
             assert img_size[0] == img_size[1]
@@ -520,7 +520,7 @@ class DATrans_Head(BaseDecodeHead):
         config.n_classes = num_classes
         self.decoder = DecoderCup(config)
         self.segmentation_head = SegmentationHead(
-            in_channels=config['decoder_channels'][-1],
+            in_channels=config['decoder_channels'][-1], # type: ignore
             out_channels=config['n_classes'],
             kernel_size=3,
         )

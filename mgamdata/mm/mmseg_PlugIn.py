@@ -6,6 +6,7 @@ from prettytable import PrettyTable
 from collections import OrderedDict
 from typing_extensions import deprecated
 
+import cv2
 import torch
 import numpy as np
 from skimage.exposure import equalize_hist
@@ -230,14 +231,17 @@ class SegViser(SegLocalVisualizer):
     ) -> np.ndarray:
         gt_seg_array = gt_seg.data.squeeze().cpu().numpy() / self.amplify
         seg_logit_array = seg_logit.data.squeeze().cpu().numpy() / self.amplify
-        assert (
-            gt_seg_array.shape == seg_logit_array.shape
-        ), f"Shape mismatch: gt_seg_array {gt_seg_array.shape} != sem_seg_array {seg_logit_array.shape}"
-        assert (
-            image.shape[:2] == gt_seg_array.shape[:2]
-        ), f"Shape mismatch: image {image.shape[:2]} != gt_seg_array {gt_seg_array.shape[:2]}"
+        
+        assert (gt_seg_array.shape == seg_logit_array.shape), \
+            f"Shape mismatch: gt_seg_array {gt_seg_array.shape} != sem_seg_array {seg_logit_array.shape}"
+        if image.shape != gt_seg_array.shape:
+            resize_ratio = (image.shape[0] / gt_seg_array.shape[0], image.shape[1] / gt_seg_array.shape[1])
+            gt_seg_array = cv2.resize(gt_seg_array, image.shape[:-1], interpolation=cv2.INTER_NEAREST)
+            gt_seg_array = gt_seg_array / resize_ratio[0] / resize_ratio[1]
+        assert (image.shape[:2] == gt_seg_array.shape[:2]), \
+            f"Shape mismatch: image {image.shape[:2]} != gt_seg_array {gt_seg_array.shape[:2]}"
 
-        fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+        fig, axes = plt.subplots(1, 2, figsize=(10, 5))
 
         # draw gt
         axes[0].set_title("Ground Truth")

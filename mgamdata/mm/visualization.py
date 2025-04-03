@@ -7,6 +7,7 @@ from typing_extensions import Sequence
 import cv2
 import numpy as np
 import torch
+from matplotlib.figure import Figure
 from matplotlib import pyplot as plt
 
 from mmengine.runner import Runner
@@ -17,7 +18,7 @@ from mmseg.visualization.local_visualizer import SegLocalVisualizer
 
 
 
-class SegVisHook(Hook):
+class BaseVisHook(Hook):
     def __init__(self, 
                  enabled:bool=True, 
                  val_vis_interval:int=50,
@@ -58,7 +59,7 @@ class SegVisHook(Hook):
 
 
 class BaseViser(Visualizer):
-    def export_fig_to_ndarray(self, fig, close:bool=True):
+    def export_fig_to_ndarray(self, fig:Figure, close:bool=True):
         try:
             fig.canvas.draw()
             
