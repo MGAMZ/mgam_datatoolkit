@@ -2,10 +2,7 @@ import os
 import pdb
 import logging
 from os import path as osp
-from re import L
-from regex import F
 from typing_extensions import deprecated
-from tqdm import tqdm
 from pathlib import Path
 
 import cv2
@@ -39,7 +36,7 @@ class CT_2D_Sarcopenia(BaseSegDataset):
     )
     
     def __init__(self, roots:list[str], split, debug, suffix, *args, **kwargs):
-        self.roots = roots
+        self.roots = roots if isinstance(roots, list) else [roots]
         self.split = split
         self.debug = debug
         self.suffix = suffix
