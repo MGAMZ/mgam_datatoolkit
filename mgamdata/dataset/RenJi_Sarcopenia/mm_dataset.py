@@ -39,7 +39,7 @@ class CT_2D_Sarcopenia(BaseSegDataset):
     )
     
     def __init__(self, roots:list[str], split, debug, suffix, *args, **kwargs):
-        self.roots = roots
+        self.roots = roots if isinstance(roots, list) else [roots]
         self.split = split
         self.debug = debug
         self.suffix = suffix

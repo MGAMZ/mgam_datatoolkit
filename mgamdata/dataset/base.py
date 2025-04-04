@@ -24,7 +24,7 @@ class ParseID(BaseTransform):
 
 
 class mgam_BaseSegDataset(BaseSegDataset):
-    SPLIT_RATIO = [0.7, 0.15, 0.15]
+    SPLIT_RATIO = [0.8, 0.05, 0.15]
 
     def __init__(
         self,
