@@ -236,57 +236,6 @@ class CT_VisualizationHook(SegVisualizationHook):
                 step=self._test_index)
 
 
-@deprecated("应当从sitk toolkit中继承或调用，确保一致性")
-def MhaResampleToTarget(source_image:sitk.Image,
-                        resample_type:str,
-                        target_image:sitk.Image|None = None,
-                        target_size = None,
-                        target_spacing = None):
-    
-    assert resample_type in ['image', 'mask']
-    valid_params_count = sum([target_image is not None,
-                              target_size is not None,
-                              target_spacing is not None])
-    # 检查是否只有一个有效参数
-    if valid_params_count != 1:
-        raise ValueError("Exactly one of 'target_image', 'target_size', or 'target_spacing' must be provided.")
-    
-    # 当target_image不为空时，直接对齐TargetImage
-    if target_image is not None:
-        target_size = target_image.GetSize()
-        target_spacing = target_image.GetSpacing()
-    
-    # 当target_size或target_spacing不为空时，
-    # 根据其中一者计算另一者的参数。
-    else:
-        if target_size is not None:
-            original_size = source_image.GetSize()
-            original_spacing = source_image.GetSpacing()
-            target_spacing = [original_spacing[i] * original_size[i] / target_size[i] 
-                              for i in range(3)]
-            
-        elif target_spacing is not None:
-            original_size = source_image.GetSize()
-            original_spacing = source_image.GetSpacing()
-            target_size = [int(original_size[i] * original_spacing[i] / target_spacing[i]) 
-                           for i in range(3)]
-    
-    resampled_image = sitk.Resample(
-        image1=source_image,
-        size=target_size,
-        interpolator=sitk.sitkLinear if resample_type == 'image' else sitk.sitkNearestNeighbor,
-        outputSpacing=target_spacing,
-        outputPixelType=sitk.sitkInt16 if resample_type == 'image' else sitk.sitkUInt8,
-        outputOrigin=source_image.GetOrigin(),
-        outputDirection=source_image.GetDirection(),
-        transform=sitk.Transform(),
-    )
-
-    return resampled_image
-
-
-# 2024.12.09: Update Sarcopenia Dataset with other latest dataset implementations
-
 class Sarcopenia_base:
     METAINFO = dict(classes=list(CLASS_MAP.values()))
 

@@ -5,7 +5,7 @@ import json
 from abc import abstractmethod
 from collections.abc import Generator, Iterable
 from tqdm import tqdm
-from typing_extensions import Literal
+from typing_extensions import Literal, deprecated
 
 import orjson
 import numpy as np
@@ -93,6 +93,7 @@ class mgam_BaseSegDataset(BaseSegDataset):
             return data_list
 
 
+@deprecated("Standard_3D_Mha is deprecated, use mgam_Standard_3D_Mha instead")
 class mgam_Standard_3D_Mha(mgam_BaseSegDataset):
     def __init__(self, data_root_mha: str, *args, **kwargs) -> None:
         # HACK: Most implementations use the more elastic dataset,
@@ -132,10 +133,15 @@ class mgam_Standard_3D_Mha(mgam_BaseSegDataset):
                 yield (image_mha_path, label_mha_path)
 
 
-class mgam_SemiSup_3D_Mha(mgam_Standard_3D_Mha):
-    def __init__(self, mode:Literal["semi", "sup"]="semi", *args, **kwargs):
+class mgam_SemiSup_3D_Mha(mgam_BaseSegDataset):
+    def __init__(self,
+                 data_root_mha: str,
+                 mode:Literal["semi", "sup"]="semi",
+                 *args, **kwargs):
         self.mode = mode
+        self.data_root_mha = data_root_mha
         super().__init__(*args, **kwargs)
+        self.data_root: str
     
     def _split(self):
         split_at = "label" if self.mode == "sup" else "image"
@@ -197,7 +203,7 @@ class mgam_SemiSup_Precropped_Npz(mgam_SemiSup_3D_Mha):
     def sample_iterator(self) -> Generator[tuple[str, str], None, None]:
         for series in tqdm(
             self._split(),
-            desc=f"Loading {self.__class__.__name__} | {self.split}",
+            desc=f"Indexing {self.split} samples of all series of {self.__class__.__name__}",
             leave=False,
             dynamic_ncols=True,
         ):
@@ -286,16 +292,11 @@ class mgam_concat_dataset(ConcatDataset):
 
 
 
-
 class unsup_base:
     METAINFO = dict(classes=["background"])
 
 
 class unsup_base_Precrop_Npz(unsup_base, mgam_SemiSup_Precropped_Npz):
-    pass
-
-
-class unsup_base_Mha(unsup_base, mgam_Standard_3D_Mha):
     pass
 
 

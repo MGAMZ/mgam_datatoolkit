@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mgamdata"
-version = "1.9.13.250403"
+version = "1.9.14.250404"
 requires-python = ">= 3.12"
 description = "mgam's data toolkit for a better world!"
 readme = "README.md"
@@ -54,6 +54,7 @@ mmrun = "mgamdata.mm.run:main"
 mmconc = "mgamdata.mm.summarize:main"
 precrop = "mgamdata.process.PreCrop_3D:SemiSupervisedMhaCropper3D.main_entry"
 itk_resample = "mgamdata.process.itk_resample:main"
+split3d = "mgamdata.process.Split3D:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

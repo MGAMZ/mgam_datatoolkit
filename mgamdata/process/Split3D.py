@@ -66,12 +66,10 @@ def sample_volume(args):
         image = load_mha(image_path)
         label = load_mha(label_path)
         if image.shape != label.shape:
-            return os.path.basename(image_path), 0, (
-                f"图像与标签形状不匹配: image={image.shape}, label={label.shape}"
-            )
+            raise RuntimeError(f"图像与标签形状不匹配: image={image.shape}, label={label.shape}")
         if image.shape[0] < window_size:
             tqdm.write(f"{image_path} 的Z轴长度小于窗口大小，跳过处理。")
-            return {
+            return { 
                 os.path.basename(image_path.replace('.mha', '')): {
                     "num_patches": 0,
                     "anno_available": False,

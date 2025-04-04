@@ -173,6 +173,7 @@ def main():
         args.mp, 
         args.workers,
         use_size=args.size is not None)
+    print(f"Resampling completed. The resampled dataset is saved in {args.dest_root}.")
 
 
 
