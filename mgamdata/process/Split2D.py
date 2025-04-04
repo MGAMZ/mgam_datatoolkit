@@ -96,7 +96,8 @@ def main():
             results = list(tqdm(
                 pool.imap(process_func, series_uids),
                 total=len(series_uids),
-                desc="Processing Series"
+                desc="Split2D",
+                dynamic_ncols=True,
             ))
     else:
         results = []
