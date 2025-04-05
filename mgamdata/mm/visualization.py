@@ -36,7 +36,7 @@ class BaseVisHook(Hook):
                        outputs: Sequence[BaseDataElement]) -> None:
         total_curr_iter = runner.iter + batch_idx
         if total_curr_iter % self.val_vis_interval == 0 and self.enabled:
-            window_name = f'val_{os.path.basename(outputs[0].img_path)}_{total_curr_iter}'
+            window_name = f'val_{os.path.basename(outputs[0].img_path)}_{runner.iter}'
             self._visualizer.add_datasample(
                 window_name,
                 data_batch['inputs'][0], # dict with keys 'inputs' and 'data_samples'

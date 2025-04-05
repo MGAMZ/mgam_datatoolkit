@@ -1,12 +1,12 @@
 import os
 import pdb
 import argparse
+import json
 import multiprocessing as mp
 from tqdm import tqdm
 from functools import partial
 
 import cv2
-import tifffile
 import numpy as np
 import SimpleITK as sitk
 
@@ -29,7 +29,11 @@ def get_series_uids(input_folder):
     return series_uids
 
 
-def process_single_series(series_uid, input_folder, out_folder, resize:list[int]|None=None, only_foreground:bool=False):
+def process_single_series(series_uid, 
+                          input_folder, 
+                          out_folder, 
+                          resize:list[int]|None=None, 
+                          foreground_ratio:float|None=None):
     """处理单个Series的3D MHA文件，将其分割为2D切片并保存"""
     # 校验
     image_path = os.path.join(input_folder, "image", f"{series_uid}.mha")
@@ -53,8 +57,10 @@ def process_single_series(series_uid, input_folder, out_folder, resize:list[int]
     # 切分并保存2D切片
     for idx, (image_slice, label_slice) in enumerate(split_image_label_pairs_to_2d(image, label)):
         # 如果只处理前景切片，且当前切片没有前景，则跳过
-        if only_foreground and not np.any(label_slice):
-            continue
+        if foreground_ratio is not None:
+            r = ((label_slice > 0).astype(int).sum() / label_slice.size).astype(float)
+            if r < foreground_ratio:
+                continue
         # 可选缩放
         if resize:
             image_slice = cv2.resize(image_slice, resize[::-1], interpolation=cv2.INTER_CUBIC)
@@ -70,13 +76,14 @@ def main():
     parser.add_argument("input_folder", type=str, help="Input folder containing 'image' and 'label' subfolders with MHA files")
     parser.add_argument("out_folder", type=str, help="Output folder to save 2D slices")
     parser.add_argument("--mp", action="store_true", help="Use multiprocessing for faster processing")
-    parser.add_argument("--workers", type=int, default=4, help="Number of worker processes to use (default: all available cores)")
+    parser.add_argument("--workers", type=int, default=4, help="Number of worker processes to use")
     parser.add_argument("--size", type=int, nargs=2, default=None, help="Resize output images to this size (Y, X)")
-    parser.add_argument("--only-foreground", action="store_true", help="Only process foreground slices")
+    parser.add_argument("--foreground-ratio", type=float, default=None, help="Only process foreground slices")
     args = parser.parse_args()
     
     if not os.path.exists(args.input_folder):
         raise FileNotFoundError(f"Input folder does not exist: {args.input_folder}")
+    json.dump(vars(args), open(os.path.join(args.out_folder, "SplitLog.json"), "w"), indent=4)
     
     # 获取所有SeriesUID
     series_uids = get_series_uids(args.input_folder)
@@ -86,11 +93,11 @@ def main():
         return
     
     # 处理所有Series
-    process_func = partial(process_single_series, 
-                           input_folder=args.input_folder, 
+    process_func = partial(process_single_series,
+                           input_folder=args.input_folder,
                            out_folder=args.out_folder,
                            resize=args.size,
-                           only_foreground=args.only_foreground)
+                           foreground_ratio=args.foreground_ratio)
     if args.mp:
         with mp.Pool(args.workers) as pool:
             results = list(tqdm(
