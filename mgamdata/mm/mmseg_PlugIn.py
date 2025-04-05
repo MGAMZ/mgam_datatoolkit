@@ -59,6 +59,9 @@ class HistogramEqualization(BaseTransform):
 
 
 class IoUMetric_PerClass(IoUMetric):
+    def __init__(self, iou_metrics: list[str]=['mIoU', 'mDice', 'mFscore'], *args, **kwargs):
+        super().__init__(iou_metrics=iou_metrics, *args, **kwargs)
+    
     def compute_metrics(self, results: list) -> dict[str, float]:
         """Compute the metrics from processed results.
 

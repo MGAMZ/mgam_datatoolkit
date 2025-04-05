@@ -2,6 +2,7 @@ import os
 import re
 import pdb
 import json
+import logging
 from abc import abstractmethod
 from collections.abc import Generator, Iterable
 from tqdm import tqdm
@@ -31,8 +32,7 @@ class mgam_BaseSegDataset(BaseSegDataset):
         split: str,
         debug: bool = False,
         dataset_name: str | None = None,
-        *args,
-        **kwargs,
+        *args, **kwargs,
     ) -> None:
         self.split = split
         self.debug = debug
@@ -42,6 +42,8 @@ class mgam_BaseSegDataset(BaseSegDataset):
                              else self.__class__.__name__)
         super().__init__(*args, **kwargs)
         self.data_root: str
+        assert self.img_suffix == self.seg_map_suffix, \
+            f"img_suffix {self.img_suffix} and seg_map_suffix {self.seg_map_suffix} should be the same"
 
     def _update_palette(self) -> list[list[int]]:
         """确保background为RGB全零"""
@@ -93,51 +95,13 @@ class mgam_BaseSegDataset(BaseSegDataset):
             return data_list
 
 
-@deprecated("Standard_3D_Mha is deprecated, use mgam_Standard_3D_Mha instead")
-class mgam_Standard_3D_Mha(mgam_BaseSegDataset):
-    def __init__(self, data_root_mha: str, *args, **kwargs) -> None:
-        # HACK: Most implementations use the more elastic dataset,
-        # which is `mgam_SemiSup_3D_Mha`, and it contains a `mode` parameter.
-        kwargs.pop("mode", None)
-        
-        self.data_root_mha = data_root_mha
-        super().__init__(*args, **kwargs)
-        self.data_root: str
-
-    def _split(self):
-        all_series = [
-            file.replace(".mha", "")
-            for file in os.listdir(os.path.join(self.data_root_mha, "label"))
-            if file.endswith(".mha")
-        ]
-        all_series = sorted(all_series, key=lambda x: abs(int(re.search(r"\d+", x).group())))
-        np.random.shuffle(all_series)
-        total = len(all_series)
-        train_end = int(total * self.SPLIT_RATIO[0])
-        val_end = train_end + int(total * self.SPLIT_RATIO[1])
-
-        if self.split == "train":
-            return all_series[:train_end]
-        elif self.split == "val":
-            return all_series[train_end:val_end]
-        elif self.split == "test":
-            return all_series[val_end:]
-        else:
-            raise RuntimeError(f"Unsupported split: {self.split}")
-
-    def sample_iterator(self) -> Generator[tuple[str, str], None, None]:
-        for series in self._split():
-            image_mha_path = os.path.join(self.data_root, "image", series + ".mha")
-            label_mha_path = os.path.join(self.data_root, "label", series + ".mha")
-            if os.path.exists(image_mha_path) and os.path.exists(label_mha_path):
-                yield (image_mha_path, label_mha_path)
-
-
-class mgam_SemiSup_3D_Mha(mgam_BaseSegDataset):
-    def __init__(self,
-                 data_root_mha: str,
-                 mode:Literal["semi", "sup"]="semi",
+class mgam_SeriesVolume(mgam_BaseSegDataset):
+    def __init__(self, 
+                 data_root_mha:str, 
+                 mode:Literal["semi", "sup"]="sup",
                  *args, **kwargs):
+        # `Semi` mode will still include those samples without labels
+        # `Sup` mode will exclude those samples without labels
         self.mode = mode
         self.data_root_mha = data_root_mha
         super().__init__(*args, **kwargs)
@@ -151,10 +115,8 @@ class mgam_SemiSup_3D_Mha(mgam_BaseSegDataset):
             if file.endswith(".mha")
         ]
         all_series = sorted(all_series, key=lambda x: abs(int(re.search(r"\d+", x).group())))
-        np.random.shuffle(all_series)
-        total = len(all_series)
-        train_end = int(total * self.SPLIT_RATIO[0])
-        val_end = train_end + int(total * self.SPLIT_RATIO[1])
+        train_end = int(len(all_series) * self.SPLIT_RATIO[0])
+        val_end = train_end + int(len(all_series) * self.SPLIT_RATIO[1])
 
         if self.split == "train":
             return all_series[:train_end]
@@ -164,7 +126,20 @@ class mgam_SemiSup_3D_Mha(mgam_BaseSegDataset):
             return all_series[val_end:]
         else:
             raise RuntimeError(f"Unsupported split: {self.split}")
-    
+
+
+class mgam_2D_MhaVolumeSlices(mgam_SeriesVolume):
+    def sample_iterator(self) -> Generator[tuple[str, str], None, None]:
+        for series in self._split():
+            for sample in os.listdir(os.path.join(self.data_root, 
+                                                  'label' if self.mode=='sup' else 'image',
+                                                  series)):
+                if sample.endswith(self.img_suffix):
+                    yield (os.path.join(self.data_root, 'image', series, sample),
+                           os.path.join(self.data_root, 'label', series, sample))
+
+
+class mgam_SemiSup_3D_Mha(mgam_SeriesVolume):
     def sample_iterator(self) -> Generator[tuple[str, str], None, None]:
         for series in self._split():
             image_mha_path = os.path.join(self.data_root, "image", series + ".mha")
@@ -184,32 +159,19 @@ class mgam_Standard_Npz_Structure:
                     )
 
 
-class mgam_Standard_Precropped_Npz(mgam_Standard_Npz_Structure, mgam_Standard_3D_Mha):
-    pass
-
-
 class mgam_SemiSup_Precropped_Npz(mgam_SemiSup_3D_Mha):
-    def __init__(self, mode: Literal["sup", "semi", "unsup"], *args, **kwargs) -> None:
-        self.mode = mode
+    def __init__(self, *args, **kwargs) -> None:
         self.precrop_meta = json.load(open(os.path.join(kwargs["data_root"], "crop_meta.json"), "r"))
         super().__init__(*args, **kwargs)
 
-    def _maybe_skip(self, series_id: str):
-        if self.mode == "sup":
-            return series_id not in self.precrop_meta["anno_available"]
-        else:
-            return False
-
     def sample_iterator(self) -> Generator[tuple[str, str], None, None]:
-        for series in tqdm(
-            self._split(),
-            desc=f"Indexing {self.split} samples of all series of {self.__class__.__name__}",
-            leave=False,
-            dynamic_ncols=True,
-        ):
-            if self._maybe_skip(series):
+        for series in tqdm(self._split(),
+                           desc=f"Indexing {self.split} samples of all series of {self.__class__.__name__}",
+                           leave=False,
+                           dynamic_ncols=True):
+            # Check usability.
+            if self.mode == "sup" and series not in self.precrop_meta["anno_available"]:
                 continue
-
             series_folder: str = os.path.join(self.data_root, series)
             try:
                 series_meta = orjson.loads(open(os.path.join(series_folder, "SeriesMeta.json"), "r").read())
@@ -221,10 +183,8 @@ class mgam_SemiSup_Precropped_Npz(mgam_SemiSup_3D_Mha):
             for sample in [os.path.join(series_folder, file) 
                            for file in patch_npz_files]:
                 if sample.endswith(".npz"):
-                    yield (
-                        os.path.join(series_folder, sample),
-                        os.path.join(series_folder, sample),
-                    )
+                    yield (os.path.join(series_folder, sample),
+                           os.path.join(series_folder, sample))
 
 
 class mgam_Standard_Patched_Npz(mgam_Standard_Npz_Structure, mgam_BaseSegDataset):
