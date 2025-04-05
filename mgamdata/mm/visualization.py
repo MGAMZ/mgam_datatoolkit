@@ -41,7 +41,7 @@ class BaseVisHook(Hook):
                 window_name,
                 data_batch['inputs'][0], # dict with keys 'inputs' and 'data_samples'
                 data_sample=outputs[0],
-                step=total_curr_iter)
+                step=batch_idx)
 
     def after_test_iter(self,
                         runner: Runner,
@@ -55,7 +55,7 @@ class BaseVisHook(Hook):
                 window_name,
                 data_batch['inputs'][i],
                 data_sample=output,
-                step=self._test_index)
+                step=batch_idx)
 
 
 class BaseViser(Visualizer):
