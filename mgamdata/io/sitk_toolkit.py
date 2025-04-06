@@ -176,6 +176,31 @@ def nii_to_sitk(
     return sitk_img
 
 
+def LoadDcmAsSitkImage(dcm_paths, read_workers=8):
+    dcms = []
+
+    for dcm_path in dcm_paths:
+        ds = pydicom.dcmread(dcm_path, force=True)
+        if (0x20, 0x32) not in ds:  # (0020, 0032) Image Position (Patient)
+            warnings.warn(
+                Fore.YELLOW
+                + f"ImagePosition Missing, Deprecating: {dcm_paths}"
+                + Style.RESET_ALL
+            )
+            return False
+        dcms.append((dcm_path, ds[0x20, 0x32].value[-1]))
+    else:
+        dcms = sorted(dcms, key=lambda x: x[1], reverse=False)
+
+    sorted_dcm_paths = [dcm[0] for dcm in dcms]
+    reader = sitk.ImageSeriesReader()
+    reader.SetFileNames(sorted_dcm_paths)
+    reader.SetNumberOfWorkUnits(read_workers)
+    sitk_image: sitk.Image = reader.Execute()
+
+    return sitk_image
+
+
 def LoadDcmAsSitkImage_EngineeringOrder(
     dcm_case_path, spacing, sort_by_distance=True
 ) -> tuple[
@@ -348,21 +373,6 @@ def LoadDcmAsSitkImage_JianYingOrder(dcm_case_path, spacing) -> tuple[
         )
 
         return resampled_mha, original_spacing, original_size, resampled_size
-
-
-@deprecated("Should determine only one DCM read function.")
-def LoadDcmAsSitkImage(
-    mode: str, dcm_case_path: str, spacing: tuple[float, float, float]
-):
-    assert mode.lower() in [
-        "engineering",
-        "jianying",
-    ], "mode must be one of ['engineering', 'jianying']"
-
-    if mode.lower() == "engineering":
-        return LoadDcmAsSitkImage_EngineeringOrder(dcm_case_path, spacing)
-    else:
-        return LoadDcmAsSitkImage_JianYingOrder(dcm_case_path, spacing)
 
 
 def LoadMhaAnno(mha_root, patient, ori_spacing, out_spacing, resampled_size):

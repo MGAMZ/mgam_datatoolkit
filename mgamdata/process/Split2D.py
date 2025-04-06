@@ -83,6 +83,7 @@ def main():
     
     if not os.path.exists(args.input_folder):
         raise FileNotFoundError(f"Input folder does not exist: {args.input_folder}")
+    os.makedirs(args.out_folder, exist_ok=True)
     json.dump(vars(args), open(os.path.join(args.out_folder, "SplitLog.json"), "w"), indent=4)
     
     # 获取所有SeriesUID
