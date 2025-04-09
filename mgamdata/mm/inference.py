@@ -1,19 +1,15 @@
 import os
 import pdb
-import scipy as sp
 from tqdm import tqdm
 from collections import defaultdict
 from abc import abstractmethod
 
 import torch
 import numpy as np
-import matplotlib.pyplot as plt
 import SimpleITK as sitk
 from torch import Tensor
-from torch.nn import functional as F
 
 from mmcv.transforms import Compose
-from mmseg.models.segmentors import BaseSegmentor
 from mmseg.apis.inference import init_model, _preprare_data
 
 from ..io.sitk_toolkit import LoadDcmAsSitkImage, sitk_resample_to_size, sitk_resample_to_spacing
@@ -25,15 +21,16 @@ INFERENCER_WORK_DIR = "/fileser51/zhangyiqin.sx/mmseg/work_dirs_inferencer/"
 class Inferencer:
     def __init__(self, cfg_path, ckpt_path, allow_tqdm:bool=True):
         self.allow_tqdm = allow_tqdm
-        self.model:BaseSegmentor = init_model(cfg_path, ckpt_path)
+        self.model = init_model(cfg_path, ckpt_path)
         pipeline_without_loading = self.model.cfg.test_pipeline[1:] # type: ignore
         self.pipeline = Compose(pipeline_without_loading)
         self.model.eval()
+        self.model.cuda()
         self.model.requires_grad_(False)
 
     @abstractmethod
     @torch.inference_mode()
-    def Inference_FromNDArray(self, image_array) -> Tensor:
+    def Inference_FromNDArray(self, image_array:np.ndarray) -> Tensor:
         ...
     
     def _preprocess(self, imgs:np.ndarray|list[np.ndarray]) -> tuple[Tensor, dict]:
@@ -55,6 +52,8 @@ class Inferencer:
 
         return data, is_batch
 
+
+class SegInferencer(Inferencer):
     def Inference_FromITK(self, itk_image:sitk.Image) -> tuple[sitk.Image, sitk.Image]:
         image_array = sitk.GetArrayFromImage(itk_image) # [Z, Y, X]
         pred = self.Inference_FromNDArray(image_array) # [Class, Z, Y, X]
@@ -92,11 +91,12 @@ class Inferencer:
             yield itk_image, itk_pred, mha_path
 
 
-class Inferencer_2D(Inferencer):
+class Inferencer_2D(SegInferencer):
     @torch.inference_mode()
-    def Inference_FromNDArray(self, image_array) -> Tensor:
+    def Inference_FromNDArray(self, image_array:np.ndarray) -> Tensor:
+        assert image_array.ndim == 3, "Input image must be 3D, got: {}.".format(image_array.shape)
         image_array = [i for i in image_array]
-        data, is_batch = _preprare_data(image_array, self.model)
+        data, is_batch = self._preprocess(image_array)
 
         # forward the model
         results = []
@@ -117,17 +117,13 @@ class Inferencer_2D(Inferencer):
         return pred
 
 
-class Inference_exported(Inferencer_2D):
-    @abstractmethod
-    def __init__(self, wl, ww):
-        ...
-
-    def _set_window(self, inputs):
-        inputs = np.clip(inputs, self.wl-self.ww//2, self.wl+self.ww//2)
-        inputs = inputs - inputs.min()
-        inputs = inputs / inputs.max()
-        return inputs.astype(np.float32)
-
+class Inference_ONNX(Inferencer_2D):
+    def __init__(self, onnx_path):
+        import onnxruntime as ort # type: ignore
+        self.model = ort.InferenceSession(
+            onnx_path,
+            providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
+    
     @torch.inference_mode()
     def Inference_FromNDArray(self, image_array):
         results = []
@@ -141,83 +137,19 @@ class Inference_exported(Inferencer_2D):
                 disable=not self.allow_tqdm):
             result = self.inference(array)
             results.append(result)
-
         pred = torch.cat(results, axis=0).transpose(0,1)
         return pred # [Class, D, H, W]
 
-    def slide_inference(self, inputs: Tensor) -> Tensor:
-        h_stride, w_stride = self.test_cfg.stride
-        h_crop, w_crop = self.test_cfg.crop_size
-        batch_size, _, h_img, w_img = inputs.size()
-        out_channels = self.out_channels
-        h_grids = max(h_img - h_crop + h_stride - 1, 0) // h_stride + 1
-        w_grids = max(w_img - w_crop + w_stride - 1, 0) // w_stride + 1
-        preds = inputs.new_zeros((batch_size, out_channels, h_img, w_img))
-        count_mat = inputs.new_zeros((batch_size, 1, h_img, w_img))
-        for h_idx in range(h_grids):
-            for w_idx in range(w_grids):
-                y1 = h_idx * h_stride
-                x1 = w_idx * w_stride
-                y2 = min(y1 + h_crop, h_img)
-                x2 = min(x1 + w_crop, w_img)
-                y1 = max(y2 - h_crop, 0)
-                x1 = max(x2 - w_crop, 0)
-                crop_img = inputs[:, :, y1:y2, x1:x2]
-                # the output of encode_decode is seg logits tensor map
-                # with shape [N, C, H, W]
-                crop_seg_logit = self.forward(crop_img)
-                preds += F.pad(crop_seg_logit,
-                               (int(x1), int(preds.shape[3] - x2), int(y1),
-                                int(preds.shape[2] - y2)))
-
-                count_mat[:, :, y1:y2, x1:x2] += 1
-        assert (count_mat == 0).sum() == 0
-        seg_logits = preds / count_mat
-
-        return seg_logits
-
-    def whole_inference(self, inputs: Tensor) -> Tensor:
-        seg_logits = self.forward(inputs)
-        return seg_logits
-
-    def inference(self, inputs: np.ndarray) -> Tensor:
-        if self.inference_mode == 'slide':
-            seg_logit = self.slide_inference(inputs)
-        elif self.inference_mode == 'whole':
-            seg_logit = self.whole_inference(inputs)
-        else:
-            raise ValueError(
-                f'Invalid inference mode {self.inference_mode}.'
-                'Available options are "slide" and "whole".')
-
-        return seg_logit
-
-    @abstractmethod
-    def forward(self, inputs: np.ndarray) -> Tensor:
-        ...
-
-
-class Inference_ONNX(Inference_exported):
-    def __init__(self, onnx_path, inference_mode:str='whole', wl=40, ww=400):
-        import onnxruntime as ort # type: ignore
-        self.model = ort.InferenceSession(
-            onnx_path,
-            providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
-        self.inference_mode = inference_mode
-        self.wl = wl
-        self.ww = ww
-    
     def forward(self, inputs: np.ndarray) -> Tensor:
         inputs = self._set_window(inputs)[None, None]
         assert inputs.ndim == 4
-        
         result = self.model.run(['OUTPUT__0'], {'INPUT__0': inputs}) # [1,1,5,H,W]
         result = np.array(result).squeeze()[None]
         result = torch.from_numpy(result)
         return result
 
 
-class Inferencer_3D(Inferencer):
+class Inferencer_3D(SegInferencer):
     def __init__(self, spacings=[None,None,None], sizes=[None,None,None], *args, **kwargs):
         super().__init__(*args, **kwargs)
         assert len(spacings) == 3, "Spacings must be a list of 3 elements, got: {}.".format(spacings)

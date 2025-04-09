@@ -19,6 +19,7 @@ from mmengine.runner import Runner
 from ..mm.mmseg_Dev3D import (BaseDecodeHead_3D, Seg3DDataSample, Seg3DDataPreProcessor,
                               PixelShuffle3D, EncoderDecoder_3D, VolumeData)
 from ..mm.visualization import BaseViser, BaseVisHook
+from ..mm.inference import Inferencer
 
 
 
@@ -883,7 +884,6 @@ class SarcopeniaL3Locating(EncoderDecoder_3D):
         1. 仅在 Z 轴维度进行分块，其余维度 (X, Y) 均使用完整切片；
         2. 假定模型的输出形状与分块后的输入相匹配，且最终只需在 Z 维度进行拼接。
         """
-
         accu_device: str = self.test_cfg.slide_accumulate_device
         z_stride = self.test_cfg.stride[0]  # 仅使用 Z 方向的 stride # type: ignore
         z_crop = self.test_cfg.crop_size[0]  # 仅使用 Z 方向的 crop # type: ignore
@@ -952,3 +952,33 @@ class SarcopeniaL3Locating(EncoderDecoder_3D):
             })
 
         return data_samples
+
+
+class SarcopeniaL3Inferencer(Inferencer):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.model: SarcopeniaL3Locating
+        self.size:list = self.model.cfg.size
+    
+    def _resize(self, Volume_arr:np.ndarray):
+        return np.stack([cv2.resize(p, self.size[-2:], interpolation=cv2.INTER_NEAREST_EXACT) 
+                         for p in Volume_arr])
+
+    @torch.inference_mode()
+    def Inference_FromTensor(self, image_tensor:torch.Tensor):
+        if isinstance(image_tensor, Sequence):
+            image_tensor = torch.stack(image_tensor)
+        L3_logits = self.model.slide_inference(image_tensor.cuda(), batch_img_metas=[{"img_shape": image_tensor.shape[2:]}])
+        L3_pred = torch.sigmoid(L3_logits) > self.model.decode_head.threshold
+        return L3_pred # [B, Z]
+
+    def Inference_FromNDArray(self, image_array) -> Tensor:
+        # image_array: [Z, Y, X]
+        self.model: SarcopeniaL3Locating
+        assert image_array.ndim == 3, f"输入图像必须是3维的，但得到的是 {image_array.shape}。"
+        image_array = self._resize(image_array)
+        data, is_batch = self._preprocess(image_array)
+        L3_pred = self.Inference_FromTensor(data['inputs']).cuda()
+        return L3_pred[0] # [Z]
+    
+
