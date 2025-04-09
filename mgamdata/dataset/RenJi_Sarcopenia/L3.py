@@ -7,8 +7,8 @@ import pandas as pd
 import SimpleITK as sitk
 
 
-def find_L3_slices(seriesUIDs: list[str]|str, 
-                   L3_df_path:str|pd.DataFrame, 
+def find_L3_slices(seriesUIDs: list[str]|str,
+                   L3_df_path:str|pd.DataFrame,
                    attrs:list[str]=['L3节段起始层数','L3节段终止层数']):
     if isinstance(seriesUIDs, str):
         seriesUIDs = [seriesUIDs]

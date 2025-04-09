@@ -1,7 +1,10 @@
 import os
+from typing_extensions import deprecated
+
 
 
 # NOTE 输入的所有gt文件夹是有优先级顺序的，只会返回最先找到的gt路径
+@deprecated("Search Tool is out of date.")
 def search_mha_file(source_folders:list[str]|str, seriesUID:str, target_type:str|None):
     if isinstance(source_folders, str):
         source_folders = [source_folders]
@@ -15,7 +18,7 @@ def search_mha_file(source_folders:list[str]|str, seriesUID:str, target_type:str
     else:
         print(f"Can't find {target_type} file, UID {seriesUID}, type: {target_type}.")
 
-
+@deprecated("Search Tool is out of date.")
 def find_sample_pair(image_folder:str, label_folder:str):
     image_files = os.listdir(image_folder)
     label_files = os.listdir(label_folder)

@@ -553,21 +553,3 @@ TEST_SERIES_UIDS = [
     '1.3.12.2.1107.5.1.7.154484.30000024021609090077600000392',
     '1.3.12.2.1107.5.1.7.154484.30000024081309123198300000390'
 ]
-
-
-# 数据根路径
-data_root = os.environ['sarcopenia_data_root']
-
-
-# 不同TASK中可能出现重复的UID，有些是经过了审核的，应当按照以下顺序考虑。
-GT_FOLDERS_PRIORITY_ORIGINAL_ENGINEERSORT = [
-    join(data_root, 'Check_8081', 'mha_original_EngineerSort'),
-    join(data_root, 'Check_8016', 'mha_original_EngineerSort'),
-    join(data_root, 'Check_7644', 'mha_original_EngineerSort'),
-    join(data_root, 'Check_7461', 'mha_original_EngineerSort'),
-    join(data_root, 'Check_6973', 'mha_original_EngineerSort'),
-    "/home/zhangyq.sx/mgam_datasets/Sarcopenia_Data/Inference_250213",
-]
-
-
-L3_XLSX_PATH = join(data_root, 'ALL_check_series_anno.xlsx')
