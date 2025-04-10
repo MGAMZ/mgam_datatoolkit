@@ -85,6 +85,7 @@ class mgam_BaseSegDataset(BaseSegDataset):
                 f"{self.dataset_name} dataset {self.split} split loaded {len(data_list)} samples, "
                 f"DEBUG MODE ENABLED, ONLY 16 SAMPLES ARE USED",
                 MMLogger.get_current_instance(),
+                logging.WARNING
             )
             return data_list[:16]
         else:
@@ -189,6 +190,9 @@ class mgam_SemiSup_Precropped_Npz(mgam_SemiSup_3D_Mha):
 
 class mgam_Standard_Patched_Npz(mgam_Standard_Npz_Structure, mgam_BaseSegDataset):
     """Firstly Introduced for Rose Thyroid dataset"""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(img_suffix='', seg_map_suffix='', *args, **kwargs)
 
     def _split(self):
         all_series = [file.replace(".mha", "") for file in os.listdir(self.data_root)]

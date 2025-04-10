@@ -87,18 +87,15 @@ class auto_runner:
                 match = re.search(pattern, exp)
 
                 if match is None:
-                    raise ValueError(
-                        f"在{self.config_root}目录下，无法匹配实验号：{exp}"
-                    )
+                    raise ValueError(f"在{self.config_root}目录下，无法匹配实验号：{exp}")
 
                 if exp[: match.start()] == exp_name:
                     print(f"已根据实验号找到实验：{exp_name} -> {exp}")
                     return exp
 
         else:
-            raise RuntimeError(
-                f"在 {MM_CONFIG_ROOT} 中未找到与“ {exp_name} ”匹配的实验名"
-            )
+            print(f"在{self.config_root}目录下，未找到实验：{exp_name}")
+            return None
 
     def experiment_queue(self):
         print("实验队列启动, 正在import依赖...")
@@ -106,11 +103,16 @@ class auto_runner:
 
         for exp in self.exp_names:
             exp = self.find_full_exp_name(exp)
+            if exp is None:
+                continue
             print(f"{exp} 实验启动")
 
             for model in self.model_names:
                 # 确定配置文件路径和保存路径
                 config_path = os.path.join(self.config_root, f"{exp}/{model}.py")
+                if not os.path.exists(config_path):
+                    print(f"配置文件不存在: {config_path}, 跳过该实验")
+                    continue
                 work_dir_path = osp.join(self.work_dir_root, exp, model)
                 test_work_dir_path = osp.join(self.test_work_dir_root, exp, model)
 
