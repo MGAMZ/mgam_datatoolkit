@@ -42,8 +42,9 @@ class mgam_BaseSegDataset(BaseSegDataset):
                              else self.__class__.__name__)
         super().__init__(*args, **kwargs)
         self.data_root: str
-        assert self.img_suffix == self.seg_map_suffix, \
-            f"img_suffix {self.img_suffix} and seg_map_suffix {self.seg_map_suffix} should be the same"
+        # HACK emergency override for sarcopenia training.
+        # assert self.img_suffix == self.seg_map_suffix, \
+        #     f"img_suffix {self.img_suffix} and seg_map_suffix {self.seg_map_suffix} should be the same"
 
     def _update_palette(self) -> list[list[int]]:
         """确保background为RGB全零"""

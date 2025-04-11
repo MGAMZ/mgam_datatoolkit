@@ -14,11 +14,11 @@ class RoseThyroidCount_base:
 
 
 class RoseThyroidCount_Precrop_Npz(RoseThyroidCount_base, mgam_Standard_Patched_Npz):
-    TEST_SLIDE_UID = ['544e3c8acfd0ac5cd86154be85e2c180c7157dd2',
-                      '25a371d792215a5adb55259b654755975f088f9d',
-                      'f8e4fe8eadbcb8678d9d1c21b05370af226a015d',
-                      '2dc113cc69004c65d32340ab886749064ed02930',
-                      '20ac5ee470f0126efe05188c094b415692a02d4f']
+    TEST_SLIDE_UID = ['fd808134e5f32fb1eed8b74afefdf8205bfa1503',
+                      'ad935fb82375b9c273765a20f71d9be2c9f60dfe',
+                      '41e0bde3dced7b154e098100e9a8a368f03c07c4',
+                      '4980726489a59752a823681c2bfeb4bf25e416b6',
+                      'ae6509368ead1d0352ccbe57d9b96468c25d94c1']
     SPLIT_RATIO = None
 
     def _split(self):
