@@ -55,7 +55,7 @@ class MedNeXtBlock(nn.Module):
         if norm_type == "group":
             self.norm = nn.GroupNorm(num_groups=in_channels, num_channels=in_channels)
         elif norm_type == "layer":
-            raise NotImplementedError("LayerNorm not deprecated.")
+            raise NotImplementedError("LayerNorm is deprecated.")
 
         # Second convolution (Expansion) layer with 1x1x1
         self.conv2 = conv(

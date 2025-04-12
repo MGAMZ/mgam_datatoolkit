@@ -54,6 +54,7 @@ def resample_one_sample(args) -> tuple[sitk.Image, sitk.Image|None] | None:
 
     # 写入
     target_image_path = target_image_path.replace(".nii.gz", ".mha").replace(".nii", ".mha")
+    target_label_path = target_label_path.replace(".nii.gz", ".mha").replace(".nii", ".mha")
     sitk.WriteImage(image_resampled, target_image_path, useCompression=True)
     if label_itk:
         sitk.WriteImage(label_resampled, target_label_path, useCompression=True)

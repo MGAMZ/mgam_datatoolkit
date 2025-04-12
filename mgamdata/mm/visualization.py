@@ -14,7 +14,6 @@ from mmengine.runner import Runner
 from mmengine.hooks import Hook
 from mmengine.logging import print_log, MMLogger
 from mmengine.visualization.visualizer import Visualizer, master_only, BaseDataElement
-from mmseg.visualization.local_visualizer import SegLocalVisualizer
 
 
 
@@ -115,6 +114,7 @@ class SegViser(BaseViser):
                  seg_map_cmap:str='rainbow',
                  seg_map_alpha:float=0.3,
                  plt_figsize:tuple[int, int]=(15, 4),
+                 plt_invert:bool=False,
                  verbose:bool=False,
                  **kwargs):
         super().__init__(name=name, **kwargs)
@@ -130,6 +130,7 @@ class SegViser(BaseViser):
         self.seg_map_cmap = seg_map_cmap
         self.seg_map_alpha = seg_map_alpha
         self.plt_figsize = plt_figsize
+        self.plt_invert = plt_invert
 
     def _parse_datasample(self, 
                          image:np.ndarray|torch.Tensor,
@@ -219,6 +220,7 @@ class SegViser(BaseViser):
         fig, axes = plt.subplots(1, 4, figsize=self.plt_figsize)
         fig.suptitle(img_path, fontsize=9)
         
+        
         # Draw image (Y,X,C)
         if image is not None:
             axes[0].imshow(image, cmap=self.image_cmap, interpolation='bicubic')
@@ -258,6 +260,11 @@ class SegViser(BaseViser):
             plt.colorbar(im, ax=axes[3], fraction=0.046, pad=0.04)
         else:
             axes[3].set_title('confidence (pred_seg_logits) N/A')
+        
+        if self.plt_invert:
+            for ax in axes:
+                ax.invert_yaxis()
+                ax.invert_xaxis()
         
         # Format
         fig.tight_layout()

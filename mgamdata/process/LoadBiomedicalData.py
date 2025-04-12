@@ -174,4 +174,3 @@ class LoadCTPreCroppedSampleFromNpz(BaseTransform):
             results["seg_fields"].append("gt_seg_map")
 
         return results
-
