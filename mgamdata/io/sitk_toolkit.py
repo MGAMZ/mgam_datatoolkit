@@ -50,7 +50,7 @@ def sitk_resample_to_spacing(mha: sitk.Image,
     
     original_size = mha.GetSize()
     spacing_ratio = [original_spacing[i] / spacing[i] for i in range(3)]
-    resampled_size = [int(original_size[i] * spacing_ratio[i]) - 1 for i in range(3)]
+    resampled_size = [int(original_size[i] * spacing_ratio[i]) for i in range(3)]
     
     # 执行重采样
     try:
