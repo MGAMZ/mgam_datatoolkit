@@ -1,13 +1,7 @@
-from collections import defaultdict
-import os
 import pdb
-from abc import abstractmethod
-from tqdm import tqdm
 from typing_extensions import Sequence
 
-import numpy as np
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
@@ -25,6 +19,7 @@ class mgam_Seg3D_Lite(BaseModel):
                  backbone:ConfigDict,
                  criterion:ConfigDict|list[ConfigDict],
                  binary_segment_threshold:float|None=None,
+                 auto_activate_after_logits:bool=False,
                  inference_PatchSize:tuple|None=None,
                  inference_PatchStride:tuple|None=None,
                  inference_PatchAccumulateDevice:str='cuda',
@@ -37,25 +32,20 @@ class mgam_Seg3D_Lite(BaseModel):
         3. 支持三维滑动窗口推理，当inference_PatchSize和inference_PatchStride被指定时启用
         
         Args:
-            backbone (ConfigDict): 主干网络的配置，包含已合并的decode_head。
-                这个主干网络应当直接输出最终的分割logits。
+            backbone (ConfigDict): 主干网络的配置，包含已合并的decode_head。这个主干网络应当直接输出最终的分割logits。
             criterion (ConfigDict): 用于计算损失的标准，通常是Dice或交叉熵损失等。
-            binary_segment_threshold (float | None): 二分类分割的阈值。如果模型输出是单通道
-                (二分类)，则此参数必须提供；若模型输出是多通道(多分类)，则此参数必须为None。
-                默认为0.5。
-            inference_PatchSize (tuple | None): 推理时滑动窗口的大小 (z, y, x)，
-                如果为None，则不使用滑动窗口推理。默认为None。
-            inference_PatchStride (tuple | None): 推理时滑动窗口的步长 (z, y, x)，
-                如果为None，则不使用滑动窗口推理。默认为None。
-            inference_PatchAccumulateDevice (str): 推理时滑动窗口结果累加矩阵的存储位置，
-                可以是'cpu'或'cuda'。当处理大体积数据时，选择'cpu'可以避免GPU内存不足。
-                默认为'cuda'。
+            binary_segment_threshold (float | None): 二分类分割的阈值。如果模型输出是单通道 (二分类)，则此参数必须提供；若模型输出是多通道(多分类)，则此参数必须为None。默认为0.5。
+            auto_activate_after_logits (bool): 是否在logits后自动激活，单通道自动应用sigmoid，多通道自动应用softmax。默认为False。
+            inference_PatchSize (tuple | None): 推理时滑动窗口的大小 (z, y, x)，如果为None，则不使用滑动窗口推理。默认为None。
+            inference_PatchStride (tuple | None): 推理时滑动窗口的步长 (z, y, x)，如果为None，则不使用滑动窗口推理。默认为None。
+            inference_PatchAccumulateDevice (str): 推理时滑动窗口结果累加矩阵的存储位置，可以是'cpu'或'cuda'。当处理大体积数据时，选择'cpu'可以避免GPU内存不足。默认为'cuda'。
         """
         
         super().__init__(*args, **kwargs)
         self.backbone = MODELS.build(backbone)
         self.criterion = [MODELS.build(c) for c in criterion] if isinstance(criterion, list) else [MODELS.build(criterion)]
         self.binary_segment_threshold = binary_segment_threshold
+        self.auto_activate_after_logits = auto_activate_after_logits
         self.inference_PatchSize = inference_PatchSize
         self.inference_PatchStride = inference_PatchStride
         self.inference_PatchAccumulateDevice = inference_PatchAccumulateDevice
@@ -187,8 +177,10 @@ class mgam_Seg3D_Lite(BaseModel):
         Returns:
             Tensor: Output tensor from backbone
         """
-
-        x = self.backbone(inputs) # [N, C, Z, Y, X]
+        x = self.backbone(inputs)
+        if not self.auto_activate_after_logits:
+            return x
+        
         N, C, Z, Y, X = x.shape
         if C == 1:
             return F.sigmoid(x)

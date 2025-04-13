@@ -906,9 +906,6 @@ class Seg3DDataPreProcessor(SegDataPreProcessor):
             f"Expected the channels of all inputs must be the same, "
             f"but got {[tensor.shape[0] for tensor in inputs]}")
 
-        # only one of size and size_divisor should be valid
-        assert (size is not None) ^ (size_divisor is not None), "only one of size and size_divisor should be valid"
-
         padded_inputs = []
         padded_samples = []
         inputs_sizes = [(img.shape[-3], img.shape[-2], img.shape[-1]) for img in inputs]

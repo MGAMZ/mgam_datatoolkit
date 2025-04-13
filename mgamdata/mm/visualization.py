@@ -14,7 +14,29 @@ from mmengine.runner import Runner
 from mmengine.hooks import Hook
 from mmengine.logging import print_log, MMLogger
 from mmengine.visualization.visualizer import Visualizer, master_only, BaseDataElement
+from mmengine.visualization.vis_backend import LocalVisBackend as _LocalVisBackend
 
+
+
+class LocalVisBackend(_LocalVisBackend):
+    def add_image(self,
+                  name: str,
+                  image: np.ndarray,
+                  step: int = 0,
+                  **kwargs) -> None:
+        """Record the image to disk.
+
+        Args:
+            name (str): The image identifier.
+            image (np.ndarray): The image to be saved. The format
+                should be RGB. Defaults to None.
+            step (int): Global step value to record. Defaults to 0.
+        """
+        assert image.dtype == np.uint8
+        drawn_image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+        os.makedirs(self._img_save_dir, exist_ok=True)
+        save_file_name = f'{name}_{step}.png'.replace('/', '__') # support working with tensorboard tag rule.
+        cv2.imwrite(os.path.join(self._img_save_dir, save_file_name), drawn_image)
 
 
 class BaseVisHook(Hook):
@@ -26,35 +48,34 @@ class BaseVisHook(Hook):
         self.enabled = enabled
         self.val_vis_interval = val_vis_interval
         self.test_vis_interval = test_vis_interval
-        self._test_index = 0
     
     def after_val_iter(self, 
                        runner: Runner, 
                        batch_idx: int, 
                        data_batch: dict,
                        outputs: Sequence[BaseDataElement]) -> None:
-        total_curr_iter = runner.iter + batch_idx
-        if total_curr_iter % self.val_vis_interval == 0 and self.enabled:
-            window_name = f'val_{os.path.basename(outputs[0].img_path)}_{runner.iter}'
-            self._visualizer.add_datasample(
-                window_name,
-                data_batch['inputs'][0], # dict with keys 'inputs' and 'data_samples'
-                data_sample=outputs[0],
-                step=batch_idx)
+        for i in range(len(outputs)):
+            if batch_idx % self.val_vis_interval == 0 and self.enabled:
+                window_name = f'ValVis/Batch{batch_idx}Item{i}_{os.path.basename(outputs[i].img_path)}'
+                self._visualizer.add_datasample(
+                    window_name,
+                    data_batch['inputs'][i], # dict with keys 'inputs' and 'data_samples'
+                    data_sample=outputs[i],
+                    step=runner.iter)
 
     def after_test_iter(self,
                         runner: Runner,
                         batch_idx: int,
                         data_batch: dict,
                         outputs: Sequence[BaseDataElement]) -> None:
-        for i, output in enumerate(outputs):
-            self._test_index += 1
-            window_name = f'test_{os.path.basename(output.img_path)}_{self._test_index}'
-            self._visualizer.add_datasample(
-                window_name,
-                data_batch['inputs'][i],
-                data_sample=output,
-                step=batch_idx)
+        for i in range(len(outputs)):
+            if batch_idx % self.test_vis_interval == 0 and self.enabled:
+                window_name = f'TestVis/Batch{batch_idx}Item{i}_{os.path.basename(outputs[i].img_path)}'
+                self._visualizer.add_datasample(
+                    window_name,
+                    data_batch['inputs'][i],
+                    data_sample=outputs[i],
+                    step=0)
 
 
 class BaseViser(Visualizer):
