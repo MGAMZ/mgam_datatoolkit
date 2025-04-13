@@ -41,7 +41,7 @@ def create_sliding_windows(
     last_start_idx = stride * ((z_length - window_size) // stride)
     if last_start_idx + window_size < z_length:
         slice_data = volume[-window_size : ]
-        windows.append((last_start_idx, slice_data))
+        windows.append((len(slice_data)-window_size, slice_data))
     
     return windows
 

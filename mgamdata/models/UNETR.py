@@ -339,6 +339,7 @@ class UNETR(nn.Module):
         return logits # [N, C, Z, Y, X]
 
 
+
 if __name__ == "__main__":
     toy_tensor = torch.rand(1, 1, 128, 128, 128)
     net = UNETR(in_channels=1, out_channels=4, img_size=(128, 128, 128))

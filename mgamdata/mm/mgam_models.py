@@ -159,7 +159,7 @@ class mgam_Seg3D_Lite(BaseModel):
         
         for i in range(batch_size):
             # 处理单个样本
-            i_seg_logits = seg_logits[i]
+            i_seg_logits = seg_logits[i] # [C, Z, Y, X]
             
             # 生成预测结果
             if out_channels > 1:  # 多分类情况
@@ -187,10 +187,16 @@ class mgam_Seg3D_Lite(BaseModel):
         Returns:
             Tensor: Output tensor from backbone
         """
-        # 直接调用backbone获取输出
-        x = self.backbone(inputs)
-        return x
-    
+
+        x = self.backbone(inputs) # [N, C, Z, Y, X]
+        N, C, Z, Y, X = x.shape
+        if C == 1:
+            return F.sigmoid(x)
+        elif C > 1:
+            return F.softmax(x, dim=1)
+        else:
+            raise ValueError(f"输出通道数({C})必须大于0")
+
     @torch.inference_mode()
     def inference(self, inputs: Tensor, data_samples:Sequence[BaseDataElement]|None=None) -> Tensor:
         """执行推理，支持滑动窗口或整体推理。
@@ -210,7 +216,7 @@ class mgam_Seg3D_Lite(BaseModel):
             seg_logits = self._forward(inputs, data_samples)
             
         return seg_logits
-    
+
     def slide_inference(self, inputs: Tensor, data_samples:Sequence[BaseDataElement]|None=None) -> Tensor:
         """使用重叠的滑动窗口进行推理。
         

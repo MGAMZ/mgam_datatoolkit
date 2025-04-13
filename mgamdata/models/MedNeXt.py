@@ -624,53 +624,53 @@ class MedNeXt(nn.Module):
         https://discuss.pytorch.org/t/checkpoint-with-no-grad-requiring-inputs-problem/19117/9
         """
         for l in sequential_block:
-            x = checkpoint.checkpoint(l, x, self.dummy_tensor)
+            x = checkpoint(l, x, self.dummy_tensor)
         return x
 
     def forward(self, x):
-
+        
         x = self.stem(x)
         if self.outside_block_checkpointing:
             x_res_0 = self.iterative_checkpoint(self.enc_block_0, x)
-            x = checkpoint.checkpoint(self.down_0, x_res_0, self.dummy_tensor)
+            x = checkpoint(self.down_0, x_res_0, self.dummy_tensor)
             x_res_1 = self.iterative_checkpoint(self.enc_block_1, x)
-            x = checkpoint.checkpoint(self.down_1, x_res_1, self.dummy_tensor)
+            x = checkpoint(self.down_1, x_res_1, self.dummy_tensor)
             x_res_2 = self.iterative_checkpoint(self.enc_block_2, x)
-            x = checkpoint.checkpoint(self.down_2, x_res_2, self.dummy_tensor)
+            x = checkpoint(self.down_2, x_res_2, self.dummy_tensor)
             x_res_3 = self.iterative_checkpoint(self.enc_block_3, x)
-            x = checkpoint.checkpoint(self.down_3, x_res_3, self.dummy_tensor)
+            x = checkpoint(self.down_3, x_res_3, self.dummy_tensor)
 
             x = self.iterative_checkpoint(self.bottleneck, x)
             if self.do_ds:
-                x_ds_4 = checkpoint.checkpoint(self.out_4, x, self.dummy_tensor)
+                x_ds_4 = checkpoint(self.out_4, x, self.dummy_tensor)
 
-            x_up_3 = checkpoint.checkpoint(self.up_3, x, self.dummy_tensor)
+            x_up_3 = checkpoint(self.up_3, x, self.dummy_tensor)
             dec_x = x_res_3 + x_up_3
             x = self.iterative_checkpoint(self.dec_block_3, dec_x)
             if self.do_ds:
-                x_ds_3 = checkpoint.checkpoint(self.out_3, x, self.dummy_tensor)
+                x_ds_3 = checkpoint(self.out_3, x, self.dummy_tensor)
             del x_res_3, x_up_3
 
-            x_up_2 = checkpoint.checkpoint(self.up_2, x, self.dummy_tensor)
+            x_up_2 = checkpoint(self.up_2, x, self.dummy_tensor)
             dec_x = x_res_2 + x_up_2
             x = self.iterative_checkpoint(self.dec_block_2, dec_x)
             if self.do_ds:
-                x_ds_2 = checkpoint.checkpoint(self.out_2, x, self.dummy_tensor)
+                x_ds_2 = checkpoint(self.out_2, x, self.dummy_tensor)
             del x_res_2, x_up_2
 
-            x_up_1 = checkpoint.checkpoint(self.up_1, x, self.dummy_tensor)
+            x_up_1 = checkpoint(self.up_1, x, self.dummy_tensor)
             dec_x = x_res_1 + x_up_1
             x = self.iterative_checkpoint(self.dec_block_1, dec_x)
             if self.do_ds:
-                x_ds_1 = checkpoint.checkpoint(self.out_1, x, self.dummy_tensor)
+                x_ds_1 = checkpoint(self.out_1, x, self.dummy_tensor)
             del x_res_1, x_up_1
 
-            x_up_0 = checkpoint.checkpoint(self.up_0, x, self.dummy_tensor)
+            x_up_0 = checkpoint(self.up_0, x, self.dummy_tensor)
             dec_x = x_res_0 + x_up_0
             x = self.iterative_checkpoint(self.dec_block_0, dec_x)
             del x_res_0, x_up_0, dec_x
 
-            x = checkpoint.checkpoint(self.out_0, x, self.dummy_tensor)
+            x = checkpoint(self.out_0, x, self.dummy_tensor)
 
         else:
             x_res_0 = self.enc_block_0(x)
@@ -1653,3 +1653,14 @@ class MM_MedNext_Decoder_Vallina(BaseDecodeHead):
 
         x = self.cls_seg(x)
         return x
+
+
+if __name__ == "__main__":
+    toy_model = MedNeXt(
+        in_channels=1,
+        n_channels=8,
+        n_classes=4,
+        dim='3d')
+    toy_input = torch.randn(1, 1, 64, 64, 64)
+    toy_output = toy_model(toy_input)
+    print(f"Input shape: {toy_input.shape}")

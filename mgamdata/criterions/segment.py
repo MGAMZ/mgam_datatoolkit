@@ -330,7 +330,7 @@ class DiceLoss_3D(torch.nn.Module):
                 z_weights[n, middle_region] = 1.0
         
         return z_weights
-        
+
     def forward_one_patch(self, pred: Tensor, target: Tensor, *args, **kwargs):
         if pred.shape != target.shape:
             target = self._expand_onehot_labels_dice_3D(pred, target)
@@ -415,7 +415,6 @@ class CrossEntropyLoss_3D(torch.nn.CrossEntropyLoss):
         # torch.nn.CrossEntropyLoss
         loss = super().forward(pred, target)
         
-
         if self.loss_weight != 1.0:
             loss = self.loss_weight * loss
         if weight is not None:

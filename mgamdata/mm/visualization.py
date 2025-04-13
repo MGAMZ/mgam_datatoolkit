@@ -187,7 +187,6 @@ class SegViser(BaseViser):
                 Z = find_foreground(pred_seg_map)
             if Z is None and pred_seg_logits is not None:
                 Z = find_foreground(pred_seg_logits.any(axis=0)) # C,Z,Y,X -> Z,Y,X
-        
             # If there is no foreground, Z will be randomly selected.
             if Z is None:
                 Z = image.shape[1] // 2
@@ -219,7 +218,6 @@ class SegViser(BaseViser):
     ):
         fig, axes = plt.subplots(1, 4, figsize=self.plt_figsize)
         fig.suptitle(img_path, fontsize=9)
-        
         
         # Draw image (Y,X,C)
         if image is not None:
