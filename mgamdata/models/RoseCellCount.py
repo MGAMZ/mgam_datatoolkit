@@ -5,6 +5,8 @@ from collections.abc import Sequence
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
+import torch
+from torch import Tensor
 
 from mmcv.transforms import BaseTransform
 from mmengine.logging import print_log, MMLogger
@@ -15,6 +17,7 @@ from mmseg.structures import SegDataSample
 from mmseg.models.segmentors import EncoderDecoder
 
 from ..mm.visualization import BaseViser, master_only, BaseDataElement
+from ..mm.mgam_models import mgam_Seg2D_Lite
 
 
 
@@ -121,15 +124,33 @@ class CellCounter(EncoderDecoder):
         """Delete post-process sigmoid activation when C=1"""
         B, C, H, W = seg_logits.shape
         seg_logits = seg_logits / self.amplify
-
         if data_samples is None:
             data_samples = [SegDataSample() for _ in range(B)]
-
         for i, i_seg_logits in enumerate(seg_logits):
             data_samples[i].set_data({"seg_logits": PixelData(data=i_seg_logits),
                                       "pred_sem_seg": PixelData(data=i_seg_logits)})
-
         return data_samples
+
+
+class CellCounterLite(mgam_Seg2D_Lite):
+    def __init__(self, amplify:int, *args, **kwargs):
+        super().__init__(auto_activate_after_logits=False, *args, **kwargs)
+        self.amplify = amplify
+    
+    def predict(self, inputs:Tensor, data_samples:Sequence[BaseDataElement]|None=None) -> Sequence[BaseDataElement]:
+        seg_logits = self.inference(inputs, data_samples) # [N, C, H, W]
+        batch_size = inputs.shape[0]
+        if data_samples is None:
+            data_samples = [BaseDataElement() for _ in range(batch_size)]
+        for i in range(batch_size):
+            data_samples[i].seg_logits = PixelData(data=seg_logits[i])
+        return data_samples
+    
+    @torch.inference_mode()
+    def inference(self, inputs: Tensor, data_samples:Sequence[BaseDataElement]|None=None) -> Tensor:
+        seg_logits = super().inference(inputs, data_samples)
+        seg_logits /= self.amplify
+        return seg_logits
 
 
 class CellCounterClassifier(CellCounter):
