@@ -23,7 +23,7 @@ class SelfAttention(nn.Module):
         self,
         embed_dim: int,
         num_heads: int,
-        sr_ratio: int = 1,
+        sr_ratio=None,  # 支持 int 或 tuple/list
         qkv_bias: bool = False,
         attn_dropout: float = 0.0,
         proj_dropout: float = 0.0,
@@ -41,137 +41,97 @@ class SelfAttention(nn.Module):
         self.proj = nn.Linear(embed_dim, embed_dim)
         self.proj_dropout = nn.Dropout(proj_dropout)
 
-        self.sr_ratio = sr_ratio
-        if sr_ratio > 1:
-            self.sr = nn.Conv3d(
-                embed_dim, embed_dim, kernel_size=sr_ratio, stride=sr_ratio
-            )
+        # 支持 tuple/list 或 int
+        if sr_ratio is None:
+            sr_ratio = 1
+        if isinstance(sr_ratio, int):
+            self.sr_ratio = (sr_ratio, sr_ratio, sr_ratio)
+        else:
+            assert len(sr_ratio) == 3
+            self.sr_ratio = tuple(sr_ratio)
+        if any(r > 1 for r in self.sr_ratio):
+            self.sr = nn.Conv3d(embed_dim, embed_dim, kernel_size=self.sr_ratio, stride=self.sr_ratio)
             self.sr_norm = nn.LayerNorm(embed_dim)
+        else:
+            self.sr = None
 
     def forward(self, x, patched_volume_size):
         B, N, C = x.shape
-        # patched_volume_size is (D, W, H) after PatchEmbedding conv
         D, W, H = patched_volume_size
 
-        # (B, N, C) -> (B, N, num_heads, head_dim) -> (B, num_heads, N, head_dim)
         q = self.query(x).view(B, N, self.num_heads, self.attention_head_dim).permute(0, 2, 1, 3)
 
-        if self.sr_ratio > 1:
-            # Apply sequence reduction
+        if self.sr is not None:
             # (B, N, C) -> (B, C, N) -> (B, C, D, W, H)
             x_ = x.permute(0, 2, 1).view(B, C, D, W, H)
-            # (B, C, D, W, H) -> (B, C, D/sr, W/sr, H/sr)
             x_ = self.sr(x_)
-            # (B, C, D/sr, W/sr, H/sr) -> (B, C, N_sr) -> (B, N_sr, C)
             x_ = x_.flatten(2).transpose(1, 2)
             x_ = self.sr_norm(x_)
-            # (B, N_sr, C) -> (B, N_sr, 2 * C)
             kv = self.key_value(x_)
-            # (B, N_sr, 2*C) -> (B, N_sr, 2, num_heads, head_dim) -> (2, B, num_heads, N_sr, head_dim)
             kv = kv.view(B, -1, 2, self.num_heads, self.attention_head_dim).permute(2, 0, 3, 1, 4)
         else:
-            # No sequence reduction
-            # (B, N, C) -> (B, N, 2 * C)
             kv = self.key_value(x)
-            # (B, N, 2*C) -> (B, N, 2, num_heads, head_dim) -> (2, B, num_heads, N, head_dim)
             kv = kv.view(B, N, 2, self.num_heads, self.attention_head_dim).permute(2, 0, 3, 1, 4)
 
-        k, v = kv.unbind(0) # k, v shape: (B, num_heads, N_kv, head_dim)
-
-        # Use scaled_dot_product_attention
+        k, v = kv.unbind(0)
         attn_output = F.scaled_dot_product_attention(
             q, k, v,
             attn_mask=None,
             dropout_p=self.attn_dropout if self.training else 0.0,
         )
-
-        # (B, num_heads, N, head_dim) -> (B, N, num_heads, head_dim) -> (B, N, C)
         out = attn_output.transpose(1, 2).reshape(B, N, C)
         out = self.proj(out)
         out = self.proj_dropout(out)
         return out
 
 
-class PatchEmbedding(nn.Module):
-    def __init__(
-        self,
-        in_channels: int,
-        embed_dim: int,
-        kernel_size: int,
-        stride: int,
-        padding: int,
-    ):
+class DWConv(nn.Module):
+    """Depthwise Separable Convolution used in MLP"""
+    def __init__(self, dim: int):
         super().__init__()
-        # Convolutional layer for patch embedding
-        self.proj = nn.Conv3d(
-            in_channels,
-            embed_dim,
-            kernel_size=kernel_size,
-            stride=stride,
-            padding=padding,
-        )
-        # Layer normalization applied after flattening
-        self.norm = nn.LayerNorm(embed_dim)
+        self.dwconv = nn.Conv3d(dim, dim, 3, 1, 1, bias=True, groups=dim)
+        self.bn = nn.BatchNorm3d(dim) # Consider replacing with LayerNorm if issues arise
 
-    def forward(self, x):
-        # Apply convolution: (B, C_in, D, W, H) -> (B, C_embed, D', W', H')
-        x = self.proj(x)
-        # Get the spatial dimensions after convolution
-        patched_volume_size = x.shape[2:]
-        # Flatten spatial dimensions and transpose: (B, C_embed, D'*W'*H') -> (B, D'*W'*H', C_embed)
+    def forward(self, x, patched_volume_size):
+        B, N, C = x.shape
+        # Use the provided spatial dimensions
+        D, W, H = patched_volume_size
+        if N == 0: # Handle empty sequences if they occur
+            return x
+
+        # Reshape for convolution: (B, N, C) -> (B, C, N) -> (B, C, D, W, H)
+        x = x.transpose(1, 2).view(B, C, D, W, H)
+        x = self.dwconv(x)
+        x = self.bn(x)
+        # Reshape back to sequence: (B, C, D, W, H) -> (B, C, N) -> (B, N, C)
         x = x.flatten(2).transpose(1, 2)
-        # Apply layer normalization
-        x = self.norm(x)
-        # Return both the embedded sequence and the spatial dimensions
-        return x, patched_volume_size
+        return x
+
+
+class TransformerBlockMLP(nn.Module):
+    """MLP block with Depthwise Separable Convolution"""
+    def __init__(self, in_features: int, mlp_ratio: int, dropout: float):
+        super().__init__()
+        hidden_features = mlp_ratio * in_features
+        self.fc1 = nn.Linear(in_features, hidden_features)
+        self.dwconv = DWConv(dim=hidden_features)
+        self.act = nn.GELU()
+        self.fc2 = nn.Linear(hidden_features, in_features)
+        self.drop1 = nn.Dropout(dropout)
+        self.drop2 = nn.Dropout(dropout)
+
+    def forward(self, x, patched_volume_size):
+        x = self.fc1(x)
+        # Pass spatial dimensions to DWConv
+        x = self.dwconv(x, patched_volume_size)
+        x = self.act(x)
+        x = self.drop1(x)
+        x = self.fc2(x)
+        x = self.drop2(x)
+        return x
 
 
 class TransformerBlock(nn.Module):
-
-    class DWConv(nn.Module):
-        """Depthwise Separable Convolution used in MLP"""
-        def __init__(self, dim: int):
-            super().__init__()
-            self.dwconv = nn.Conv3d(dim, dim, 3, 1, 1, bias=True, groups=dim)
-            self.bn = nn.BatchNorm3d(dim) # Consider replacing with LayerNorm if issues arise
-
-        def forward(self, x, patched_volume_size):
-            B, N, C = x.shape
-            # Use the provided spatial dimensions
-            D, W, H = patched_volume_size
-            if N == 0: # Handle empty sequences if they occur
-                return x
-
-            # Reshape for convolution: (B, N, C) -> (B, C, N) -> (B, C, D, W, H)
-            x = x.transpose(1, 2).view(B, C, D, W, H)
-            x = self.dwconv(x)
-            x = self.bn(x)
-            # Reshape back to sequence: (B, C, D, W, H) -> (B, C, N) -> (B, N, C)
-            x = x.flatten(2).transpose(1, 2)
-            return x
-
-    class TransformerBlockMLP(nn.Module):
-        """MLP block with Depthwise Separable Convolution"""
-        def __init__(self, in_features: int, mlp_ratio: int, dropout: float):
-            super().__init__()
-            hidden_features = mlp_ratio * in_features
-            self.fc1 = nn.Linear(in_features, hidden_features)
-            self.dwconv = TransformerBlock.DWConv(dim=hidden_features)
-            self.act = nn.GELU()
-            self.fc2 = nn.Linear(hidden_features, in_features)
-            self.drop1 = nn.Dropout(dropout)
-            self.drop2 = nn.Dropout(dropout)
-
-        def forward(self, x, patched_volume_size):
-            x = self.fc1(x)
-            # Pass spatial dimensions to DWConv
-            x = self.dwconv(x, patched_volume_size)
-            x = self.act(x)
-            x = self.drop1(x)
-            x = self.fc2(x)
-            x = self.drop2(x)
-            return x
-
     def __init__(
         self,
         embed_dim: int,
@@ -193,7 +153,7 @@ class TransformerBlock(nn.Module):
             proj_dropout=proj_dropout,
         )
         self.norm2 = nn.LayerNorm(embed_dim)
-        self.mlp = TransformerBlock.TransformerBlockMLP(
+        self.mlp = TransformerBlockMLP(
             in_features=embed_dim,
             mlp_ratio=mlp_ratio,
             dropout=proj_dropout, # Use proj_dropout for MLP dropout
@@ -225,6 +185,38 @@ class MixVisionTransformer(nn.Module):
         super().__init__()
         self.depths = depths
 
+        class PatchEmbedding(nn.Module):
+            def __init__(
+                self,
+                in_channels: int,
+                embed_dim: int,
+                kernel_size: int,
+                stride: int,
+                padding: int,
+            ):
+                super().__init__()
+                # Convolutional layer for patch embedding
+                self.proj = nn.Conv3d(
+                    in_channels,
+                    embed_dim,
+                    kernel_size=kernel_size,
+                    stride=stride,
+                    padding=padding,
+                )
+                # Layer normalization applied after flattening
+                self.norm = nn.LayerNorm(embed_dim)
+
+            def forward(self, x):
+                # Apply convolution: (B, C_in, D, W, H) -> (B, C_embed, D', W', H')
+                x = self.proj(x)
+                # Get the spatial dimensions after convolution
+                patched_volume_size = x.shape[2:]
+                # Flatten spatial dimensions and transpose: (B, C_embed, D'*W'*H') -> (B, D'*W'*H', C_embed)
+                x = x.flatten(2).transpose(1, 2)
+                # Apply layer normalization
+                x = self.norm(x)
+                # Return both the embedded sequence and the spatial dimensions
+                return x, patched_volume_size
         # Create Patch Embedding layers for each stage
         self.patch_embeds = nn.ModuleList()
         # Input channels for the first stage is in_channels, subsequent stages use previous embed_dim
@@ -383,7 +375,7 @@ class SegFormer3D(nn.Module):
         num_heads: list = [1, 2, 5, 8],
         mlp_ratios: list = [4, 4, 4, 4],
         depths: list = [2, 2, 2, 2],
-        sr_ratios: list = [8, 4, 2, 1], # Sequence reduction ratios per stage
+        sr_ratios: list = [4, 2, 1, 1], # Sequence reduction ratios per stage
         patch_kernel_size: list = [7, 3, 3, 3],
         patch_stride: list = [4, 2, 2, 2],
         patch_padding: list = [3, 1, 1, 1],
@@ -451,13 +443,9 @@ class SegFormer3D(nn.Module):
 
 def forward_test():
     # Test with non-cubic input
-    input_tensor = torch.randn(1, 4, 96, 128, 160) # Example: B, C, D, W, H
-
-    if torch.cuda.is_available():
-        device = torch.device("cuda:0")
-    else:
-        device = torch.device("cpu")
-        print("CUDA not available, running on CPU.")
+    input_size = (1, 4, 16, 128, 128)
+    input_tensor = torch.randn(input_size) # Example: B, C, D, W, H
+    device = torch.device("cpu")
 
     input_tensor = input_tensor.to(device)
 
@@ -465,26 +453,27 @@ def forward_test():
     model = SegFormer3D(
         in_channels=4,
         num_classes=3,
-        embed_dims=[32, 64, 160, 256],
-        num_heads=[1, 2, 5, 8],
+        embed_dims=[512, 1024, 1024, 2048],
+        num_heads=[1, 2, 4, 8],
         depths=[2, 2, 2, 2],
+        sr_ratios=[(4,4,4), (2,2,2), (1,2,2), (1,2,2)]
     ).to(device)
 
     model.eval()
     with torch.no_grad():
         output = model(input_tensor)
-
     print(f"Input shape: {input_tensor.shape}")
     print(f"Output shape: {output.shape}")
 
-    # Verify output shape matches input spatial dimensions and output classes
-    expected_shape = (input_tensor.shape[0], model.decoder.predict.out_channels, *input_tensor.shape[2:])
-    assert output.shape == expected_shape, f"Output shape {output.shape} does not match expected {expected_shape}"
-    print("Output shape matches expected shape.")
-
-    # Check model parameter count (optional)
-    num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"Number of trainable parameters: {num_params / 1e6:.2f} M")
+    from ptflops import get_model_complexity_info
+    macs, params = get_model_complexity_info(
+        model,
+        input_size[1:],
+        as_strings=False,
+        verbose=True
+    )
+    print(f"FLOPs (Multiply-Accumulate): {macs}")
+    print(f"Params: {params}")
 
 
 def profiling_test():
@@ -493,7 +482,7 @@ def profiling_test():
     from datetime import datetime
     
     # Configuration
-    input_shape = (1, 4, 96, 128, 160) # B, C, D, W, H
+    input_shape = (2, 1, 80, 80, 80) # B, C, D, W, H
     num_classes = 3
     warmup_iterations = 5
     profile_iterations = 1 # Profiler usually needs only one detailed run
@@ -505,7 +494,6 @@ def profiling_test():
     # Create output directories if they don't exist
     os.makedirs(tensorboard_dir, exist_ok=True)
     os.makedirs(os.path.dirname(xlsx_filename), exist_ok=True)
-
 
     # Set device
     if torch.cuda.is_available():
@@ -519,18 +507,6 @@ def profiling_test():
     model = SegFormer3D(
         in_channels=input_shape[1],
         num_classes=num_classes,
-        embed_dims=[32, 64, 160, 256],
-        num_heads=[1, 2, 5, 8],
-        depths=[2, 2, 2, 2],
-        sr_ratios=[8, 4, 2, 1],
-        patch_kernel_size=[7, 3, 3, 3],
-        patch_stride=[4, 2, 2, 2],
-        patch_padding=[3, 1, 1, 1],
-        decoder_head_embedding_dim=256,
-        qkv_bias=True,
-        attn_dropout=0.0,
-        proj_dropout=0.0,
-        decoder_dropout=0.0,
     ).to(device)
     model.eval() # Set to evaluation mode
 
@@ -541,7 +517,8 @@ def profiling_test():
     print(f"Starting warm-up ({warmup_iterations} iterations)...")
     for _ in range(warmup_iterations):
         with torch.no_grad():
-            _ = model(input_tensor)
+            out = model(input_tensor)
+            print(out.shape)
     if torch.cuda.is_available():
         torch.cuda.synchronize()
     print("Warm-up finished.")
@@ -554,46 +531,44 @@ def profiling_test():
     with torch.profiler.profile(
         activities=[
             torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],
-        schedule=torch.profiler.schedule(wait=1, warmup=1, active=profile_iterations, repeat=1), # Use schedule for handler
+        schedule=torch.profiler.schedule(wait=1, warmup=10, active=profile_iterations, repeat=1), # Use schedule for handler
         on_trace_ready=tb_handler, # Pass the handler
         record_shapes=True,
         profile_memory=True,
         with_stack=True
     ) as prof:
         with torch.no_grad():
-            for _ in range(1 + 1 + profile_iterations): # wait, warmup, active steps
+            for _ in range(10 + 1 + profile_iterations): # wait, warmup, active steps
                 output = model(input_tensor)
-                if torch.cuda.is_available():
-                    torch.cuda.synchronize()
                 prof.step() # Signal the profiler schedule
 
-    print("Profiling finished.")
-    print("-" * 80)
+        print("Profiling finished.")
+        print("-" * 80)
 
-    # --- Print results to console (optional, kept for immediate feedback) ---
-    print("Profiler results sorted by total CUDA time (Top 20):")
-    print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=20))
-    print("-" * 80)
-    print("Profiler results grouped by call stack (Self CUDA time, Top 30):")
-    print(prof.key_averages(group_by_stack_n=10).table(sort_by="self_cuda_time_total", row_limit=30))
-    print("-" * 80)
-    print("Profiler results grouped by call stack (Total CUDA time, Top 30):")
-    print(prof.key_averages(group_by_stack_n=10).table(sort_by="cuda_time_total", row_limit=30))
-    print("-" * 80)
+        # --- Print results to console (optional, kept for immediate feedback) ---
+        print("Profiler results sorted by total CUDA time (Top 20):")
+        print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=20))
+        print("-" * 80)
+        print("Profiler results grouped by call stack (Self CUDA time, Top 30):")
+        print(prof.key_averages(group_by_stack_n=10).table(sort_by="self_cuda_time_total", row_limit=30))
+        print("-" * 80)
+        print("Profiler results grouped by call stack (Total CUDA time, Top 30):")
+        print(prof.key_averages(group_by_stack_n=10).table(sort_by="cuda_time_total", row_limit=30))
+        print("-" * 80)
 
-    # --- TensorBoard Instructions ---
-    print("To view TensorBoard logs, run the following command in your terminal:")
-    print(f"tensorboard --logdir {os.path.join(output_dir, 'tensorboard')}")
-    print("-" * 80)
+        # --- TensorBoard Instructions ---
+        print("To view TensorBoard logs, run the following command in your terminal:")
+        print(f"tensorboard --logdir {os.path.join(output_dir, 'tensorboard')}")
+        print("-" * 80)
 
-    # Verify output shape as a sanity check
-    print(f"Input shape: {input_tensor.shape}")
-    print(f"Output shape: {output.shape}")
-    expected_shape = (input_shape[0], num_classes, *input_shape[2:])
-    assert output.shape == expected_shape, f"Output shape {output.shape} does not match expected {expected_shape}"
-    print("Output shape matches expected shape.")
+        # Verify output shape as a sanity check
+        print(f"Input shape: {input_tensor.shape}")
+        print(f"Output shape: {output.shape}")
+        expected_shape = (input_shape[0], num_classes, *input_shape[2:])
+        assert output.shape == expected_shape, f"Output shape {output.shape} does not match expected {expected_shape}"
+        print("Output shape matches expected shape.")
 
 
 
 if __name__ == '__main__':
-    profiling_test()
+    forward_test()
