@@ -6,6 +6,7 @@ from torch import nn
 from mmengine.model import BaseModule
 from .SegFormer3D import PatchEmbedding, TransformerBlock, cube_root, SegFormerDecoderHead
 from ...mm.mmseg_Dev3D import BaseDecodeHead_3D
+from ...mm.mgam_models import mgam_Seg3D_Lite
 
 class SegFormer3D_Encoder_MM(BaseModule):
     def __init__(
@@ -115,3 +116,4 @@ class SegFormer3D_Decoder_MM(BaseDecodeHead_3D):
         else:
             raise ValueError(f"Invalid number of inputs for SegFormer3D_Decoder_MM: {num_input_elements}")
         return (segformer_out, )
+

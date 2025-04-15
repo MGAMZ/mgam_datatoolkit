@@ -1,7 +1,19 @@
+"""
+@InProceedings{Perera_2024_CVPR,
+    author    = {Perera, Shehan and Navard, Pouyan and Yilmaz, Alper},
+    title     = {SegFormer3D: An Efficient Transformer for 3D Medical Image Segmentation},
+    booktitle = {Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) Workshops},
+    month     = {June},
+    year      = {2024},
+    pages     = {4981-4988}
+}
+"""
+
 import torch
 import math
 import numpy as np
 from torch import nn
+
 
 def build_segformer3d_model(config):
     model = SegFormer3D(
@@ -104,7 +116,6 @@ class SegFormer3D(nn.Module):
             if m.bias is not None:
                 m.bias.data.zero_()
 
-
     def forward(self, x):
         # embedding the input
         x = self.segformer_encoder(x)
@@ -116,7 +127,7 @@ class SegFormer3D(nn.Module):
         # decoding the embedded features
         x = self.segformer_decoder(c1, c2, c3, c4)
         return x
-    
+
 # ----------------------------------------------------- encoder -----------------------------------------------------
 class PatchEmbedding(nn.Module):
     def __init__(
@@ -147,7 +158,7 @@ class PatchEmbedding(nn.Module):
         patched_volume_size = patches.shape[2:]
         patches = patches.flatten(2).transpose(1, 2)
         patches = self.norm(patches)
-        return patches, patched_volume_size
+        return patches
 
 
 class SelfAttention(nn.Module):
@@ -649,7 +660,7 @@ if __name__ == "__main__":
     input = torch.randint(
         low=0,
         high=255,
-        size=(1, 4, 128, 128, 128),
+        size=(1, 4, 256, 256, 256),
         dtype=torch.float,
     )
     input = input.to("cuda:0")

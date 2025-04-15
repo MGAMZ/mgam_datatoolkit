@@ -47,6 +47,7 @@ class ViT(nn.Module):
         post_activation="Tanh",
         qkv_bias: bool = False,
         save_attn: bool = False,
+        use_flash_attention: bool = False,
     ) -> None:
         """
         Args:
@@ -106,7 +107,7 @@ class ViT(nn.Module):
         self.blocks = nn.ModuleList(
             [
                 TransformerBlock(hidden_size, mlp_dim, num_heads, dropout_rate, qkv_bias, save_attn,
-                                 use_flash_attention=True)
+                                 use_flash_attention=use_flash_attention)
                 for i in range(num_layers)
             ]
         )
@@ -152,6 +153,7 @@ class UNETR(nn.Module):
         conv_block: bool = False,
         res_block: bool = True,
         dropout_rate: float = 0.0,
+        use_flash_attention: bool = False,
     ) -> None:
         """
         Args:
@@ -205,6 +207,7 @@ class UNETR(nn.Module):
             num_heads=num_heads,
             classification=self.classification,
             dropout_rate=dropout_rate,
+            use_flash_attention=use_flash_attention,
         )
         self.encoder1 = UnetrBasicBlock(
             spatial_dims=3,

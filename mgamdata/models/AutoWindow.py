@@ -4,6 +4,7 @@ import pdb
 from io import BytesIO
 from PIL import Image
 from functools import partial
+from typing_extensions import Sequence
 
 import seaborn
 import numpy as np
@@ -14,19 +15,17 @@ from matplotlib import pyplot as plt
 from mmcv.transforms import BaseTransform
 from mmengine.runner.runner import Runner
 from mmengine.hooks.hook import Hook
-from mmengine.logging import print_log, MMLogger
 from mmengine.model.base_module import BaseModule
 from mmengine.structures.base_data_element import BaseDataElement
 from mmseg.registry import MODELS
 
-from mgamdata.mm.mmseg_Dev3D import (
-    EncoderDecoder_3D,
-    Seg3DDataSample,
-    PackSeg3DInputs,
-    to_tensor,
-    VolumeData,
-    warnings,
-)
+from ..mm.mgam_models import mgam_Seg3D_Lite
+from ..mm.mmseg_Dev3D import (EncoderDecoder_3D,
+                              Seg3DDataSample,
+                              PackSeg3DInputs,
+                              to_tensor,
+                              VolumeData,
+                              warnings)
 
 
 class StatisticsData(BaseDataElement):
@@ -265,29 +264,21 @@ class WindowExtractor(SupportLrMultModule):
         self.log_count = 0
 
         self.window_sample = torch.arange(*self.value_range)
-        self.relative_focus_range = [
-            (i - value_range[0]) / (value_range[1] - value_range[0])
-            for i in focus_range
-        ]
+        self.relative_focus_range = [(i - value_range[0]) / (value_range[1] - value_range[0])
+                                      for i in focus_range]
 
         # Dynamic Weak Response - a
-        self.d_wr = DynamicParam(
-            partial(torch.nn.init.normal_, mean=1, std=0.1), ensure_sign="pos"
-        )
+        self.d_wr = DynamicParam(partial(torch.nn.init.normal_, mean=1, std=0.1), ensure_sign="pos")
         # Dynamic Intense Response - b
-        self.d_ir = DynamicParam(
-            partial(torch.nn.init.normal_, mean=1, std=0.1), ensure_sign="pos"
-        )
+        self.d_ir = DynamicParam(partial(torch.nn.init.normal_, mean=1, std=0.1), ensure_sign="pos")
         # Dynamic Perception Field - d
-        self.d_pf = DynamicParam(
-            partial(torch.nn.init.normal_, mean=1, std=0.1), ensure_sign=None
-        )
+        self.d_pf = DynamicParam(partial(torch.nn.init.normal_, mean=1, std=0.1), ensure_sign=None)
         # Dynamic Range - g
         self.d_r = DynamicParam(torch.nn.init.zeros_, ensure_sign=None)
         # Dynamic Range Auxiliary Parameter
         self.d_r_a = DynamicParam(torch.nn.init.zeros_, ensure_sign="pos")
         # Global Offset - k
-        self.g_o = DynamicParam(partial(torch.nn.init.zeros_), ensure_sign=None)
+        self.g_o = DynamicParam(torch.nn.init.zeros_, ensure_sign=None)
         # Range Rectification Coefficient - h
         self.rrc = focus_range[1] - focus_range[0]
         # Major dynamic range for this window to handle.
@@ -485,8 +476,6 @@ class ParalleledMultiWindowProcessing(BaseModule):
     def __init__(
         self,
         in_channels: int,
-        embed_dims: int,
-        window_embed_dims: int | None = None,
         num_windows: int = 4,
         num_rect: int = 8,
         TRec_rect_momentum: float = 0.99,
@@ -504,13 +493,7 @@ class ParalleledMultiWindowProcessing(BaseModule):
         super().__init__(*args, **kwargs)
 
         self.in_channels = in_channels
-        self.embed_dims = embed_dims
         self.num_windows = num_windows
-        self.window_embed_dims = (
-            window_embed_dims
-            if window_embed_dims is not None
-            else embed_dims // self.num_windows
-        )
         self.num_rect = num_rect
         self.TRec_rect_momentum = TRec_rect_momentum
         self.data_range = data_range
@@ -728,6 +711,7 @@ class AutoWindowStatusLoggerHook(Hook):
         else:
             return runner.iter
 
+    @torch.no_grad()
     def after_train_iter(self,
                          runner,
                          batch_idx: int,
@@ -769,6 +753,7 @@ class AutoWindowStatusLoggerHook(Hook):
             image = np.array(Image.open(buf).convert("RGB"))
             runner.visualizer.add_image("CrsF", image, current_iter)
 
+    @torch.no_grad()
     def before_val_epoch(self, runner: Runner) -> None:
         model: ParalleledMultiWindowProcessing = runner.model.pmwp
         TRec = model.val_epoch_info_hook()
@@ -787,3 +772,24 @@ class AutoWindowStatusLoggerHook(Hook):
                 self.TRec_Figure.savefig(buf, format="png", dpi=self.dpi)
                 image = np.array(Image.open(buf).convert("RGB"))
                 runner.visualizer.add_image(name, image, current_iter)
+
+
+class AutoWindowLite(mgam_Seg3D_Lite):
+    """New framrwork compatible with new lite mgam framework"""
+    def __init__(self, pmwp:dict|None=None, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.pmwp:ParalleledMultiWindowProcessing = MODELS.build(pmwp) if pmwp is not None else None
+
+    def loss(self, inputs: Tensor, data_samples: list[Seg3DDataSample]):
+        losses = {}
+        if self.pmwp is not None:
+            inputs, pmwp_losses = self.pmwp(inputs, data_samples)
+            losses.update(pmwp_losses)
+        main_losses = super().loss(inputs, data_samples)
+        losses.update(main_losses)
+        return losses
+
+    def predict(self, inputs:Tensor, data_samples:Sequence[BaseDataElement]|None=None) -> Sequence[BaseDataElement]:
+        if self.pmwp is not None:
+            inputs, pmwp_losses = self.pmwp(inputs, data_samples)
+        return super().predict(inputs, data_samples)
