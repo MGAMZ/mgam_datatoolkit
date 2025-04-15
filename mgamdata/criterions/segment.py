@@ -118,260 +118,141 @@ def evaluation_hausdorff_distance_3D(gt,
 class DiceLoss_3D(torch.nn.Module):
     def __init__(
         self,
-        smooth_z_ratio:int|None = None,
-        background_Z_min_weight = 0.01,
-        background_Z_max_weight = 0.1,
-        ignore_1st_index: bool = False,
-        batch_z: int|None = None,
+        ignore_1st_index: bool = False, # Keep: Option to exclude background class
         eps=1e-5,
-        ignore_index:int|None=None,
+        ignore_index:int|None=None, # Keep: Standard practice to ignore certain classes
         loss_name="loss_dice",
+        use_softmax: bool = True, # Add option to apply softmax internally
+        squared_pred: bool = True, # Use squared prediction/target in denominator (common variant)
     ):
         """
+        Standard 3D Dice Loss.
+
         Args:
-            smooth_z_ratio: 沿着Z轴平滑Dice Loss的比例。默认: None
-                            该值确定了有多大范围内的volume slice会被视为有效区域，
-                            比例的基准是有效标注的Z轴长度，
-                            在超出有效标注范围之后，损失权重逐渐降低至0，
-                            降低至0的位置距离有效标注的中心Z切面是smooth_z_ratio * Z轴长度（注意，就是单侧）。
+            ignore_1st_index (bool): If True, exclude the first class (index 0, usually background)
+                                     from the loss calculation. Default: False.
+            eps (float): Smoothing factor to avoid division by zero. Default: 1e-5.
+            ignore_index (int | None): Specifies a class index to ignore. If set, this class's contribution
+                                       to the loss will be excluded during averaging. Default: None.
+            loss_name (str): Name for the loss instance. Default: "loss_dice".
+            use_softmax (bool): Apply softmax to the prediction tensor before calculating loss.
+                                Assumes prediction is logits if True. Default: True.
+            squared_pred (bool): Whether to square the prediction and target tensors in the denominator.
+                                 Default: True.
         """
         super().__init__()
-        self.smooth_z_ratio = smooth_z_ratio
-        # the final weight is `A * max_weight + min_weight, where A ∈ [0, 1]`
-        # so the actual max weight should be `max_weight - min_weight`
-        self.background_Z_min_weight = background_Z_min_weight
-        self.background_Z_max_weight = background_Z_max_weight - background_Z_min_weight
         self.eps = eps
         self.ignore_index = ignore_index
         self.loss_name = self._loss_name = loss_name
         self.ignore_1st_index = ignore_1st_index
-        self.batch_z = batch_z
+        self.use_softmax = use_softmax
+        self.squared_pred = squared_pred
 
     def _expand_onehot_labels_dice_3D(self, pred: Tensor, target: Tensor) -> Tensor:
-        """Expand onehot labels to match the size of prediction for 3D Volumes.
-
-        Args:
-            pred (Tensor): The prediction, has a shape (N, num_class, D, H, W).
-            target (Tensor): The learning label of the prediction,
-                has a shape (N, D, H, W).
-
-        Returns:
-            Tensor: The target after one-hot encoding,
-                has a shape (N, num_class, D, H, W).
-        """
+        """Expand onehot labels to match the size of prediction for 3D Volumes."""
         num_classes = pred.shape[1]
-        one_hot_target = torch.clamp(target, min=0, max=num_classes)
+        # Clamp target to handle potential out-of-bounds indices before one-hot encoding
+        clamped_target = torch.clamp(target, min=0, max=num_classes - 1)
+
         one_hot_target = torch.nn.functional.one_hot(
-            one_hot_target.to(torch.int64), 
-            num_classes + 1
+            clamped_target.to(torch.int64),
+            num_classes=num_classes
         )
-        one_hot_target = one_hot_target[..., :num_classes].permute(0, 4, 1, 2, 3)
+        # Permute to put class dimension second: [N, Z, Y, X, C] -> [N, C, Z, Y, X]
+        one_hot_target = one_hot_target.permute(0, 4, 1, 2, 3)
         return one_hot_target
 
-    def calc_dice_loss(self, pred: Tensor, target: Tensor) -> Tensor:
-        """
-        计算 Dice Loss，保持输入的维度结构。
-        
-        Args:
-            pred (torch.Tensor): 预测张量，形状为 (n, c, h, w)
-            target (torch.Tensor): 目标张量，形状为 (n, c, h, w)
-            eps (float): 避免除零的小常数。默认: 1e-5
-            ignore_index (int, optional): 需要忽略的类别索引。默认: None
-            
-        Returns:
-            torch.Tensor: 未进行 reduction 的 Dice loss，与输入形状相同
-        """
-        if self.ignore_index is not None:
-            num_classes = pred.shape[1]
-            mask = torch.ones(num_classes, dtype=torch.bool, device=pred.device)
-            mask[self.ignore_index] = False
-            pred = pred[:, mask]
-            target = target[:, mask]
-            assert pred.shape[1] != 0, "忽略的索引后没有剩余类别"
-        
-        # 逐像素计算 intersection
-        intersection = pred * target
-        # 计算每个位置的平方和
-        pred_square = pred * pred
-        target_square = target * target
-        # 计算 Dice coefficient
-        numerator = 2 * intersection
-        denominator = pred_square + target_square + self.eps
-        return 1 - (numerator / denominator)
-
-    # HACK for debug
-    def visualize_z_loss(self, target, loss, z_weights):
-        """
-        可视化每个样本的loss沿Z方向上的sum大小，以及平滑权重
-        
-        Args:
-            target: 形状为[N, C, Z, Y, X]或[N, Z, Y, X]的标注数据
-            loss: 形状为[N, C, Z, Y, X]的损失值
-            smooth_z_ratio: 平滑比例，如果为None则只显示原始loss
-            z_weights: 预计算的Z轴权重，形状为[N, Z]，如果为None则根据smooth_z_ratio计算
-            
-        Returns:
-            fig: matplotlib figure对象
-        """
-        from matplotlib import pyplot as plt
-        assert self.smooth_z_ratio is not None
-        
-        if isinstance(target, torch.Tensor):
-            target_np = target.detach().cpu().numpy()
-        else:
-            target_np = target
-        if target_np.ndim == 5:
-            target_np = target_np.any(axis=1)
-            
-        if isinstance(loss, Tensor):
-            loss_np = loss.detach().cpu().numpy()
-        else:
-            loss_np = loss
-        assert loss_np.ndim == 5
-        
-        # [N, Z]
-        if isinstance(z_weights, Tensor):
-            z_weights_np = z_weights.detach().cpu().numpy()
-        else:
-            z_weights_np = z_weights
-        
-        N, Z, Y, X = target_np.shape
-        
-        # 计算Z轴上的loss总和
-        z_loss = loss_np.sum(axis=(1, 3, 4))  # [N, Z]
-        
-        # 找出每个样本中有标注的Z切片
-        valid_z_mask = np.any(target_np, axis=(2, 3))  # [N, Z]
-        
-        # 创建子图
-        fig, axes = plt.subplots(N, 1, figsize=(12, 4*N), squeeze=False)
-        
-        for n in range(N):
-            ax = axes[n, 0]
-            z_coords = np.arange(Z)
-            
-            # 绘制loss在Z轴上的分布
-            ax.plot(z_coords, z_loss[n], 'b-', linewidth=2, label='Loss Sum')
-            
-            # 显示weights曲线
-            ax2 = ax.twinx()
-            ax2.plot(z_coords, z_weights_np[n], 'r--', linewidth=2, label='Weight')
-            ax2.set_ylabel('Weight', color='r')
-            ax2.tick_params(axis='y', labelcolor='r')
-            ax2.set_ylim(0, 1.1)
-            
-            ax.set_xlabel('Z Position')
-            ax.set_ylabel('Loss Sum', color='b')
-            ax.tick_params(axis='y', labelcolor='b')
-            ax.set_title(f'Sample {n+1}')
-            ax.set_xlim(0, Z)
-            ax.grid(True)
-            
-            # 创建组合图例
-            handles, labels = ax.get_legend_handles_labels()
-            if z_weights_np is not None:
-                handles2, labels2 = ax2.get_legend_handles_labels()
-                handles += handles2
-                labels += labels2
-            ax.legend(handles, labels, loc='upper right')
-        
-        fig.tight_layout()
-        fig.savefig(f'z_loss_visualization_{self.loss_name}.png')
-        pdb.set_trace()
-        exit()
-
-    def get_smooth_z_weight(self, target:Tensor) -> Tensor:
-        """
-        根据target中有效标注的Z轴位置创建平滑权重，并应用于loss
-        
-        Args:
-            target: 形状为[N, C, Z, Y, X]或[N, Z, Y, X]的标注数据
-            
-        Returns:
-            z_weight: 形状为[N, Z]的权重张量
-        """
-        assert self.smooth_z_ratio is not None and self.smooth_z_ratio > 1
-        N, Z = target.size(0), target.size(-3)
-        device = target.device
-        # 找出每个样本中有标注的Z切片
-        valid_z_mask = target.any(dim=(1, 3, 4) if target.ndim==5 else (2,3))  # [N, Z]
-        # 创建Z维度的权重张量
-        z_weights = torch.zeros((N, Z), device=device)
-        # Z轴坐标
-        z_coords = torch.arange(Z, dtype=torch.float, device=device)
-        
-        for n in range(N):
-            if valid_z_mask[n].any():  # 确保样本有有效标注
-                # 找出有效Z的最小和最大索引
-                z_indices = torch.where(valid_z_mask[n])[0]
-                min_z = float(z_indices.min().item())
-                max_z = float(z_indices.max().item())
-                
-                # 计算有效Z范围长度
-                z_range = max_z - min_z + 1
-                # 计算扩展范围
-                extended_range = z_range * self.smooth_z_ratio
-                half_extension = (extended_range - z_range) / 2
-                # 计算扩展后的边界
-                extended_min_z = min_z - half_extension
-                extended_max_z = max_z + half_extension
-                # 创建条件掩码
-                left_region = (z_coords >= extended_min_z) & (z_coords < min_z)
-                middle_region = (z_coords >= min_z) & (z_coords <= max_z)
-                right_region = (z_coords > max_z) & (z_coords <= extended_max_z)
-                # 自适应区域
-                # 正梯形
-                # z_weights[n, left_region] = (z_coords[left_region] - extended_min_z) / half_extension
-                # z_weights[n, right_region] = 1 - (z_coords[right_region] - max_z) / half_extension
-                # 楔形
-                z_weights[n, left_region] = (1 - (z_coords[left_region] - extended_min_z) / half_extension) * self.background_Z_max_weight + self.background_Z_min_weight
-                z_weights[n, right_region] = (z_coords[right_region] - max_z) / half_extension * self.background_Z_max_weight + self.background_Z_min_weight
-                # 在有效标注区域内，权重为1
-                z_weights[n, middle_region] = 1.0
-        
-        return z_weights
-
-    def forward_one_patch(self, pred: Tensor, target: Tensor, *args, **kwargs):
-        if pred.shape != target.shape:
-            target = self._expand_onehot_labels_dice_3D(pred, target)
-            assert pred.shape == target.shape
-        # pred, target: [N, C, Z, Y, X]
-        if self.ignore_1st_index:
-            pred = pred[:, 1:, ...].contiguous()
-            target = target[:, 1:, ...].contiguous()
-        # [N, C, Z, Y, X]
-        return self.calc_dice_loss(pred, target)
-
     def forward(self, pred: Tensor, target: Tensor, *args, **kwargs):
-        # pred: [N, C, Z, Y, X]
-        assert (pred.shape[-3:] == target.shape[-3:]), \
-            f"The [Z, Y, X] of pred {pred.shape} and target {target.shape} must be the same."
+        """
+        Calculates the standard Dice Loss.
 
-        if self.batch_z is not None:
-            batch_loss = []
-            
-            for z in range(0, pred.shape[-3], self.batch_z):
-                batch_z_loss = self.forward_one_patch(
-                    pred=pred[..., z : z + self.batch_z, :, :], 
-                    target=target[..., z : z + self.batch_z, :, :], 
-                    *args, **kwargs
-                )
-                batch_loss.append(batch_z_loss)
+        Args:
+            pred (Tensor): The prediction tensor (logits or probabilities).
+                           Shape: (N, C, Z, Y, X).
+            target (Tensor): The ground truth tensor.
+                             Shape: (N, Z, Y, X) [Integer class indices]
+                             or (N, 1, Z, Y, X) [Integer class indices]
+                             or (N, C, Z, Y, X) [One-hot encoded].
 
-            # [N, C, Z, Y, X]
-            loss = torch.concatenate(batch_loss, dim=-3)
+        Returns:
+            Tensor: The calculated Dice loss (scalar).
+        """
+        # Apply Softmax if requested (assumes pred are logits)
+        if self.use_softmax:
+            pred = torch.softmax(pred, dim=1)
 
+        # --- Input Validation and Preparation ---
+        pred_spatial_shape = pred.shape[2:]
+        target_spatial_shape = target.shape[-3:]
+        if pred_spatial_shape != target_spatial_shape:
+             raise ValueError(f"Spatial dimensions of pred {pred.shape} and target {target.shape} must match.")
+
+        num_classes = pred.shape[1]
+
+        # Convert target to one-hot if it's not already
+        if target.ndim == pred.ndim - 1: # Shape (N, Z, Y, X)
+            target = target.unsqueeze(1) # Add channel dim: (N, 1, Z, Y, X)
+
+        if target.shape[1] == 1 and pred.shape[1] > 1: # Shape (N, 1, Z, Y, X) with class indices
+             target_one_hot = self._expand_onehot_labels_dice_3D(pred, target.squeeze(1))
+        elif target.shape[1] == num_classes: # Already one-hot
+             target_one_hot = target
         else:
-            # [N, C, Z, Y, X]
-            loss = self.forward_one_patch(pred, target, *args, **kwargs)
+             raise ValueError(f"Target shape {target.shape} is not compatible with pred shape {pred.shape}")
 
-        if self.smooth_z_ratio is not None:
-            z_weights = self.get_smooth_z_weight(target) # [N, Z]
-            # self.visualize_z_loss(target, loss, z_weights) # HACK debug
-            weights = z_weights.view(z_weights.size(0), 1, z_weights.size(1), 1, 1).expand_as(loss)
-            loss = (loss * weights)
-        
-        return loss.mean()
+        assert pred.shape == target_one_hot.shape, "Internal error: pred and target_one_hot shapes mismatch."
+
+        N, C = pred.shape[:2]
+
+        # --- Class Masking ---
+        # Determine which classes to include in the loss calculation
+        class_mask = torch.ones(C, dtype=torch.bool, device=pred.device)
+        if self.ignore_1st_index:
+            if C == 0: return torch.tensor(0.0, device=pred.device, requires_grad=True) # No classes left
+            class_mask[0] = False
+        if self.ignore_index is not None:
+            if 0 <= self.ignore_index < C:
+                class_mask[self.ignore_index] = False
+            # else: Optional: Warn if ignore_index is out of bounds
+
+        # Select the relevant slices of pred and target based on the mask
+        pred_masked = pred[:, class_mask, ...]
+        target_masked = target_one_hot[:, class_mask, ...]
+
+        # Check if any classes remain after masking
+        num_valid_classes = pred_masked.shape[1]
+        if num_valid_classes == 0:
+            # print("Warning: No classes left after applying ignore_1st_index and ignore_index.")
+            return torch.tensor(0.0, device=pred.device, requires_grad=True) # Return 0 loss if no classes are considered
+
+        # --- Dice Calculation ---
+        # Reduce over spatial dimensions (Z, Y, X)
+        dims_to_reduce = tuple(range(2, pred_masked.ndim))
+
+        intersection = torch.sum(pred_masked * target_masked, dim=dims_to_reduce) # Shape: [N, num_valid_classes]
+
+        if self.squared_pred:
+            pred_sum = torch.sum(pred_masked * pred_masked, dim=dims_to_reduce)
+            target_sum = torch.sum(target_masked * target_masked, dim=dims_to_reduce)
+        else: # Use sum of probabilities/binary values
+            pred_sum = torch.sum(pred_masked, dim=dims_to_reduce)
+            target_sum = torch.sum(target_masked, dim=dims_to_reduce)
+
+        numerator = 2.0 * intersection
+        denominator = pred_sum + target_sum + self.eps
+
+        dice_coeff_per_class = numerator / denominator # Shape: [N, num_valid_classes]
+        loss_per_class = 1.0 - dice_coeff_per_class # Shape: [N, num_valid_classes]
+
+        # --- NOTE Averaging ---
+        # Average loss across the valid classes for each sample
+        # Handle cases where a class might have zero ground truth and zero prediction correctly (dice_coeff=1, loss=0)
+        # The epsilon handles division by zero, but ensure logic is sound.
+        loss_per_sample = loss_per_class.mean(dim=1) # Average over valid classes, Shape: [N]=
+        # Average loss across the batch
+        final_loss = loss_per_sample.mean() # Average over batch, Shape: scalar
+
+        return final_loss
 
 
 class CrossEntropyLoss_3D(torch.nn.CrossEntropyLoss):
