@@ -134,7 +134,7 @@ class CellCounter(EncoderDecoder):
 
 class CellCounterLite(mgam_Seg2D_Lite):
     def __init__(self, amplify:int, *args, **kwargs):
-        super().__init__(auto_activate_after_logits=False, *args, **kwargs)
+        super().__init__(*args, **kwargs)
         self.amplify = amplify
     
     def predict(self, inputs:Tensor, data_samples:Sequence[BaseDataElement]|None=None) -> Sequence[BaseDataElement]:

@@ -21,7 +21,6 @@ class mgam_Seg_Lite(BaseModel):
                  gt_sem_seg_key:str='gt_sem_seg',
                  use_half:bool=False,
                  binary_segment_threshold:float|None=None,
-                 auto_activate_after_logits:bool=False,
                  inference_PatchSize:tuple|None=None,
                  inference_PatchStride:tuple|None=None,
                  inference_PatchAccumulateDevice:str='cuda',
@@ -39,7 +38,6 @@ class mgam_Seg_Lite(BaseModel):
             gt_sem_seg_key (str): ground truth分割掩码的键名，默认为'gt_sem_seg'。
             use_half (bool): 是否使用半精度模型，默认为False。
             binary_segment_threshold (float | None): 二分类分割的阈值。如果模型输出是单通道 (二分类)，则此参数必须提供；若模型输出是多通道(多分类)，则此参数必须为None。
-            auto_activate_after_logits (bool): 是否在logits后自动激活，单通道自动应用sigmoid，多通道自动应用softmax。默认为False。
             inference_PatchSize (tuple | None): 推理时滑动窗口的大小，如果为None，则不使用滑动窗口推理。默认为None。
             inference_PatchStride (tuple | None): 推理时滑动窗口的步长，如果为None，则不使用滑动窗口推理。默认为None。
             inference_PatchAccumulateDevice (str): 推理时滑动窗口结果累加矩阵的存储位置，可以是'cpu'或'cuda'。当处理大图像数据时，选择'cpu'可以避免GPU内存不足。默认为'cuda'。
@@ -51,7 +49,6 @@ class mgam_Seg_Lite(BaseModel):
         self.gt_sem_seg_key = gt_sem_seg_key
         self.use_half = use_half
         self.binary_segment_threshold = binary_segment_threshold
-        self.auto_activate_after_logits = auto_activate_after_logits
         self.inference_PatchSize = inference_PatchSize
         self.inference_PatchStride = inference_PatchStride
         self.inference_PatchAccumulateDevice = inference_PatchAccumulateDevice
