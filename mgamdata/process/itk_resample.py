@@ -41,7 +41,7 @@ def resample_one_sample(args) -> tuple[sitk.Image, sitk.Image|None] | None:
     potential_target_image_path = target_image_path.replace(".nii.gz", ".mha").replace(".nii", ".mha")
     potential_target_label_path = target_label_path.replace(".nii.gz", ".mha").replace(".nii", ".mha")
     if os.path.exists(potential_target_image_path) and (not os.path.exists(label_itk_path) or os.path.exists(potential_target_label_path)):
-         print(f"Skipping {itk_name}, output exists.")
+         tqdm.write(f"Skipping {itk_name}, output exists.")
          return None
 
     # 读取
@@ -51,9 +51,9 @@ def resample_one_sample(args) -> tuple[sitk.Image, sitk.Image|None] | None:
         if os.path.exists(label_itk_path):
             label_itk = sitk.ReadImage(label_itk_path)
         else:
-            print(f"Warning: Label file not found for {image_itk_path}, skipping label resampling.")
+            tqdm.write(f"Warning: Label file not found for {image_itk_path}, skipping label resampling.")
     except Exception as e:
-        print(f"Error reading {image_itk_path} or {label_itk_path}: {e}")
+        tqdm.write(f"Error reading {image_itk_path} or {label_itk_path}: {e}")
         return None
 
     # --- 阶段一：Spacing 重采样 ---
@@ -69,13 +69,10 @@ def resample_one_sample(args) -> tuple[sitk.Image, sitk.Image|None] | None:
     label_after_spacing = label_itk
 
     if needs_spacing_resample and not np.allclose(effective_spacing, orig_spacing):
-        print(f"Resampling {itk_name} to spacing {effective_spacing}...")
+        tqdm.write(f"Resampling {itk_name} to spacing {effective_spacing}...")
         image_after_spacing = sitk_resample_to_spacing(image_itk, effective_spacing, "image")
         if label_itk:
             label_after_spacing = sitk_resample_to_spacing(label_itk, effective_spacing, "label")
-    else:
-        print(f"Skipping spacing resampling for {itk_name} (no change needed).")
-
 
     # --- 阶段二：Size 重采样 ---
     current_size = image_after_spacing.GetSize()
@@ -90,12 +87,10 @@ def resample_one_sample(args) -> tuple[sitk.Image, sitk.Image|None] | None:
     label_resampled = label_after_spacing
 
     if needs_size_resample and effective_size != list(current_size):
-        print(f"Resampling {itk_name} to size {effective_size}...")
+        tqdm.write(f"Resampling {itk_name} to size {effective_size}...")
         image_resampled = sitk_resample_to_size(image_after_spacing, effective_size, "image")
         if label_itk and label_after_spacing: # 确保 label 存在且经过了第一阶段
              label_resampled = sitk_resample_to_size(label_after_spacing, effective_size, "label")
-    else:
-        print(f"Skipping size resampling for {itk_name} (no change needed).")
 
     # 写入
     target_image_path = potential_target_image_path
@@ -105,7 +100,7 @@ def resample_one_sample(args) -> tuple[sitk.Image, sitk.Image|None] | None:
         if label_itk and label_resampled:
             sitk.WriteImage(label_resampled, target_label_path, useCompression=True)
     except Exception as e:
-        print(f"Error writing {target_image_path} or {target_label_path}: {e}")
+        tqdm.write(f"Error writing {target_image_path} or {target_label_path}: {e}")
         return None
 
     return image_resampled, label_resampled if label_itk else None
@@ -150,11 +145,11 @@ def resample_standard_dataset(
             for p in image_itk_paths
         ]
     else:
-        print(f"Warning: Source image folder not found: {source_image_folder}")
+        tqdm.write(f"Warning: Source image folder not found: {source_image_folder}")
         return
 
     if not image_itk_paths:
-        print("No image files found to process.")
+        tqdm.write("No image files found to process.")
         return
 
     task_list = [
@@ -237,7 +232,7 @@ def main():
 
         # 检查是否至少指定了一个重采样操作
         if all(s == -1 for s in target_spacing) and all(sz == -1 for sz in target_size):
-             print("Warning: No resampling specified (all spacing and size values are -1).")
+             tqdm.write("Warning: No resampling specified (all spacing and size values are -1).")
              return
 
     except ValueError as e:
