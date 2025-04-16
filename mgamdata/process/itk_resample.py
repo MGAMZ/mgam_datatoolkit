@@ -57,7 +57,7 @@ def resample_one_sample(args) -> tuple[sitk.Image, sitk.Image|None] | None:
         return None
 
     # --- 阶段一：Spacing 重采样 ---
-    orig_spacing = image_itk.GetSpacing()
+    orig_spacing = image_itk.GetSpacing()[::-1]
     effective_spacing = list(orig_spacing)
     needs_spacing_resample = False
     for i in range(img_dim):
@@ -75,7 +75,7 @@ def resample_one_sample(args) -> tuple[sitk.Image, sitk.Image|None] | None:
             label_after_spacing = sitk_resample_to_spacing(label_itk, effective_spacing, "label")
 
     # --- 阶段二：Size 重采样 ---
-    current_size = image_after_spacing.GetSize()
+    current_size = image_after_spacing.GetSize()[::-1]
     effective_size = list(current_size)
     needs_size_resample = False
     for i in range(img_dim):
