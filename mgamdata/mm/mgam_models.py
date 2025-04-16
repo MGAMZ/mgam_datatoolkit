@@ -1,5 +1,5 @@
-from abc import abstractmethod
 import pdb
+from abc import abstractmethod
 from typing_extensions import Sequence
 
 import torch
@@ -200,17 +200,7 @@ class mgam_Seg2D_Lite(mgam_Seg_Lite):
         Returns:
             Tensor: Output tensor from backbone
         """
-        x = self.backbone(inputs)
-        if not self.auto_activate_after_logits:
-            return x
-        
-        N, C, H, W = x.shape
-        if C == 1:
-            return F.sigmoid(x)
-        elif C > 1:
-            return F.softmax(x, dim=1)
-        else:
-            raise ValueError(f"输出通道数({C})必须大于0")
+        return self.backbone(inputs)
 
     @torch.inference_mode()
     def inference(self, inputs: Tensor, data_samples:Sequence[BaseDataElement]|None=None) -> Tensor:
@@ -393,17 +383,7 @@ class mgam_Seg3D_Lite(mgam_Seg_Lite):
         Returns:
             Tensor: Output tensor from backbone
         """
-        x = self.backbone(inputs)
-        if not self.auto_activate_after_logits:
-            return x
-        
-        N, C, Z, Y, X = x.shape
-        if C == 1:
-            return F.sigmoid(x)
-        elif C > 1:
-            return F.softmax(x, dim=1)
-        else:
-            raise ValueError(f"输出通道数({C})必须大于0")
+        return self.backbone(inputs)
 
     @torch.inference_mode()
     def inference(self, inputs: Tensor, data_samples:Sequence[BaseDataElement]|None=None) -> Tensor:
