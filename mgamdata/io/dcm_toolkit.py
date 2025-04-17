@@ -21,6 +21,7 @@ def read_dcm_as_sitk(data_directory: str) -> tuple[list[pydicom.FileDataset]|Non
     series_file_names = sitk.ImageSeriesReader.GetGDCMSeriesFileNames(data_directory, series_IDs[0], useSeriesDetails=True)
     series_reader = sitk.ImageSeriesReader()
     series_reader.SetFileNames(series_file_names)
+    series_reader.SetOutputPixelType(sitk.sitkInt16)
 
     # Configure the reader to load all of the DICOM tags (public+private):
     # By default tags are not loaded (saves time).

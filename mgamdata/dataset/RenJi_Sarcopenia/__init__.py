@@ -30,12 +30,12 @@ CLASS_MAP_ABBR = {
 # 后分割后的类定义
 CLASS_MAP_AFTER_POSTSEG = {
     0: 'background',
-    1: '腰大肌-肌肉',
-    2: '其他骨骼肌-肌肉',
-    3: '皮下脂肪',
-    4: '内脏脂肪',
-    5: '腰大肌-脂肪',
-    6: '其他骨骼肌-脂肪',
+    1: 'PsoasMajor-Muscle',
+    2: 'OtherSkeletal-Muscle',
+    3: 'Subcutaneous Fat',
+    4: 'Visceral Fat',
+    5: 'PsoasMajor-Fat',
+    6: 'OtherSkeletal-Fat',
 }
 # 标签颜色映射
 LABEL_COLOR_DICT = {

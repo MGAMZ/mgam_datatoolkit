@@ -10,7 +10,10 @@ import SimpleITK as sitk
 from torch import Tensor
 
 from mmcv.transforms import Compose
-from mmseg.apis.inference import init_model, _preprare_data
+from mmengine.config import Config
+from mmengine.registry import MODELS
+from mmengine.runner import load_checkpoint
+from mmseg.apis.inference import _preprare_data
 
 from ..io.sitk_toolkit import LoadDcmAsSitkImage, sitk_resample_to_size, sitk_resample_to_spacing
 
@@ -21,9 +24,10 @@ INFERENCER_WORK_DIR = "/fileser51/zhangyiqin.sx/mmseg/work_dirs_inferencer/"
 class Inferencer:
     def __init__(self, cfg_path, ckpt_path, allow_tqdm:bool=True):
         self.allow_tqdm = allow_tqdm
-        self.model = init_model(cfg_path, ckpt_path)
-        pipeline_without_loading = self.model.cfg.test_pipeline[1:] # type: ignore
-        self.pipeline = Compose(pipeline_without_loading)
+        cfg = Config.fromfile(cfg_path)
+        self.model = MODELS.build(cfg.model)
+        load_checkpoint(self.model, ckpt_path, map_location='cpu')
+        self.pipeline = Compose(cfg.test_pipeline)
         self.model.eval()
         self.model.cuda()
         self.model.requires_grad_(False)

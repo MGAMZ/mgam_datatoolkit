@@ -133,9 +133,11 @@ class mgam_SeriesVolume(mgam_BaseSegDataset):
 class mgam_2D_MhaVolumeSlices(mgam_SeriesVolume):
     def sample_iterator(self) -> Generator[tuple[str, str], None, None]:
         for series in self._split():
-            for sample in os.listdir(os.path.join(self.data_root, 
-                                                  'label' if self.mode=='sup' else 'image',
-                                                  series)):
+            series_folder = os.path.join(self.data_root, 'label' if self.mode=='sup' else 'image', series)
+            if not os.path.exists(series_folder):
+                print_log(f"{series} not found.", MMLogger.get_current_instance(), logging.WARN)
+                continue
+            for sample in os.listdir(series_folder):
                 if sample.endswith(self.img_suffix):
                     yield (os.path.join(self.data_root, 'image', series, sample),
                            os.path.join(self.data_root, 'label', series, sample))

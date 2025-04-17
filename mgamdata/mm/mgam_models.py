@@ -42,7 +42,6 @@ class mgam_Seg_Lite(BaseModel):
             inference_PatchStride (tuple | None): 推理时滑动窗口的步长，如果为None，则不使用滑动窗口推理。默认为None。
             inference_PatchAccumulateDevice (str): 推理时滑动窗口结果累加矩阵的存储位置，可以是'cpu'或'cuda'。当处理大图像数据时，选择'cpu'可以避免GPU内存不足。默认为'cuda'。
         """
-        
         super().__init__(*args, **kwargs)
         self.backbone = MODELS.build(backbone)
         self.criterion = [MODELS.build(c) for c in criterion] if isinstance(criterion, list) else [MODELS.build(criterion)]

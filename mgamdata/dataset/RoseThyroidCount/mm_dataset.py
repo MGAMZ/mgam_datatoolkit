@@ -14,27 +14,20 @@ class RoseThyroidCount_base:
 
 
 class RoseThyroidCount_Precrop_Npz(RoseThyroidCount_base, mgam_Standard_Patched_Npz):
-    TEST_SLIDE_UID = ['fd808134e5f32fb1eed8b74afefdf8205bfa1503',
-                      'ad935fb82375b9c273765a20f71d9be2c9f60dfe',
-                      '41e0bde3dced7b154e098100e9a8a368f03c07c4',
-                      '4980726489a59752a823681c2bfeb4bf25e416b6',
-                      'ae6509368ead1d0352ccbe57d9b96468c25d94c1']
-    SPLIT_RATIO = None
+    SPLIT_RATIO = [0.7, 0.1, 0.2]
 
     def _split(self):
-        all_series = [i
-                      for i in os.listdir(self.data_root)
-                      if os.path.isdir(os.path.join(self.data_root, i))]
-        assert all([slide in all_series for slide in self.TEST_SLIDE_UID]), f"Missing Test Slide {self.TEST_SLIDE_UID}."
-        for slide in self.TEST_SLIDE_UID:
-            all_series.remove(slide)
-
-        if self.split == "test" or self.split == "val":
-            return self.TEST_SLIDE_UID
-        elif self.split == "train":
-            return all_series
+        slide_meta = json.load(open(os.path.join(self.data_root, "slide_stats.json"), 'r'))['slide_details']
+        slide_ids = list(slide_meta.keys())
+        
+        if self.split == 'train':
+            return slide_ids[:int(len(slide_ids) * self.SPLIT_RATIO[0])]
+        elif self.split == 'val':
+            return slide_ids[int(len(slide_ids) * self.SPLIT_RATIO[0]):int(len(slide_ids) * (self.SPLIT_RATIO[0] + self.SPLIT_RATIO[1]))]
+        elif self.split == 'test':
+            return slide_ids[int(len(slide_ids) * (self.SPLIT_RATIO[0] + self.SPLIT_RATIO[1])):]
         else:
-            raise RuntimeError(f"Unsupported split: {self.split}")
+            raise ValueError(f"Invalid split: {self.split}. Expected one of ['train', 'val', 'test']")
 
 
 class LoadRoseThyroidSampleFromNpz(BaseTransform):
@@ -69,11 +62,7 @@ class LoadRoseThyroidSampleFromNpz(BaseTransform):
                 results["ori_shape"] = results["img"].shape[:-1]
 
             if "anno" in self.load_type:
-                points = str(sample["point_map"])
-                if len(points) > 0:
-                    results["points"] = np.array(json.loads(str(sample["point_map"])))
-                else:
-                    results["points"] = np.array([])
+                results["points"] = sample["point_map"]
                 results["gt_label"] = sample["clustered_cls"]
                 
             return results
