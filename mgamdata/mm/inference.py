@@ -22,15 +22,18 @@ INFERENCER_WORK_DIR = "/fileser51/zhangyiqin.sx/mmseg/work_dirs_inferencer/"
 
 
 class Inferencer:
-    def __init__(self, cfg_path, ckpt_path, allow_tqdm:bool=True):
+    def __init__(self, cfg_path, ckpt_path, fp16:bool=False, allow_tqdm:bool=True):
+        self.fp16 = fp16
         self.allow_tqdm = allow_tqdm
-        cfg = Config.fromfile(cfg_path)
-        self.model = MODELS.build(cfg.model)
+        self.cfg = Config.fromfile(cfg_path)
+        self.model = MODELS.build(self.cfg.model)
         load_checkpoint(self.model, ckpt_path, map_location='cpu')
-        self.pipeline = Compose(cfg.test_pipeline)
+        self.pipeline = Compose(self.cfg.test_pipeline)
         self.model.eval()
         self.model.cuda()
         self.model.requires_grad_(False)
+        if fp16:
+            self.model.half()
 
     @abstractmethod
     @torch.inference_mode()
@@ -98,7 +101,7 @@ class SegInferencer(Inferencer):
 class Inferencer_2D(SegInferencer):
     @torch.inference_mode()
     def Inference_FromNDArray(self, image_array:np.ndarray) -> Tensor:
-        assert image_array.ndim == 3, "Input image must be 3D, got: {}.".format(image_array.shape)
+        assert image_array.ndim == 3, "Input image must be (Z,Y,X), got: {}.".format(image_array.shape)
         image_array = [i for i in image_array]
         data, is_batch = self._preprocess(image_array)
 

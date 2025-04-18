@@ -76,7 +76,6 @@ class PointReader:
             self.ann = pd.DataFrame(columns=["序列编号", "影像结果"])
         else:
             self.ann = pd.concat(self.ann, ignore_index=True)
-            pdb.set_trace()
             # 如果有重复的序列编号，保留所有标签
             # NOTE 这一步会aggregate影像结果为列表
             # 在groupby之前处理NaN值，避免它们被错误地聚合

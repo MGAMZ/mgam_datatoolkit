@@ -958,7 +958,9 @@ class SarcopeniaL3Inferencer(Inferencer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.model: SarcopeniaL3Locating
-        self.size:list = self.model.cfg.size
+        self.size:list = self.cfg.size
+        self.window_left = self.cfg.wl - self.cfg.ww/2
+        self.window_right = self.cfg.wl + self.cfg.ww/2
     
     def _resize(self, Volume_arr:np.ndarray):
         return np.stack([cv2.resize(p, self.size[-2:], interpolation=cv2.INTER_NEAREST_EXACT) 
@@ -966,19 +968,22 @@ class SarcopeniaL3Inferencer(Inferencer):
 
     @torch.inference_mode()
     def Inference_FromTensor(self, image_tensor:torch.Tensor):
-        if isinstance(image_tensor, Sequence):
-            image_tensor = torch.stack(image_tensor)
+        assert image_tensor.ndim == 5, f"输入图像必须是5维的，但得到的是 {image_tensor.shape}。"
+        if self.fp16:
+            image_tensor = image_tensor.half()
         L3_logits = self.model.slide_inference(image_tensor.cuda(), batch_img_metas=[{"img_shape": image_tensor.shape[2:]}])
         L3_pred = torch.sigmoid(L3_logits) > self.model.decode_head.threshold
         return L3_pred # [B, Z]
 
-    def Inference_FromNDArray(self, image_array) -> Tensor:
+    def Inference_FromNDArray(self, image_array:np.ndarray) -> np.ndarray:
         # image_array: [Z, Y, X]
         self.model: SarcopeniaL3Locating
         assert image_array.ndim == 3, f"输入图像必须是3维的，但得到的是 {image_array.shape}。"
+        
         image_array = self._resize(image_array)
-        data, is_batch = self._preprocess(image_array)
-        L3_pred = self.Inference_FromTensor(data['inputs']).cuda()
-        return L3_pred[0] # [Z]
+        image_array = (np.clip(image_array, self.window_left, self.window_right) - self.window_left) / self.cfg.ww
+        image_tensor = torch.from_numpy(image_array.astype(np.float32))
+        L3_pred = self.Inference_FromTensor(image_tensor[None,None]) # [B, C, Z, Y, X]
+        return L3_pred[0].cpu().numpy() # [Z]
     
 
