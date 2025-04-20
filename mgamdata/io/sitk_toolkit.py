@@ -18,7 +18,7 @@ PIXEL_TYPE = lambda field: sitk.sitkInt16 if field == "image" else sitk.sitkUInt
 INTERPOLATOR = lambda field: sitk.sitkBSpline3 if field == "image" else sitk.sitkNearestNeighbor
 
 
-def sitk_resample_to_spacing(mha: sitk.Image, 
+def sitk_resample_to_spacing(mha:sitk.Image, 
                              spacing: list[float], 
                              field: Literal["image", "label"]):
     """改进后的重采样方法。

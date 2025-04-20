@@ -48,6 +48,8 @@ def process_single_series(series_uid,
     try:
         image = sitk.ReadImage(image_path)
         label = sitk.ReadImage(label_path)
+        image = sitk.DICOMOrient(image, 'LPI')
+        label = sitk.DICOMOrient(label, 'LPI')
     except Exception as e:
         print(f"Error reading files for SeriesUID {series_uid}: {e}")
         return False

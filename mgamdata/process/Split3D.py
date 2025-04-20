@@ -9,8 +9,9 @@ import multiprocessing
 
 
 def load_mha(file_path: str) -> np.ndarray:
-    """加载MHA文件并返回numpy数组。"""
-    return sitk.GetArrayFromImage(sitk.ReadImage(file_path))
+    itk = sitk.ReadImage(file_path)
+    itk = sitk.DICOMOrient(itk, 'LPI')
+    return sitk.GetArrayFromImage(itk)
 
 
 def create_sliding_windows(

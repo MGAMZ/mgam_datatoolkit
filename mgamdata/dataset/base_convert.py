@@ -80,10 +80,12 @@ class StandardFileFormatter:
         if input_label_mha is not None and os.path.exists(label_path):
             input_label_mha = sitk_resample_to_image(input_label_mha, input_image_mha, "label")
 
+        input_image_mha = sitk.DICOMOrient(input_image_mha, 'LPI')
         sitk.WriteImage(input_image_mha, output_image_mha_path, useCompression=True)
         if input_label_mha is not None and os.path.exists(label_path):
             assert (input_image_mha.GetSize() == input_label_mha.GetSize()), \
                 f"Image {input_image_mha.GetSize()} and label {input_label_mha.GetSize()} size mismatch."
+            input_label_mha = sitk.DICOMOrient(input_label_mha, 'LPI')
             sitk.WriteImage(input_label_mha, output_label_mha_path, useCompression=True)
         
         return convertion_log

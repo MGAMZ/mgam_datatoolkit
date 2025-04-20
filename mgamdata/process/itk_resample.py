@@ -92,6 +92,11 @@ def resample_one_sample(args) -> tuple[sitk.Image, sitk.Image|None] | None:
         if label_itk and label_after_spacing: # 确保 label 存在且经过了第一阶段
              label_resampled = sitk_resample_to_size(label_after_spacing, effective_size, "label")
 
+    # --- 阶段三：方向重采样 ---
+    image_resampled = sitk.DICOMOrient(image_resampled, 'LPI')
+    if label_itk and label_resampled:
+        label_resampled = sitk.DICOMOrient(label_resampled, 'LPI')
+
     # 写入
     target_image_path = potential_target_image_path
     target_label_path = potential_target_label_path

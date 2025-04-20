@@ -49,6 +49,8 @@ def convert_one_case(args):
         input_image_mha = sitk_resample_to_size(input_image_mha, size, 'image')
         merged_itk = sitk_resample_to_size(merged_itk, size, 'label')
     
+    input_image_mha = sitk.DICOMOrient(input_image_mha, 'LPI')
+    merged_itk = sitk.DICOMOrient(merged_itk, 'LPI')
     sitk.WriteImage(input_image_mha, output_image_mha_path, useCompression=True)
     sitk.WriteImage(merged_itk, output_anno_mha_path, useCompression=True)
 

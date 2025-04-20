@@ -98,6 +98,7 @@ class LoadImageFromMHA(LoadFromMHA):
     def transform(self, results):
         img_path = results["img_path"]
         img_mha = sitk.ReadImage(img_path)
+        img_mha = sitk.DICOMOrient(img_mha, "LPI")
         img = self._process_mha(img_mha, "image")
 
         results["img"] = img  # output: [Z, Y, X]
@@ -122,6 +123,7 @@ class LoadMaskFromMHA(LoadFromMHA):
         if "seg_map_path" in results:
             mask_path = results["seg_map_path"]
             mask_mha = sitk.ReadImage(mask_path)
+            mask_mha = sitk.DICOMOrient(mask_mha, "LPI")
             mask = self._process_mha(mask_mha, "mask")
             if results.get("label_map", None) is not None:
                 mask_copy = mask.copy()
