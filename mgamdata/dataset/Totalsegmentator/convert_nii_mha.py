@@ -1,16 +1,27 @@
 import os
 import argparse
 import multiprocessing
-from typing import Sequence
+from typing_extensions import Sequence
 from tqdm import tqdm
-
-import numpy as np
 import SimpleITK as sitk
 
-from mgamdata.io.nii_toolkit import convert_nii_sitk, merge_masks
-from mgamdata.io.sitk_toolkit import sitk_resample_to_spacing, sitk_resample_to_size
+from mgamdata.io.sitk_toolkit import sitk_resample_to_spacing, sitk_resample_to_size, nii_to_sitk, merge_masks
 from mgamdata.dataset.Totalsegmentator.meta import CLASS_INDEX_MAP
 
+
+
+def merge_one_case_segmentations(corresponding_itk_image:sitk.Image, 
+                                 case_path: str):
+    segmentation_path = os.path.join(case_path, 'segmentations')
+    idx_sorted_paths = sorted(
+        [os.path.join(segmentation_path, file)
+         for file in os.listdir(segmentation_path)
+         if file.endswith('.nii.gz')],
+        key=lambda x: CLASS_INDEX_MAP[os.path.basename(x)[:-7]]
+    )
+    merged_itk = merge_masks(idx_sorted_paths)
+    merged_itk.CopyInformation(corresponding_itk_image)
+    return merged_itk
 
 
 def convert_one_case(args):
@@ -19,13 +30,14 @@ def convert_one_case(args):
     input_image_nii_path = os.path.join(series_input_folder, 'ct.nii.gz')
     output_image_mha_path = os.path.join(series_output_folder, 'image', f'{sample_id}.mha')
     output_anno_mha_path = os.path.join(series_output_folder, 'label', f'{sample_id}.mha')
-    os.makedirs(series_output_folder, exist_ok=True)
+    os.makedirs(os.path.join(series_output_folder, 'image'), exist_ok=True)
+    os.makedirs(os.path.join(series_output_folder, 'label'), exist_ok=True)
     if os.path.exists(output_image_mha_path) and os.path.exists(output_anno_mha_path):
         return
     
     # 原始扫描转换为SimpleITK格式并保存
     # 类分离的标注文件合并后保存
-    input_image_mha = convert_nii_sitk(input_image_nii_path, nii_fdata_order='zyx', dtype=np.int16) # type: ignore
+    input_image_mha = nii_to_sitk(input_image_nii_path, "image")
     merged_itk = merge_one_case_segmentations(input_image_mha, series_input_folder)
     
     if spacing is not None:
@@ -39,22 +51,6 @@ def convert_one_case(args):
     
     sitk.WriteImage(input_image_mha, output_image_mha_path, useCompression=True)
     sitk.WriteImage(merged_itk, output_anno_mha_path, useCompression=True)
-
-
-def merge_one_case_segmentations(corresponding_itk_image:sitk.Image, 
-                                 case_path: str):
-    segmentation_path = os.path.join(case_path, 'segmentations')
-    # 融合独立的annotation
-    merged_array = merge_masks(
-        nii_paths=[os.path.join(segmentation_path, file)
-                   for file in os.listdir(segmentation_path)
-                   if file.endswith('.nii.gz')],
-        class_index_map=CLASS_INDEX_MAP,
-        dtype=np.uint8
-    )
-    merged_itk = sitk.GetImageFromArray(merged_array)
-    merged_itk.CopyInformation(corresponding_itk_image)
-    return merged_itk
 
 
 def convert_and_save_nii_to_mha(input_dir:str,

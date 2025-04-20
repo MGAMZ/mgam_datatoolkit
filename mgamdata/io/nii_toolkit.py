@@ -1,6 +1,7 @@
 import os
 import pdb
-from typing_extensions import Literal
+from typing_extensions import Literal, deprecated
+deprecated("`nii_toolkit` has been deprecated, use `sitk_toolkit` instead.")
 
 import numpy as np
 import nibabel as nib

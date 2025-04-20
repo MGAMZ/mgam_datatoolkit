@@ -413,7 +413,7 @@ def LoadMhaAnno(mha_root, patient, ori_spacing, out_spacing, resampled_size):
     return anno_with_class_channel, anno_without_class_channel
 
 
-def merge_masks(mha_paths: list[str], class_index_map: dict[str, int], dtype=np.uint8) -> sitk.Image:
+def merge_masks(mhas: list[str]|list[sitk.Image], dtype=np.uint8) -> sitk.Image:
     """
     将所有类的掩码合并到一个掩码中并返回SimpleITK图像。
 
@@ -425,21 +425,20 @@ def merge_masks(mha_paths: list[str], class_index_map: dict[str, int], dtype=np.
     merged_mask = None
 
     # 遍历mha文件路径列表中的每个文件
-    for seg_file_path in mha_paths:
-        if os.path.isfile(seg_file_path):
-            class_name = os.path.basename(seg_file_path)[:-4]
-            class_index = class_index_map.get(class_name)
-            if class_index is None:
-                raise ValueError(f"Class name {class_name} not found in class_index_map: {seg_file_path}")
-
-            # 读取掩码文件
-            mask = sitk.ReadImage(seg_file_path)
-            mask_array = sitk.GetArrayFromImage(mask)
-            # 初始化合并掩码
-            if merged_mask is None:
-                merged_mask = np.zeros_like(mask_array)
-            # 将当前类的掩码添加到合并掩码中
-            merged_mask[mask_array == 1] = class_index
+    for class_index, mha in enumerate(mhas):
+        if isinstance(mha, str) and os.path.isfile(mha):
+            mask = sitk.ReadImage(mha)
+        elif isinstance(mha, sitk.Image):
+            mask = mha
+        else:
+            raise NotImplementedError(f"Unsupported type: {type(mha)}")
+        
+        mask_array = sitk.GetArrayFromImage(mask)
+        if merged_mask is None:
+            merged_mask = np.zeros_like(mask_array)
+        if np.any(merged_mask[mask_array == 1]):
+            print(f"Warning: Overlapping masks detected for class {class_index + 1}.")
+        merged_mask[mask_array == 1] = class_index + 1
 
     if merged_mask is None:
         raise ValueError("No mask found in the provided paths")
@@ -447,7 +446,6 @@ def merge_masks(mha_paths: list[str], class_index_map: dict[str, int], dtype=np.
     # 将合并后的掩码转换为SimpleITK图像
     merged_mask_image = sitk.GetImageFromArray(merged_mask.astype(dtype))
     merged_mask_image.CopyInformation(mask)
-
     return merged_mask_image
 
 
