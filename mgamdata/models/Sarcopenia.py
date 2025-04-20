@@ -16,6 +16,7 @@ from mmengine.model import BaseModel
 from mmengine.structures import BaseDataElement
 from mmengine.evaluator.metric import BaseMetric
 from mmengine.runner import Runner
+from ..mm.mmseg_PlugIn import IoUMetric_PerClass
 from ..mm.mmseg_Dev3D import (BaseDecodeHead_3D, Seg3DDataSample, Seg3DDataPreProcessor,
                               PixelShuffle3D, EncoderDecoder_3D, VolumeData)
 from ..mm.visualization import BaseViser, BaseVisHook
@@ -504,10 +505,24 @@ class gen_L3_label(BaseTransform):
             results['seg_fields'].append('gt_L3')
         
         elif 'gt_seg_map' in results:
-            results['gt_L3'] = np.any(results['gt_seg_map'], axis=(1,2))[None].astype(np.uint8)
+            results['gt_L3'] = np.any(results['gt_seg_map'], axis=(1,2))[None].astype(np.uint8) # pyright:ignore
             results['seg_fields'].append('gt_L3')
         
         return results
+
+
+class ForegroundSlicesMetric(IoUMetric_PerClass):
+    def process(self, data_batch: dict, data_samples: Sequence[dict]) -> None:
+        num_classes = len(self.dataset_meta['classes']) # pyright:ignore
+        for data_sample in data_samples:
+            pred_label:Tensor = data_sample['pred_sem_seg']['data'].squeeze()         # [Z, Y, X]
+            label:Tensor = data_sample['gt_sem_seg']['data'].squeeze().to(pred_label) # [Z, Y, X]
+            foreground_Zs = label.any(dim=(1,2)).argwhere()
+            pred_label = pred_label[foreground_Zs]
+            label = label[foreground_Zs]
+            batch_result = self.intersect_and_union(pred_label, label, num_classes, self.ignore_index)
+            self.results.append(batch_result)
+
 
 
 """ ----- Neural Models ----- """
@@ -954,6 +969,9 @@ class SarcopeniaL3Locating(EncoderDecoder_3D):
         return data_samples
 
 
+""" ----- Utils ----- """
+
+
 class SarcopeniaL3Inferencer(Inferencer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -985,5 +1003,5 @@ class SarcopeniaL3Inferencer(Inferencer):
         image_tensor = torch.from_numpy(image_array.astype(np.float32))
         L3_pred = self.Inference_FromTensor(image_tensor[None,None]) # [B, C, Z, Y, X]
         return L3_pred[0].cpu().numpy() # [Z]
-    
+
 
