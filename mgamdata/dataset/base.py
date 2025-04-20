@@ -135,7 +135,9 @@ class mgam_2D_MhaVolumeSlices(mgam_SeriesVolume):
         for series in self._split():
             series_folder = os.path.join(self.data_root, 'label' if self.mode=='sup' else 'image', series)
             if not os.path.exists(series_folder):
-                print_log(f"{series} not found.", MMLogger.get_current_instance(), logging.WARN)
+                print_log(f"{series} not found.\nFullPath: {series_folder}",
+                          MMLogger.get_current_instance(),
+                          logging.WARN)
                 continue
             for sample in os.listdir(series_folder):
                 if sample.endswith(self.img_suffix):
@@ -148,6 +150,11 @@ class mgam_SemiSup_3D_Mha(mgam_SeriesVolume):
         for series in self._split():
             image_mha_path = os.path.join(self.data_root, "image", series + ".mha")
             label_mha_path = os.path.join(self.data_root, "label", series + ".mha")
+            if not os.path.exists(image_mha_path):
+                print_log(f"{series} image mha file not found.\nFullPath: {image_mha_path}",
+                          MMLogger.get_current_instance(),
+                          logging.WARN)
+                continue
             yield (image_mha_path, label_mha_path)
 
 
@@ -176,7 +183,7 @@ class mgam_SemiSup_Precropped_Npz(mgam_SemiSup_3D_Mha):
             # Check usability.
             if self.mode == "sup" and series not in self.precrop_meta["anno_available"]:
                 continue
-            series_folder: str = os.path.join(self.data_root, series)
+            series_folder = os.path.join(self.data_root, series)
             try:
                 series_meta = orjson.loads(open(os.path.join(series_folder, "SeriesMeta.json"), "r").read())
             except FileNotFoundError:

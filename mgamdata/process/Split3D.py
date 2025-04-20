@@ -62,7 +62,7 @@ def sample_volume(args):
         (文件名, 采样数, 错误信息) 的元组
     """
     try:
-        image_path, label_path, output_dir, window_size, stride = args
+        image_path, label_path, output_dir, window_size, stride, ensure_slice_foreground = args
         # 加载图像和标签
         image = load_mha(image_path)
         label = load_mha(label_path)
@@ -81,7 +81,6 @@ def sample_volume(args):
         # 创建输出文件夹
         series_id = os.path.splitext(os.path.basename(image_path))[0]
         series_folder = os.path.join(output_dir, series_id)
-        os.makedirs(series_folder, exist_ok=True)
         
         # 生成滑动窗口
         image_windows = create_sliding_windows(image, window_size, stride)
@@ -96,7 +95,11 @@ def sample_volume(args):
         
         # 依次保存滑动窗口数据
         for idx, ((z_start, img_window), (_, label_window)) in enumerate(zip(image_windows, label_windows)):
+            if ensure_slice_foreground is True and label_window.any(axis=(1,2)).all().item() is False:
+                continue
+            
             # 保存npz
+            os.makedirs(series_folder, exist_ok=True)
             sample_name = f"{idx}.npz"
             save_path = os.path.join(series_folder, sample_name)
             np.savez_compressed(save_path, img=img_window, gt_seg_map=label_window)
@@ -119,20 +122,21 @@ def sample_volume(args):
         patch_shape = image_windows[0][1].shape if num_patches > 0 else None
         
         # 生成JSON文件 "SeriesMeta.json"
-        metadata_path = os.path.join(series_folder, "SeriesMeta.json")
-        with open(metadata_path, "w", encoding="utf-8") as f:
-            json.dump(
-                {
-                    "series_id": series_id,
-                    "shape": patch_shape,
-                    "num_patches": num_patches,
-                    "anno_available": anno_available,
-                    "class_within_patch": existed_classes,
-                    "cropped_center": cropped_center,
-                },
-                f,
-                indent=4
-            )
+        if anno_available is True:
+            metadata_path = os.path.join(series_folder, "SeriesMeta.json")
+            with open(metadata_path, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "series_id": series_id,
+                        "shape": patch_shape,
+                        "num_patches": num_patches,
+                        "anno_available": anno_available,
+                        "class_within_patch": existed_classes,
+                        "cropped_center": cropped_center,
+                    },
+                    f,
+                    indent=4
+                )
         
         return {
             os.path.basename(series_folder): {
@@ -143,7 +147,7 @@ def sample_volume(args):
         }
         
     except Exception as e:
-        return os.path.basename(image_path), 0, str(e)
+        return os.path.basename(image_path), str(e)
 
 
 def process_dataset(
@@ -152,7 +156,8 @@ def process_dataset(
     window_size: int,
     stride: int,
     use_mp: bool = False,
-    num_workers: int|None = None
+    num_workers: int|None = None,
+    ensure_slice_foreground: bool = False,
 ) -> None:
     """
     对 data_dir 下的 image/ 和 label/ 目录进行遍历，分别执行滑动窗口采样。
@@ -181,7 +186,7 @@ def process_dataset(
         if not os.path.exists(label_path):
             print(f"警告: 与 {img_file} 对应的标签文件不存在: {label_path}")
             continue
-        tasks.append((image_path, label_path, output_dir, window_size, stride))
+        tasks.append((image_path, label_path, output_dir, window_size, stride, ensure_slice_foreground))
     
     # 处理文件
     results = {}
@@ -193,10 +198,19 @@ def process_dataset(
                                total=len(tasks), 
                                desc="处理进度", 
                                dynamic_ncols=True):
-                results.update(result)
+                if isinstance(result, tuple):
+                    series_id, error = result
+                    print(f"处理 {series_id} 时发生错误: {error}")
+                else:
+                    results.update(result)
     else:
         for t in tqdm(tasks, desc="处理进度", dynamic_ncols=True):
-            results.update(sample_volume(t))
+            result = sample_volume(t)
+            if isinstance(result, tuple):
+                series_id, error = result
+                print(f"处理 {series_id} 时发生错误: {error}")
+            else:
+                results.update(result)
     
     cropped_series_meta = {
         "data_dir": data_dir,
@@ -222,7 +236,8 @@ def main():
     parser.add_argument("--window-size", type=int, default=64, help="窗口大小(Z轴方向)")
     parser.add_argument("--stride", type=int, default=32, help="滑动步长")
     parser.add_argument("--mp", action="store_true", help="是否使用多进程处理")
-    parser.add_argument("--num_workers", type=int, help="多进程时的进程数量，默认为CPU核心数-1")
+    parser.add_argument("--num-workers", type=int, help="多进程时的进程数量，默认为CPU核心数-1")
+    parser.add_argument("--ensure-slice-foreground", action="store_true", help="确保滑动窗口中至少包含一个前景像素")
     
     args = parser.parse_args()
     
@@ -235,7 +250,8 @@ def main():
             window_size=args.window_size,
             stride=args.stride,
             use_mp=args.mp,
-            num_workers=args.num_workers
+            num_workers=args.num_workers,
+            ensure_slice_foreground=args.ensure_slice_foreground
         )
     except Exception as e:
         print(f"[致命错误] 运行过程中出现异常: {e}")
