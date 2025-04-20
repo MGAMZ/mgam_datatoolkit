@@ -7,10 +7,14 @@ import SimpleITK as sitk
 
 def convert_to_lpi(args):
     src_path, dst_path, orient = args
-    img = sitk.ReadImage(src_path)
-    lpi_img = sitk.DICOMOrient(img, orient.upper())
-    os.makedirs(os.path.dirname(dst_path), exist_ok=True)
-    sitk.WriteImage(lpi_img, dst_path, True)
+    try:
+        img = sitk.ReadImage(src_path)
+        lpi_img = sitk.DICOMOrient(img, orient.upper())
+        os.makedirs(os.path.dirname(dst_path), exist_ok=True)
+        sitk.WriteImage(lpi_img, dst_path, True)
+    except Exception as e:
+        print(f"Error processing {src_path}: {e}")
+        return
 
 
 def process_files(src_dir, dst_dir, orient, use_mp=False):
@@ -20,6 +24,9 @@ def process_files(src_dir, dst_dir, orient, use_mp=False):
     for rel_path in mha_files:
         src_path = os.path.join(src_dir, rel_path)
         dst_path = os.path.join(dst_dir, rel_path)
+        if os.path.exists(dst_path):
+            print(f"目标文件已存在，跳过: {dst_path}")
+            continue
         tasks.append((src_path, dst_path, orient))
 
     if use_mp:
