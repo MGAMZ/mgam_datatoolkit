@@ -28,12 +28,11 @@ class PixelReconstructionLoss(BaseModule):
     def forward(self, pred: Tensor, target: Tensor, *args, **kwargs):
         if self.use_sigmoid:
             pred = pred.sigmoid()
-        return self.criterion(pred.squeeze(), target)
+        return self.criterion(pred.squeeze(), target.to(pred.dtype))
 
     @property
     def loss_name(self):
         return self._loss_name
-
 
 
 class HingeEmbeddingLoss(BaseModule):

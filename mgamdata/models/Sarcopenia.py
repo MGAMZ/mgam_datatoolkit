@@ -1,6 +1,7 @@
 import pdb
 import warnings
 from collections.abc import Sequence
+from typing_extensions import deprecated
 
 import cv2
 import matplotlib.pyplot as plt
@@ -21,6 +22,7 @@ from ..mm.mmseg_Dev3D import (BaseDecodeHead_3D, Seg3DDataSample, Seg3DDataPrePr
                               PixelShuffle3D, EncoderDecoder_3D, VolumeData)
 from ..mm.visualization import BaseViser, BaseVisHook
 from ..mm.inference import Inferencer
+from ..mm.mgam_models import mgam_Seg3D_Lite
 
 
 
@@ -433,7 +435,7 @@ class L3Metric(BaseMetric):
         """
         计算1D场景下的Recall、Precision和HD95。
         """
-        ious, recalls, precisions, hd95s = [], [], [], []
+        ious, recalls, precisions, hd95s, productCompliance = [], [], [], [], []
 
         for (pred, gt) in results:
             tp = np.sum((pred == 1) & (gt == 1))
@@ -449,12 +451,14 @@ class L3Metric(BaseMetric):
             recalls.append(recall)
             precisions.append(precision)
             hd95s.append(hd95)
+            productCompliance.append(iou>=0.85)
 
         return {
             'iou': float(np.mean(ious)),
             'Recall': float(np.mean(recalls)),
             'Precision': float(np.mean(precisions)),
-            'HD95': float(np.mean(hd95s))
+            'HD95': float(np.mean(hd95s)),
+            'ProductComplianceRatio': float(np.mean(productCompliance))
         }
 
     def compute_hd95_1d(self, pred: np.ndarray, gt: np.ndarray) -> float:
@@ -969,9 +973,122 @@ class SarcopeniaL3Locating(EncoderDecoder_3D):
         return data_samples
 
 
+class L3LocatingLite(mgam_Seg3D_Lite):
+    def _forward(self, inputs: Tensor, data_samples:Sequence[BaseDataElement]|None=None) -> Tensor:
+        return self.backbone(inputs).mean(dim=(1,3,4)) # [B, C, Z, Y, X] -> [B, Z]
+
+    def predict(self, inputs:Tensor, data_samples:Sequence[BaseDataElement]|None=None) -> Sequence[BaseDataElement]:
+        """Predict results from a batch of inputs and data samples.
+
+        Args:
+            inputs (Tensor): The input tensor with shape (N, C, Z, Y, X).
+            data_samples (Sequence[BaseDataElement], optional): The seg data samples.
+                It usually includes information such as `metainfo`.
+                
+        Returns:
+            Sequence[BaseDataElement]: Segmentation results of the input images.
+                Each SegDataSample usually contains:
+                - pred_sem_seg (VolumeData): Prediction of semantic segmentation.
+                - seg_logits (VolumeData): Predicted logits of semantic segmentation.
+        """
+        # 前向传播
+        seg_logits = self.inference(inputs, data_samples) # [N, C, Z, Y, X]
+        
+        # 处理结果
+        batch_size = inputs.shape[0]
+        out_channels = seg_logits.shape[1]
+        
+        # 验证二分类阈值与模型输出通道数的一致性
+        if out_channels > 1 and self.binary_segment_threshold is not None:
+            raise ValueError(f"多分类模型(输出通道数={out_channels})不应设置binary_segment_threshold，"
+                            f"当前值为{self.binary_segment_threshold}，应设置为None")
+        if out_channels == 1 and self.binary_segment_threshold is None:
+            raise ValueError(f"二分类模型(输出通道数={out_channels})必须设置binary_segment_threshold，"
+                            "当前值为None")
+        
+        if data_samples is None:
+            data_samples = [BaseDataElement() for _ in range(batch_size)]
+        
+        for i in range(batch_size):
+            # 处理单个样本
+            i_seg_logits = seg_logits[i] # [C, Z, Y, X]
+            
+            # 生成预测结果
+            if out_channels > 1:  # 多分类情况
+                i_seg_pred = i_seg_logits.argmax(dim=0, keepdim=True)
+            else:  # 二分类情况
+                assert self.binary_segment_threshold is not None, \
+                    f"二分类模型(输出通道数={out_channels})必须设置binary_segment_threshold，" \
+                    f"当前值为None"
+                i_seg_logits_sigmoid = i_seg_logits.sigmoid()
+                i_seg_pred = (i_seg_logits_sigmoid > self.binary_segment_threshold).to(i_seg_logits)
+            
+            # 将结果保存到data_samples中
+            data_samples[i].set_field(SeriesData(data=i_seg_logits), 'seg_logits_L3')
+            data_samples[i].set_field(SeriesData(data=i_seg_pred), 'pred_sem_seg_L3')
+            
+        return data_samples
+
+    @torch.inference_mode()
+    def slide_inference(self, inputs: Tensor, data_samples:Sequence[BaseDataElement]|None=None) -> Tensor:
+        """使用重叠的滑动窗口进行推理。
+        
+        Args:
+            inputs (Tensor): 输入张量，形状为(N, C, Z, Y, X)
+            data_samples (Sequence[BaseDataElement], optional): 数据样本
+            
+        Returns:
+            Tensor: 分割结果的logits
+        """
+        # 获取滑动窗口参数
+        assert self.inference_PatchSize is not None and self.inference_PatchStride is not None, \
+            f"滑动窗口采样必须指定inference_PatchSize({self.inference_PatchSize})和inference_PatchStride({self.inference_PatchStride})"
+        z_stride, _, _ = self.inference_PatchStride
+        z_crop, _, _ = self.inference_PatchSize
+        batch_size, _, z_img, _, _ = inputs.size()
+        
+        # 计算网格数
+        z_grids = max(z_img - z_crop + z_stride - 1, 0) // z_stride + 1
+        # 准备结果累加矩阵，根据指定的设备创建
+        input_device = inputs.device
+        accumulate_device = torch.device(self.inference_PatchAccumulateDevice)
+        
+        # 创建累加矩阵和计数矩阵在指定的设备上
+        preds = torch.zeros(
+            size=(batch_size, z_img),
+            dtype=torch.float32,
+            device=accumulate_device
+        )
+        count_mat = torch.zeros(
+            size=(batch_size, z_img),
+            dtype=torch.float32,
+            device=accumulate_device
+        )
+        
+        # 滑动窗口推理
+        for z_idx in range(z_grids):
+            z1 = z_idx * z_stride
+            z2 = min(z1 + z_crop, z_img)
+            z1 = max(z2 - z_crop, 0)
+            
+            # 截取patch
+            crop_vol = inputs[:, :, z1:z2, ...]
+            # 推理
+            crop_seg_logit = self._forward(crop_vol) # [B, Z]
+            
+            # 将结果移到累加设备上并累加
+            crop_seg_logit_on_device = crop_seg_logit.to(accumulate_device)
+            preds[:, z1:z2]+= crop_seg_logit_on_device
+            count_mat[:, z1:z2] += 1
+        
+        assert torch.all(count_mat > 0), "存在未被滑动窗口覆盖的区域"
+        seg_logits = preds / count_mat
+        return seg_logits.to(input_device)[:, None, :] # [B, 1, Z]
+
+
 """ ----- Utils ----- """
 
-
+@deprecated("The older inferencer is too complex.")
 class SarcopeniaL3Inferencer(Inferencer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -1005,3 +1122,34 @@ class SarcopeniaL3Inferencer(Inferencer):
         return L3_pred[0].cpu().numpy() # [Z]
 
 
+class SarcopeniaLocateInferencerLite(Inferencer):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.model: L3LocatingLite
+        self.thr:float = self.model.binary_segment_threshold
+        self.size:list = self.cfg.size
+        self.window_left = self.cfg.wl - self.cfg.ww/2
+        self.window_right = self.cfg.wl + self.cfg.ww/2
+    
+    def _preprocess(self, Volume_arr:np.ndarray):
+        Volume_arr = (np.clip(Volume_arr, self.window_left, self.window_right) - self.window_left) / self.cfg.ww
+        Volume_arr = np.stack([cv2.resize(p, self.size[-2:], interpolation=cv2.INTER_NEAREST_EXACT) 
+                               for p in Volume_arr])
+        return Volume_arr
+
+    @torch.inference_mode()
+    def Inference_FromTensor(self, image_tensor:torch.Tensor):
+        assert image_tensor.ndim == 5, f"输入图像必须是5维的，但得到的是 {image_tensor.shape}。"
+        if self.fp16:
+            image_tensor = image_tensor.half()
+        L3_logits = self.model.slide_inference(image_tensor.cuda())
+        L3_pred = torch.sigmoid(L3_logits) > self.thr
+        return L3_pred # [B, Z]
+
+    def Inference_FromNDArray(self, image_array:np.ndarray) -> np.ndarray:
+        # image_array: [Z, Y, X]
+        assert image_array.ndim == 3, f"输入图像必须是3维的，但得到的是 {image_array.shape}。"
+        image_array = self._preprocess(image_array)
+        image_tensor = torch.from_numpy(image_array.astype(np.float32))
+        L3_pred = self.Inference_FromTensor(image_tensor[None,None]) # [B, C, Z, Y, X]
+        return L3_pred[0][0].cpu().numpy() # [Z]

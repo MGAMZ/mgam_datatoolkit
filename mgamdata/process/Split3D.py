@@ -226,7 +226,7 @@ def process_dataset(
     }
     json.dump(cropped_series_meta, 
               open(os.path.join(output_dir, "crop_meta.json"), "w", encoding="utf-8"), indent=4)
-    print(f"全部处理完成，采样结果元数据已保存到 {output_dir}/crop_meta.json")
+    print(f"全部处理完成，采样结果元数据已保存到 {os.path.join(output_dir, 'crop_meta.json')}.")
 
 
 def main():
