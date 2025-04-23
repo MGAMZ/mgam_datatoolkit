@@ -287,9 +287,7 @@ class WindowExtractor(SupportLrMultModule):
 
     @torch.inference_mode()
     def current_response(self):
-        self.window_sample = self.window_sample.to(
-            device=self.g_o.device, non_blocking=True
-        )
+        self.window_sample = self.window_sample.to(self.g_o.device)
         response = self.forward(self.window_sample).cpu().numpy()
         return response
 
@@ -354,11 +352,11 @@ class WindowExtractor(SupportLrMultModule):
         # Dynamic Perception Field - d
         d_pf = self.d_pf(x)
         # NOTE Dynamic Range - g
-        d_r = torch.tanh(self.d_r(x)) + 1 + self.d_r_a(x)
+        d_r = torch.tanh(self.d_r(x)) + 1 + self.d_r_a(x) + self.eps
         # Dynamic Weak Response - a
-        d_wr = self.d_wr(x) + 1
+        d_wr = self.d_wr(x) + 1 + self.eps
         # Dynamic Intense Response - b
-        d_ir = self.d_ir(x) + 1
+        d_ir = self.d_ir(x) + 1 + self.eps
         # Global Offset - k
         g_o = self.g_o(x)
 
@@ -416,9 +414,7 @@ class TanhRectifier(SupportLrMultModule):
             iter_std = inputs.std()
             if not torch.isnan(iter_std):
                 self.std_memory = self.std_memory.to(device=inputs.device)
-                self.std_memory = self.std_memory * self.momentum + iter_std * (
-                    1 - self.momentum
-                )
+                self.std_memory = self.std_memory * self.momentum + iter_std * (1-self.momentum)
 
         return torch.abs(self.rectify_location().std() - self.std_memory)
 

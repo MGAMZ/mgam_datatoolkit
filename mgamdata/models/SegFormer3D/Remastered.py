@@ -217,6 +217,7 @@ class MixVisionTransformer(nn.Module):
                 x = self.norm(x)
                 # Return both the embedded sequence and the spatial dimensions
                 return x, patched_volume_size
+        
         # Create Patch Embedding layers for each stage
         self.patch_embeds = nn.ModuleList()
         # Input channels for the first stage is in_channels, subsequent stages use previous embed_dim
@@ -283,22 +284,6 @@ class MixVisionTransformer(nn.Module):
 
 class SegFormerDecoderHead(nn.Module):
 
-    class DecoderMapping(nn.Module): # Renamed from DecoderMLP
-        """Conv Embedding for Decoder"""
-        def __init__(self, input_dim: int, embed_dim: int):
-            super().__init__()
-            # Use 1x1x1 Conv to project channels, acts on Volume format
-            self.proj = nn.Conv3d(input_dim, embed_dim, kernel_size=1, stride=1, padding=0)
-            # Use BatchNorm or GroupNorm for Volume format
-            self.norm = nn.BatchNorm3d(embed_dim)
-            # Or: self.norm = nn.GroupNorm(num_groups=..., num_channels=embed_dim)
-
-        def forward(self, x):
-            # Input x: (B, C_in, D, W, H)
-            x = self.proj(x)
-            x = self.norm(x)
-            # Output x: (B, C_embed, D, W, H)
-            return x
 
     def __init__(
         self,
@@ -308,12 +293,30 @@ class SegFormerDecoderHead(nn.Module):
         dropout: float = 0.0,
     ):
         super().__init__()
+        
+        class DecoderMapping(nn.Module):
+            """Conv Embedding for Decoder"""
+            def __init__(self, input_dim: int, embed_dim: int):
+                super().__init__()
+                # Use 1x1x1 Conv to project channels, acts on Volume format
+                self.proj = nn.Conv3d(input_dim, embed_dim, kernel_size=1, stride=1, padding=0)
+                # Use BatchNorm or GroupNorm for Volume format
+                self.norm = nn.BatchNorm3d(embed_dim)
+                # Or: self.norm = nn.GroupNorm(num_groups=..., num_channels=embed_dim)
+
+            def forward(self, x):
+                # Input x: (B, C_in, D, W, H)
+                x = self.proj(x)
+                x = self.norm(x)
+                # Output x: (B, C_embed, D, W, H)
+                return x
+
         # Conv embedding layers for features from each encoder stage
         self.mlps = nn.ModuleList() # Keep name mlps for consistency or rename
         for i in range(len(input_feature_dims)):
             self.mlps.append(
                 # Use the new Conv-based mapping layer
-                SegFormerDecoderHead.DecoderMapping(
+                DecoderMapping(
                     input_dim=input_feature_dims[i],
                     embed_dim=decoder_head_embedding_dim,
                 )
