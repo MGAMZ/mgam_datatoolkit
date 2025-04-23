@@ -130,6 +130,7 @@ def resample_standard_dataset(
         mp (bool): Whether to use multiprocessing.
         workers (int | None): Number of workers for multiprocessing.
     """
+    # 路径定义
     source_image_folder = os.path.join(source_root, "image")
     source_label_folder = os.path.join(source_root, "label")
     dest_image_folder = os.path.join(dest_root, "image")
@@ -137,6 +138,7 @@ def resample_standard_dataset(
     os.makedirs(dest_image_folder, exist_ok=True)
     os.makedirs(dest_label_folder, exist_ok=True)
 
+    # 任务准备
     image_itk_paths = []
     label_itk_paths = []
     if os.path.exists(source_image_folder):
@@ -169,6 +171,7 @@ def resample_standard_dataset(
         for i in range(len(image_itk_paths))
     ]
 
+    # 可选多进程执行
     if mp:
         with (
             Pool(processes=workers) as pool,
@@ -259,6 +262,7 @@ def main():
     except Exception as e:
         print(f"Warning: Could not save config file: {e}")
 
+    # 执行
     resample_standard_dataset(
         args.source_root,
         target_spacing,
@@ -268,6 +272,7 @@ def main():
         args.workers,
     )
     print(f"Resampling completed. The resampled dataset is saved in {args.dest_root}.")
+
 
 
 if __name__ == '__main__':

@@ -166,6 +166,40 @@ class TransformerBlock(nn.Module):
         return x
 
 
+class PatchEmbedding(nn.Module):
+    def __init__(
+        self,
+        in_channels: int,
+        embed_dim: int,
+        kernel_size: int,
+        stride: int,
+        padding: int,
+    ):
+        super().__init__()
+        # Convolutional layer for patch embedding
+        self.proj = nn.Conv3d(
+            in_channels,
+            embed_dim,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+        )
+        # Layer normalization applied after flattening
+        self.norm = nn.LayerNorm(embed_dim)
+
+    def forward(self, x):
+        # Apply convolution: (B, C_in, D, W, H) -> (B, C_embed, D', W', H')
+        x = self.proj(x)
+        # Get the spatial dimensions after convolution
+        patched_volume_size = x.shape[2:]
+        # Flatten spatial dimensions and transpose: (B, C_embed, D'*W'*H') -> (B, D'*W'*H', C_embed)
+        x = x.flatten(2).transpose(1, 2)
+        # Apply layer normalization
+        x = self.norm(x)
+        # Return both the embedded sequence and the spatial dimensions
+        return x, patched_volume_size
+
+
 class MixVisionTransformer(nn.Module):
     def __init__(
         self,
@@ -185,39 +219,6 @@ class MixVisionTransformer(nn.Module):
         super().__init__()
         self.depths = depths
 
-        class PatchEmbedding(nn.Module):
-            def __init__(
-                self,
-                in_channels: int,
-                embed_dim: int,
-                kernel_size: int,
-                stride: int,
-                padding: int,
-            ):
-                super().__init__()
-                # Convolutional layer for patch embedding
-                self.proj = nn.Conv3d(
-                    in_channels,
-                    embed_dim,
-                    kernel_size=kernel_size,
-                    stride=stride,
-                    padding=padding,
-                )
-                # Layer normalization applied after flattening
-                self.norm = nn.LayerNorm(embed_dim)
-
-            def forward(self, x):
-                # Apply convolution: (B, C_in, D, W, H) -> (B, C_embed, D', W', H')
-                x = self.proj(x)
-                # Get the spatial dimensions after convolution
-                patched_volume_size = x.shape[2:]
-                # Flatten spatial dimensions and transpose: (B, C_embed, D'*W'*H') -> (B, D'*W'*H', C_embed)
-                x = x.flatten(2).transpose(1, 2)
-                # Apply layer normalization
-                x = self.norm(x)
-                # Return both the embedded sequence and the spatial dimensions
-                return x, patched_volume_size
-        
         # Create Patch Embedding layers for each stage
         self.patch_embeds = nn.ModuleList()
         # Input channels for the first stage is in_channels, subsequent stages use previous embed_dim
@@ -336,7 +337,6 @@ class SegFormerDecoderHead(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.predict = nn.Conv3d(decoder_head_embedding_dim, num_classes, kernel_size=1)
         self.upsample = nn.Upsample(scale_factor=4.0, mode="trilinear", align_corners=False)
-
 
     def forward(self, encoder_features):
         # encoder_features is a list [c1, c2, c3, c4] from MixVisionTransformer

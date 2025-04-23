@@ -27,6 +27,18 @@ NOTE
 """
 
 
+def SetWindow(array:np.ndarray|torch.Tensor, window_width:int, window_level:int):
+    window_left = window_level - window_width // 2
+    window_right = window_level + window_width // 2
+    if isinstance(array, np.ndarray):
+        array = np.clip(array, window_left, window_right)
+    elif isinstance(array, torch.Tensor):
+        array = torch.clamp(array, window_left, window_right)
+    else:
+        raise TypeError(f"Unsupported type {type(array)}. Expected np.ndarray or torch.Tensor.")
+    array = (array - window_left) / window_width
+    return array # range: [0, 1]
+
 class AutoPad(BaseTransform):
     def __init__(
         self, 
@@ -166,9 +178,9 @@ class WindowSet(BaseTransform):
     - img
     """
 
-    def __init__(self, location, width):
-        self.clip_range = (location - width // 2, location + width // 2)
-        self.location = location
+    def __init__(self, level, width):
+        self.clip_range = (level - width // 2, level + width // 2)
+        self.level = level
         self.width = width
 
     def _window_norm(self, img: np.ndarray):
