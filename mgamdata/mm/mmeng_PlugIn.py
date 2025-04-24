@@ -64,7 +64,11 @@ def DynamicRunnerSelection(cfg: ConfigType) -> Runner:
                 kwargs["strategy"] = strategy
                 kwargs["cfg"]["strategy"] = strategy
 
-            super().__init__(**kwargs)
+            exp_name_in_runner = kwargs.pop("experiment_name", None)
+            if exp_name_in_runner is None:
+                work_dir = kwargs.get("work_dir", None)
+                exp_name_in_runner = os.path.basename(os.path.dirname(work_dir)) if work_dir is not None else None
+            super().__init__(experiment_name=exp_name_in_runner, **kwargs)
 
         @staticmethod
         def str_to_log_level(string):

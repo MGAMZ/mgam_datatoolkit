@@ -543,8 +543,8 @@ class ParalleledMultiWindowProcessing(BaseModule):
         n = self.num_windows
 
         step = (end - start) / n
-        milestones = np.arange(start, end + step, step)
-        sub_ranges = [(milestones[i], milestones[i + 1]) for i in range(n)]
+        milestones = np.arange(start, end, step)
+        sub_ranges = [(milestones[i], milestones[i] + max(255, step)) for i in range(n)]
         return sub_ranges
 
     def train_iter_info_hook(self):
