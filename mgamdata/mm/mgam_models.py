@@ -1,11 +1,13 @@
 import pdb
+import logging
+import copy
 from abc import abstractmethod
 from typing_extensions import Sequence
 
 import torch
-import torch.nn.functional as F
 from torch import Tensor
 
+from mmengine.logging import print_log
 from mmengine.registry import MODELS
 from mmengine.config import ConfigDict
 from mmengine.structures import BaseDataElement, PixelData
@@ -18,6 +20,7 @@ class mgam_Seg_Lite(BaseModel):
     def __init__(self,
                  backbone:ConfigDict,
                  criterion:ConfigDict|list[ConfigDict],
+                 num_classes:int,
                  gt_sem_seg_key:str='gt_sem_seg',
                  use_half:bool=False,
                  binary_segment_threshold:float|None=None,
@@ -45,6 +48,7 @@ class mgam_Seg_Lite(BaseModel):
         super().__init__(*args, **kwargs)
         self.backbone = MODELS.build(backbone)
         self.criterion = [MODELS.build(c) for c in criterion] if isinstance(criterion, list) else [MODELS.build(criterion)]
+        self.num_classes = num_classes
         self.gt_sem_seg_key = gt_sem_seg_key
         self.use_half = use_half
         self.binary_segment_threshold = binary_segment_threshold
@@ -245,19 +249,16 @@ class mgam_Seg2D_Lite(mgam_Seg_Lite):
         h_grids = max(h_img - h_crop + h_stride - 1, 0) // h_stride + 1
         w_grids = max(w_img - w_crop + w_stride - 1, 0) // w_stride + 1
         
-        # 准备结果累加矩阵，根据指定的设备创建
-        input_device = inputs.device
         accumulate_device = torch.device(self.inference_PatchAccumulateDevice)
         
-        # 创建累加矩阵和计数矩阵在指定的设备上
         preds = torch.zeros(
             size=(batch_size, out_channels, h_img, w_img),
-            dtype=torch.float32,
+            dtype=torch.float16,
             device=accumulate_device
         )
         count_mat = torch.zeros(
             size=(batch_size, 1, h_img, w_img),
-            dtype=torch.float32,
+            dtype=torch.uint8,
             device=accumulate_device
         )
         
@@ -282,14 +283,8 @@ class mgam_Seg2D_Lite(mgam_Seg_Lite):
                 preds[:, :, h1:h2, w1:w2] += crop_seg_logit_on_device
                 count_mat[:, :, h1:h2, w1:w2] += 1
         
-        # 确保没有未覆盖区域
         assert torch.all(count_mat > 0), "存在未被滑动窗口覆盖的区域"
-        
-        # 计算平均值
         seg_logits = preds / count_mat
-        
-        # 将结果移回输入设备
-        seg_logits = seg_logits.to(input_device)
         
         return seg_logits
 
@@ -418,31 +413,23 @@ class mgam_Seg3D_Lite(mgam_Seg_Lite):
         z_crop, y_crop, x_crop = self.inference_PatchSize
         batch_size, _, z_img, y_img, x_img = inputs.size()
         
-        # 获取输出通道数（类别数）
-        with torch.no_grad():
-            temp_output = self._forward(inputs[:, :, :min(z_crop, z_img), 
-                                               :min(y_crop, y_img), 
-                                               :min(x_crop, x_img)])
-            out_channels = temp_output.size(1)
-        
         # 计算网格数
         z_grids = max(z_img - z_crop + z_stride - 1, 0) // z_stride + 1
         y_grids = max(y_img - y_crop + y_stride - 1, 0) // y_stride + 1
         x_grids = max(x_img - x_crop + x_stride - 1, 0) // x_stride + 1
         
         # 准备结果累加矩阵，根据指定的设备创建
-        input_device = inputs.device
         accumulate_device = torch.device(self.inference_PatchAccumulateDevice)
         
         # 创建累加矩阵和计数矩阵在指定的设备上
         preds = torch.zeros(
-            size=(batch_size, out_channels, z_img, y_img, x_img),
-            dtype=torch.float32,
+            size=(batch_size, self.num_classes, z_img, y_img, x_img),
+            dtype=torch.float16,
             device=accumulate_device
         )
         count_mat = torch.zeros(
             size=(batch_size, 1, z_img, y_img, x_img),
-            dtype=torch.float32,
+            dtype=torch.uint8,
             device=accumulate_device
         )
         
@@ -460,24 +447,123 @@ class mgam_Seg3D_Lite(mgam_Seg_Lite):
                     y1 = max(y2 - y_crop, 0)
                     x1 = max(x2 - x_crop, 0)
                     
-                    # 截取patch
-                    crop_vol = inputs[:, :, z1:z2, y1:y2, x1:x2]
-                    
                     # 推理
-                    crop_seg_logit = self._forward(crop_vol)
-                    
-                    # 将结果移到累加设备上并累加
-                    crop_seg_logit_on_device = crop_seg_logit.to(accumulate_device)
-                    preds[:, :, z1:z2, y1:y2, x1:x2] += crop_seg_logit_on_device
+                    crop_seg_logit = self._forward(inputs[:, :, z1:z2, y1:y2, x1:x2])
+                    # 累加
+                    preds[:, :, z1:z2, y1:y2, x1:x2] += crop_seg_logit.to(accumulate_device)
                     count_mat[:, :, z1:z2, y1:y2, x1:x2] += 1
         
         # 确保没有未覆盖区域
         assert torch.all(count_mat > 0), "存在未被滑动窗口覆盖的区域"
-        
         # 计算平均值
-        seg_logits = preds / count_mat
-        
-        # 将结果移回输入设备
-        seg_logits = seg_logits.to(input_device)
+        seg_logits = (preds / count_mat).to(dtype=torch.float16)
         
         return seg_logits
+
+
+class MomentumAvgModel(torch.nn.Module):
+    def __init__(self,
+                 model: torch.nn.Module,
+                 momentum: float = 0.0002,
+                 gamma: int = 100,
+                 interval: int = 1,
+                 device: torch.device|None = None,
+                 update_buffers: bool = False) -> None:
+        super().__init__()
+        
+        # 检查分布式环境
+        self.is_distributed = hasattr(model, 'module')
+        self.is_deepspeed = hasattr(model, 'module') and hasattr(model.module, 'deepspeed')
+        
+        # DeepSpeed环境下获取完整模型
+        if self.is_deepspeed:
+            with model.module.summon_full_params():
+                self.module = copy.deepcopy(model.module).requires_grad_(False)
+        else:
+            target_model = model.module if self.is_distributed else model
+            self.module = copy.deepcopy(target_model).requires_grad_(False)
+            
+        self.interval = interval
+        if device is not None:
+            self.module = self.module.to(device)
+            
+        self.register_buffer('steps', torch.tensor(0, dtype=torch.long, device=device))
+                           
+        self.update_buffers = update_buffers
+        if update_buffers:
+            state_dict = self.module.state_dict()
+            self.avg_parameters = {
+                k: v for k, v in state_dict.items() 
+                if v.numel() > 0
+            }
+        else:
+            params = dict(self.module.named_parameters())
+            self.avg_parameters = {k: v for k, v in params.items() 
+                                   if v.numel() > 0}
+            
+        # 动量参数检查
+        assert 0.0 < momentum < 1.0, f'momentum must be in range (0.0, 1.0) but got {momentum}'
+        if momentum > 0.5:
+            print_log('The value of momentum in EMA is usually a small number,'
+                      'which is different from the conventional notion of '
+                      f'momentum but got {momentum}. Please make sure the '
+                      f'value is correct.',
+                      logger='current', 
+                      level=logging.WARNING)
+        self.momentum = momentum
+        assert gamma > 0, f'gamma must be greater than 0, but got {gamma}'
+        self.gamma = gamma
+
+    def forward(self, *args, **kwargs):
+        """Forward method of the averaged model."""
+        return self.module(*args, **kwargs)
+
+    def _get_current_param(self):
+        if self.update_buffers:
+            return self.module.state_dict()
+        else:
+            return dict(self.module.named_parameters())
+    
+    def update_parameters(self, model: torch.nn.Module) -> None:
+        """Update the parameters of the model. This method will execute the
+        ``avg_func`` to compute the new parameters and update the model's
+        parameters.
+
+        Args:
+            model (nn.Module): The model whose parameters will be averaged.
+        """
+        src_parameters = (
+            model.state_dict()
+            if self.update_buffers else dict(model.named_parameters()))
+        if self.steps == 0:
+            for k, p_avg in self.avg_parameters.items():
+                p_avg.data.copy_(src_parameters[k].data)
+        elif self.steps % self.interval == 0:  # type: ignore
+            for k, p_avg in self.avg_parameters.items():
+                # NOTE handle deepspeed model shred issue, p_avg may be empty here.
+                if p_avg.dtype.is_floating_point and p_avg.shape==src_parameters[k].data.shape:
+                    device = p_avg.device
+                    self.avg_func(p_avg.data,
+                                  src_parameters[k].data.to(device),
+                                  self.steps)
+        if not self.update_buffers:
+            # If not update the buffers,
+            # keep the buffers in sync with the source model.
+            for b_avg, b_src in zip(self.module.buffers(), model.buffers()):
+                b_avg.data.copy_(b_src.data.to(b_avg.device))
+        self.steps += 1  # type: ignore
+
+    def avg_func(self, averaged_param: Tensor, source_param: Tensor,
+                 steps: int) -> None:
+        """Compute the moving average of the parameters using the linear
+        momentum strategy.
+
+        Args:
+            averaged_param (Tensor): The averaged parameters.
+            source_param (Tensor): The source parameters.
+            steps (int): The number of times the parameters have been
+                updated.
+        """
+        momentum = max(self.momentum,
+                       self.gamma / (self.gamma + self.steps.item()))
+        averaged_param.lerp_(source_param, momentum)

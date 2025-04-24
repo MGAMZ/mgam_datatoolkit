@@ -15,6 +15,7 @@ from mmengine.hooks import Hook
 from mmengine.logging import print_log, MMLogger
 from mmengine.visualization.visualizer import Visualizer, master_only, BaseDataElement
 from mmengine.visualization.vis_backend import LocalVisBackend as _LocalVisBackend
+from mmengine.visualization.vis_backend import TensorboardVisBackend as _TensorboardVisBackend
 
 
 
@@ -37,6 +38,12 @@ class LocalVisBackend(_LocalVisBackend):
         os.makedirs(self._img_save_dir, exist_ok=True)
         save_file_name = f'{name}_{step}.png'.replace('/', '__') # support working with tensorboard tag rule.
         cv2.imwrite(os.path.join(self._img_save_dir, save_file_name), drawn_image)
+
+
+class mgam_TensorboardVisBackend(_TensorboardVisBackend):
+    def add_image(self, *args, **kwargs):
+        super().add_image(*args, **kwargs)
+        self._tensorboard.flush()
 
 
 class BaseVisHook(Hook):

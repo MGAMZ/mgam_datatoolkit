@@ -284,6 +284,9 @@ class WindowExtractor(SupportLrMultModule):
         # Major dynamic range for this window to handle.
         self.major_handle = (focus_range[1] + focus_range[0]) / 2
         assert self.rrc > 0
+        
+        self.register_buffer("_momentum_mean", torch.zeros(1, device=self.g_o.device))
+        self.register_buffer("_momentum_std", torch.zeros(1, device=self.g_o.device))
 
     @torch.inference_mode()
     def current_response(self):
@@ -303,17 +306,15 @@ class WindowExtractor(SupportLrMultModule):
             "rrc": self.rrc,
         }
 
-    def _focus_range_momentum(self, v1: np.ndarray, v2: np.ndarray):
-        if not hasattr(self, "_focus_range_momentum_memory"):
-            self._momentum_memory = []
-        self._momentum_memory.append([v1, v2])
-        self._momentum_memory = self._momentum_memory[: int(1 / (1 - self.momentum))]
-        # register to save in checkpoint
-        self.register_buffer(
-            "_focus_range_momentum_memory",
-            torch.tensor(self._momentum_memory, device=self.g_o.device),
-        )
-        return torch.tensor(self._momentum_memory).mean(dim=0)
+    @torch.no_grad()
+    def _focus_range_momentum(self, v1: float, v2: float):
+        # v1: mean, v2: std
+        device = self._momentum_mean.device
+        v1 = torch.tensor(v1, device=device, dtype=self._momentum_mean.dtype)
+        v2 = torch.tensor(v2, device=device, dtype=self._momentum_std.dtype)
+        self._momentum_mean = self._momentum_mean * self.momentum + v1 * (1 - self.momentum)
+        self._momentum_std = self._momentum_std * self.momentum + v2 * (1 - self.momentum)
+        return torch.stack([self._momentum_mean, self._momentum_std])
 
     def _focus_range_of_this_sample(self, data_samples: list[Seg3DDataSample]):
         intrs_means = []
@@ -772,8 +773,12 @@ class AutoWindowStatusLoggerHook(Hook):
 
 class AutoWindowLite(mgam_Seg3D_Lite):
     """New framrwork compatible with new lite mgam framework"""
-    def __init__(self, pmwp:dict|None=None, *args, **kwargs):
+    def __init__(self, 
+                 pmwp:dict|None=None, 
+                 inference_EmptyCache:bool=False,
+                 *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.inference_EmptyCache = inference_EmptyCache
         self.pmwp:ParalleledMultiWindowProcessing = MODELS.build(pmwp) if pmwp is not None else None
 
     def loss(self, inputs: Tensor, data_samples: list[Seg3DDataSample]):
@@ -788,4 +793,7 @@ class AutoWindowLite(mgam_Seg3D_Lite):
     def predict(self, inputs:Tensor, data_samples:Sequence[BaseDataElement]|None=None) -> Sequence[BaseDataElement]:
         if self.pmwp is not None:
             inputs, pmwp_losses = self.pmwp(inputs, data_samples)
-        return super().predict(inputs, data_samples)
+        result = super().predict(inputs, data_samples)
+        if self.inference_EmptyCache:
+            torch.cuda.empty_cache()
+        return result
