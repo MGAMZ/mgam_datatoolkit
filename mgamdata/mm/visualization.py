@@ -279,7 +279,7 @@ class SegViser(BaseViser):
         if pred_seg_logits is not None:
             axes[3].imshow(image, cmap=self.image_cmap, interpolation='bicubic')
             exp_logits = np.exp(pred_seg_logits)
-            probs = exp_logits / (np.sum(exp_logits, axis=-1, keepdims=True) + 1e-7)
+            probs = exp_logits / (np.sum(exp_logits, axis=-1, keepdims=True) + 1e-5)
             confidence = np.max(probs, axis=-1)
             im = axes[3].imshow(confidence, cmap='jet', vmin=0, vmax=1, alpha=self.seg_map_alpha)
             axes[3].set_title('confidence')
