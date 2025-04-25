@@ -234,7 +234,7 @@ class Inferencer_3D_ONNX(SegInferencer):
         # set window
         image_array = SetWindow(image_array, self.ww, self.wl)
 
-        image_tensor = torch.from_numpy(image_array.astype(np.float32))
+        image_tensor = torch.from_numpy(image_array.astype(np.float16))
         seg_logits = self.slide_inference(image_tensor)
         return seg_logits.squeeze(0)  # [C, Z, Y, X]
 
