@@ -278,7 +278,8 @@ class SegViser(BaseViser):
         # calculate confidence
         if pred_seg_logits is not None:
             axes[3].imshow(image, cmap=self.image_cmap, interpolation='bicubic')
-            exp_logits = np.exp(pred_seg_logits)
+            logits_max = np.max(pred_seg_logits, axis=-1, keepdims=True) # prevent overflow
+            exp_logits = np.exp(pred_seg_logits - logits_max)
             probs = exp_logits / (np.sum(exp_logits, axis=-1, keepdims=True) + 1e-5)
             confidence = np.max(probs, axis=-1)
             im = axes[3].imshow(confidence, cmap='jet', vmin=0, vmax=1, alpha=self.seg_map_alpha)
