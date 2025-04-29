@@ -164,6 +164,7 @@ class TransformerBlock(nn.Module):
         qkv_bias: bool = False,
         attn_dropout: float = 0.0,
         proj_dropout: float = 0.0, # Typically same dropout for attn proj and mlp
+        use_SDPA: bool = True,
     ):
         super().__init__()
         self.norm1 = nn.LayerNorm(embed_dim)
@@ -174,6 +175,7 @@ class TransformerBlock(nn.Module):
             qkv_bias=qkv_bias,
             attn_dropout=attn_dropout,
             proj_dropout=proj_dropout,
+            use_SDPA=use_SDPA,
         )
         self.norm2 = nn.LayerNorm(embed_dim)
         self.mlp = TransformerBlockMLP(
@@ -238,6 +240,7 @@ class MixVisionTransformer(nn.Module):
         qkv_bias: bool = True, # Common default
         attn_dropout: float = 0.0,
         proj_dropout: float = 0.0,
+        use_SDPA: bool = True,
     ):
         super().__init__()
         self.depths = depths
@@ -271,6 +274,7 @@ class MixVisionTransformer(nn.Module):
                         qkv_bias=qkv_bias,
                         attn_dropout=attn_dropout,
                         proj_dropout=proj_dropout,
+                        use_SDPA=use_SDPA,
                     )
                     for _ in range(depths[i])
                 ]
@@ -411,6 +415,7 @@ class SegFormer3D(nn.Module):
         attn_dropout: float = 0.0,
         proj_dropout: float = 0.0,
         decoder_dropout: float = 0.0,
+        use_SDPA: bool = True,
     ):
         super().__init__()
 
@@ -427,6 +432,7 @@ class SegFormer3D(nn.Module):
             qkv_bias=qkv_bias,
             attn_dropout=attn_dropout,
             proj_dropout=proj_dropout,
+            use_SDPA=use_SDPA,
         )
 
         self.decoder = SegFormerDecoderHead(
