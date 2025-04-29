@@ -95,9 +95,7 @@ class SelfAttention(nn.Module):
                 dropout_p=self.attn_dropout_p if self.training else 0.0,
             )
         else:
-            # attn shape: (B, num_heads, N, N_kv)
-            attn = q @ k.transpose(-2, -1)
-            attn *= self.scale
+            attn = (q * self.scale) @ k.transpose(-2, -1)
             attn = attn.softmax(dim=-1)
             attn = self.attn_dropout(attn)
             # attn_output shape: (B, num_heads, N, head_dim)
