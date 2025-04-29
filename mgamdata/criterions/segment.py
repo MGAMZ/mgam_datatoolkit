@@ -1,15 +1,9 @@
 import pdb
-from typing import Union
 
 import torch
 import numpy as np
 from torch import Tensor
 from torch.nn.functional import interpolate
-
-from mmseg.models.losses.dice_loss import dice_loss
-
-from ..utils.DeviceSide import get_max_vram_gpu_id
-
 
 
 
@@ -67,6 +61,7 @@ def accuracy_tensor(y_pred:Tensor, y_true:Tensor):
 
 
 def evaluation_dice(gt_data:np.ndarray, pred_data:np.ndarray):
+    from mmseg.models.losses.dice_loss import dice_loss
     gt_class = torch.from_numpy(gt_data).cuda()
     pred_class = torch.from_numpy(pred_data).cuda()
     dice = 1 - dice_loss(gt_class[None],
@@ -94,8 +89,9 @@ def evaluation_area_metrics(gt_data:np.ndarray, pred_data:np.ndarray):
 def evaluation_hausdorff_distance_3D(gt, 
                                      pred, 
                                      percentile:int=95, 
-                                     interpolation_ratio:Union[float, None]=None):
+                                     interpolation_ratio:float|None=None):
     from monai.metrics import compute_hausdorff_distance
+    from ..utils.DeviceSide import get_max_vram_gpu_id
     
     selected_device_id = get_max_vram_gpu_id()
     gt = torch.from_numpy(gt).to(dtype=torch.uint8, device=f'cuda:{selected_device_id}')

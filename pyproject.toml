@@ -30,7 +30,7 @@ dependencies = [
   "openslide-python",
   "openslide-bin",
   "h5py",
-  "timm",
+  "tqdm",
   "opensdpc",
   "colorama",
   "ml_collections",
@@ -39,6 +39,7 @@ dependencies = [
 
 [project.optional-dependencies]
 full = [
+  "timm",
   "monai",
   "deepspeed",
   "tensorrt",

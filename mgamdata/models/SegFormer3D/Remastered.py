@@ -23,10 +23,11 @@ class SelfAttention(nn.Module):
         self,
         embed_dim: int,
         num_heads: int,
-        sr_ratio=None,  # 支持 int 或 tuple/list
+        sr_ratio=None,
         qkv_bias: bool = False,
         attn_dropout: float = 0.0,
         proj_dropout: float = 0.0,
+        use_SDPA: bool = True,
     ):
         super().__init__()
         assert (embed_dim % num_heads == 0), \
@@ -34,14 +35,19 @@ class SelfAttention(nn.Module):
 
         self.num_heads = num_heads
         self.attention_head_dim = embed_dim // num_heads
+        self.scale = self.attention_head_dim ** -0.5
 
         self.query = nn.Linear(embed_dim, embed_dim, bias=qkv_bias)
         self.key_value = nn.Linear(embed_dim, embed_dim * 2, bias=qkv_bias)
-        self.attn_dropout = attn_dropout
+        self.attn_dropout_p = attn_dropout
+        self.attn_dropout = nn.Dropout(attn_dropout)
         self.proj = nn.Linear(embed_dim, embed_dim)
         self.proj_dropout = nn.Dropout(proj_dropout)
+        self.use_SDPA = use_SDPA and hasattr(F, "scaled_dot_product_attention")
 
-        # 支持 tuple/list 或 int
+        if not self.use_SDPA:
+            print("Warning: scaled_dot_product_attention not available or disabled. Using manual attention implementation.")
+
         if sr_ratio is None:
             sr_ratio = 1
         if isinstance(sr_ratio, int):
@@ -59,26 +65,43 @@ class SelfAttention(nn.Module):
         B, N, C = x.shape
         D, W, H = patched_volume_size
 
+        # q shape: (B, num_heads, N, head_dim)
         q = self.query(x).view(B, N, self.num_heads, self.attention_head_dim).permute(0, 2, 1, 3)
 
         if self.sr is not None:
-            # (B, N, C) -> (B, C, N) -> (B, C, D, W, H)
+            # x shape: (B, N, C) -> (B, C, N) -> (B, C, D, W, H)
             x_ = x.permute(0, 2, 1).view(B, C, D, W, H)
             x_ = self.sr(x_)
+            # x_ shape: (B, C, D'*W'*H') -> (B, D'*W'*H', C)
             x_ = x_.flatten(2).transpose(1, 2)
             x_ = self.sr_norm(x_)
+            # kv shape: (2, B, num_heads, N_kv, head_dim) where N_kv = D'*W'*H'
             kv = self.key_value(x_)
             kv = kv.view(B, -1, 2, self.num_heads, self.attention_head_dim).permute(2, 0, 3, 1, 4)
         else:
+            # kv shape: (2, B, num_heads, N, head_dim)
             kv = self.key_value(x)
             kv = kv.view(B, N, 2, self.num_heads, self.attention_head_dim).permute(2, 0, 3, 1, 4)
 
+        # k, v shape: (B, num_heads, N_kv, head_dim)
         k, v = kv.unbind(0)
-        attn_output = F.scaled_dot_product_attention(
-            q, k, v,
-            attn_mask=None,
-            dropout_p=self.attn_dropout if self.training else 0.0,
-        )
+
+        if self.use_SDPA:
+            # attn_output shape: (B, num_heads, N, head_dim)
+            attn_output = F.scaled_dot_product_attention(
+                q, k, v,
+                attn_mask=None,
+                dropout_p=self.attn_dropout_p if self.training else 0.0,
+            )
+        else:
+            # attn shape: (B, num_heads, N, N_kv)
+            attn = (q @ k.transpose(-2, -1)) * self.scale
+            attn = attn.softmax(dim=-1)
+            attn = self.attn_dropout(attn)
+            # attn_output shape: (B, num_heads, N, head_dim)
+            attn_output = attn @ v
+
+        # attn_output shape: (B, num_heads, N, head_dim) -> (B, N, num_heads, head_dim) -> (B, N, C)
         out = attn_output.transpose(1, 2).reshape(B, N, C)
         out = self.proj(out)
         out = self.proj_dropout(out)
