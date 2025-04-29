@@ -5,9 +5,8 @@ from tqdm import tqdm
 import orjson
 import pandas as pd
 
-from ..base import mgam_Standard_3D_Mha
-from .meta import (CLASS_INDEX_MAP, DATA_ROOT_SLICE2D_TIFF,
-                   get_subset_and_rectify_map, META_CSV_PATH)
+from ..base import mgam_BaseSegDataset
+from .meta import CLASS_INDEX_MAP, get_subset_and_rectify_map
 
 
 class TotalsegmentatorIndexer:
@@ -49,31 +48,11 @@ class TotalsegmentatorIndexer:
                 for image_path in selected_split_image_paths]
 
 
-class TotalsegmentatorSegDataset(mgam_Standard_3D_Mha):
+class Tsd_base(mgam_BaseSegDataset):
     METAINFO = dict(classes=list(CLASS_INDEX_MAP.keys()))
 
-    def __init__(self, subset: str | None = None, **kwargs) -> None:
-        self.data_root = DATA_ROOT_SLICE2D_TIFF
-        self.indexer = TotalsegmentatorIndexer(self.data_root)
-
-        if subset is not None:
-            new_classes = list(get_subset_and_rectify_map(subset)[0].keys())
-        else:
-            new_classes = self.METAINFO['classes']
-
-        super().__init__(data_root=self.data_root,
-                         metainfo={'classes': new_classes},
-                         **kwargs)
-
-    def sample_iterator(self) -> list[tuple[str, str]]:
-        return self.indexer.fetcher(self.split)
-
-
-class TotalsegmentatorSeg3DDataset(mgam_Standard_3D_Mha):
-    METAINFO = dict(classes=list(CLASS_INDEX_MAP.keys()))
-
-    def __init__(self, subset: str | None = None, **kwargs) -> None:
-        self.meta_table = pd.read_csv(META_CSV_PATH)
+    def __init__(self, meta_csv:str, subset: str|None=None, **kwargs) -> None:
+        self.meta_table = pd.read_csv(meta_csv)
 
         if subset is not None and subset != 'all':
             new_classes = list(get_subset_and_rectify_map(subset)[0].keys())
@@ -82,26 +61,26 @@ class TotalsegmentatorSeg3DDataset(mgam_Standard_3D_Mha):
 
         super().__init__(metainfo={'classes': new_classes}, **kwargs)
 
+    def _split(self):
+        activate_series = self.meta_table[self.meta_table['split']==self.split]
+        return activate_series['image_id'].tolist()
+
+
+class Tsd_Mha(Tsd_base):
     def sample_iterator(self):
-        activate_series = self.meta_table[self.meta_table['split'] ==
-                                          self.split]
-        activate_series_id = activate_series['image_id'].tolist()
-        self.data_root: str
-        for series in activate_series_id:
-            yield (os.path.join(self.data_root, series, 'ct.mha'),
-                   os.path.join(self.data_root, series, 'segmentations.mha'))
+        for series in self._split():
+            img_mha_path = os.path.join(self.data_root, 'image', f'{series}.mha')
+            lbl_mha_path = os.path.join(self.data_root, 'label', f'{series}.mha')
+            if os.path.exists(img_mha_path) and os.path.exists(lbl_mha_path):
+                yield (img_mha_path, lbl_mha_path)
 
 
-class Tsd3D_PreCrop_Npz(TotalsegmentatorSeg3DDataset):
-
+class Tsd3D_PreCrop_Npz(Tsd_Mha):
     def sample_iterator(self):
-        activate_series = self.meta_table[self.meta_table['split'] ==
-                                          self.split]
-        activate_series_id = activate_series['image_id'].tolist()
-        self.data_root: str
-        for series in activate_series_id:
+        for series in self._split():
             samples = os.path.join(self.data_root, series)
-            for cropped_sample in os.listdir(samples):
-                if cropped_sample.endswith('.npz'):
-                    yield (os.path.join(samples, cropped_sample),
-                           os.path.join(samples, cropped_sample))
+            if os.path.exists(samples):
+                for cropped_sample in os.listdir(samples):
+                    if cropped_sample.endswith('.npz'):
+                        yield (os.path.join(samples, cropped_sample),
+                            os.path.join(samples, cropped_sample))

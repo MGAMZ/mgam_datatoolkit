@@ -17,7 +17,7 @@ from mmengine.runner.runner import Runner
 from mmengine.hooks.hook import Hook
 from mmengine.model.base_module import BaseModule
 from mmengine.structures.base_data_element import BaseDataElement
-from mmseg.registry import MODELS
+from mmengine.registry import MODELS
 
 from ..mm.mgam_models import mgam_Seg3D_Lite
 from ..mm.mmseg_Dev3D import (EncoderDecoder_3D,
