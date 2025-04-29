@@ -5,7 +5,6 @@ import torch
 import numpy as np
 from torch import Tensor
 from torch.nn.functional import interpolate
-from monai.metrics import compute_hausdorff_distance
 
 from mmseg.models.losses.dice_loss import dice_loss, DiceLoss
 
@@ -94,6 +93,8 @@ def evaluation_hausdorff_distance_3D(gt,
                                      pred, 
                                      percentile:int=95, 
                                      interpolation_ratio:Union[float, None]=None):
+    from monai.metrics import compute_hausdorff_distance
+    
     selected_device_id = get_max_vram_gpu_id()
     gt = torch.from_numpy(gt).to(dtype=torch.uint8, device=f'cuda:{selected_device_id}')
     pred = torch.from_numpy(pred).to(dtype=torch.uint8, device=f'cuda:{selected_device_id}')
