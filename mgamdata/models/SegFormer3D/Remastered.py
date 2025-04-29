@@ -35,7 +35,7 @@ class SelfAttention(nn.Module):
 
         self.num_heads = num_heads
         self.attention_head_dim = embed_dim // num_heads
-        self.scale = self.attention_head_dim ** -0.5
+        self.scale:float = self.attention_head_dim ** -0.5
 
         self.query = nn.Linear(embed_dim, embed_dim, bias=qkv_bias)
         self.key_value = nn.Linear(embed_dim, embed_dim * 2, bias=qkv_bias)
@@ -61,12 +61,12 @@ class SelfAttention(nn.Module):
         else:
             self.sr = None
 
-    def forward(self, x, patched_volume_size):
+    def forward(self, x:torch.Tensor, patched_volume_size):
         B, N, C = x.shape
         D, W, H = patched_volume_size
 
         # q shape: (B, num_heads, N, head_dim)
-        q = self.query(x).view(B, N, self.num_heads, self.attention_head_dim).permute(0, 2, 1, 3)
+        q:torch.Tensor = self.query(x).view(B, N, self.num_heads, self.attention_head_dim).permute(0, 2, 1, 3)
 
         if self.sr is not None:
             # x shape: (B, N, C) -> (B, C, N) -> (B, C, D, W, H)
@@ -84,6 +84,7 @@ class SelfAttention(nn.Module):
             kv = kv.view(B, N, 2, self.num_heads, self.attention_head_dim).permute(2, 0, 3, 1, 4)
 
         # k, v shape: (B, num_heads, N_kv, head_dim)
+        kv: torch.Tensor
         k, v = kv.unbind(0)
 
         if self.use_SDPA:
@@ -95,7 +96,8 @@ class SelfAttention(nn.Module):
             )
         else:
             # attn shape: (B, num_heads, N, N_kv)
-            attn = (q @ k.transpose(-2, -1)) * self.scale
+            attn = q @ k.transpose(-2, -1)
+            attn *= self.scale
             attn = attn.softmax(dim=-1)
             attn = self.attn_dropout(attn)
             # attn_output shape: (B, num_heads, N, head_dim)
