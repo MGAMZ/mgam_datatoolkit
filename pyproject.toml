@@ -25,13 +25,7 @@ dependencies = [
   "tensorboard",
   "nibabel",
   "orjson",
-  "HolisticTraceAnalysis",
-  "pylint-django",
-  "openslide-python",
-  "openslide-bin",
-  "h5py",
   "tqdm",
-  "opensdpc",
   "colorama",
   "ml_collections",
   "seaborn"
@@ -50,6 +44,12 @@ full = [
   "onnx_graphsurgeon",
   "polygraphy",
   "colored",
+  "opensdpc",
+  "openslide-python",
+  "openslide-bin",
+  "h5py",
+  "pylint-django",
+  "HolisticTraceAnalysis",
 ]
 
 [project.scripts]
