@@ -132,12 +132,12 @@ class DiceLoss_3D(torch.nn.Module):
                                        to the loss will be excluded during averaging. Default: None.
             loss_name (str): Name for the loss instance. Default: "loss_dice".
         """
-        from monai.losses.dice import GeneralizedDiceLoss
+        from monai.losses.dice import DiceLoss
         super().__init__()
         
         self.loss_name = self._loss_name = loss_name
         self.split_Z = split_Z
-        self.monai_DiceLoss = GeneralizedDiceLoss(
+        self.monai_DiceLoss = DiceLoss(
             to_onehot_y=expand_one_hot, 
             sigmoid=use_sigmoid,
             softmax=use_softmax,)
