@@ -7,7 +7,7 @@ import SimpleITK as sitk
 import pandas as pd
 
 from mgamdata.dataset.Totalsegmentator.meta import (
-    DATA_ROOT_3D_MHA, META_CSV_PATH, CLASS_INDEX_MAP)
+    META_CSV_PATH, CLASS_INDEX_MAP)
 
 
 
@@ -24,10 +24,10 @@ class meta_file_handler:
         kvp	pathology
         pathology_location
     """
-    def __init__(self):
-        self.meta_df = pd.read_csv(META_CSV_PATH)
+    def __init__(self, meta_csv_path:str):
+        self.meta_csv_path = meta_csv_path
+        self.meta_df = pd.read_csv(meta_csv_path)
         self._init_dfs()
-    
     
     def _init_dfs(self):
         df_template = self.meta_df.copy(deep=True)
@@ -41,7 +41,6 @@ class meta_file_handler:
         for class_name in CLASS_INDEX_MAP.keys():
             self.whole_df["mean_"+class_name] = pd.Series(dtype=np.float32)
         self.whole_df = self.whole_df.copy()
-    
     
     def register(self, class_name, series_id, **kwargs):
         if class_name == 'whole':
@@ -61,9 +60,8 @@ class meta_file_handler:
         else:
             raise ValueError(f'Invalid class name: {class_name}')
     
-    
     def save(self):
-        save_folder = os.path.join(os.path.dirname(META_CSV_PATH), 'distribution')
+        save_folder = os.path.join(os.path.dirname(self.meta_csv_path), 'distribution')
         os.makedirs(save_folder, exist_ok=True)
         
         whole_distribution_path = os.path.join(save_folder, 'whole_distribution.csv')
@@ -72,7 +70,6 @@ class meta_file_handler:
         for class_name, df in self.per_class_dfs.items():
             class_distribution_path = os.path.join(save_folder, f'{class_name}_distribution.csv')
             df.to_csv(class_distribution_path, index=False)
-
 
 
 def parse_one_case(case_folder:str):
@@ -110,15 +107,14 @@ def parse_one_case(case_folder:str):
         }
         
     return distribution
-    
 
 
-def parse_all_cases(data_root:str, mp:bool=False):
+def parse_all_cases(data_root:str, meta_csv_path:str, mp:bool=False):
     cases = []
     task_list = [os.path.join(data_root, case_folder) 
                  for case_folder in os.listdir(data_root) 
                  if os.path.isdir(os.path.join(data_root, case_folder))]
-    meta_writer = meta_file_handler()
+    meta_writer = meta_file_handler(meta_csv_path)
     
     if mp:
         with Pool() as p:
@@ -152,4 +148,8 @@ def parse_all_cases(data_root:str, mp:bool=False):
 
 
 if __name__ == '__main__':
-    parse_all_cases(DATA_ROOT_3D_MHA, mp=True)
+    parse_all_cases(
+        data_root='', 
+        meta_csv_path='',
+        mp=True
+    )
