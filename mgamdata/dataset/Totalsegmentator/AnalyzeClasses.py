@@ -4,7 +4,7 @@ import SimpleITK as sitk
 import pandas as pd
 from multiprocessing import Pool, cpu_count
 
-from .meta import CLASS_INDEX_MAP
+from mgamdata.dataset.Totalsegmentator import TSD_CLASS_INDEX_MAP as CLASS_INDEX_MAP
 
 
 def analyze_single_file(args):
