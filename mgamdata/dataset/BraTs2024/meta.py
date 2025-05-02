@@ -1,0 +1,1 @@
+BraTs2024_MODALITIES = ["t1c", "t1n", "t2f", "t2w"]

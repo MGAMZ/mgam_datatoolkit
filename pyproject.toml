@@ -1,0 +1,66 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mgamdata"
+version = "1.11.16.250503"
+requires-python = ">= 3.10"
+description = "mgam's data toolkit for a better world!"
+readme = "README.md"
+license = {file = "LICENSE"}
+dependencies = [
+  "openpyxl",
+  "pandas",
+  "scikit-image",
+  "scikit-learn",
+  "scipy",
+  "SimpleITK",
+  "pydicom",
+  "pynrrd",
+  "ftfy",
+  "regex",
+  "pynvml",
+  "future",
+  "tensorboard",
+  "nibabel",
+  "orjson",
+  "tqdm",
+  "colorama",
+  "ml_collections",
+  "seaborn"
+]
+
+[project.optional-dependencies]
+full = [
+  "timm",
+  "monai",
+  "deepspeed",
+  "tensorrt",
+  "mamba-ssm",
+  "onnx",
+  "onnxruntime",
+  "onnxruntime-gpu",
+  "onnx_graphsurgeon",
+  "polygraphy",
+  "colored",
+  "opensdpc",
+  "openslide-python",
+  "openslide-bin",
+  "h5py",
+  "pylint-django",
+  "HolisticTraceAnalysis",
+]
+
+[project.scripts]
+mmrun = "mgamdata.mm.run:main"
+mmconc = "mgamdata.mm.summarize:main"
+precrop = "mgamdata.process.PreCrop_3D:SemiSupervisedMhaCropper3D.main_entry"
+itk_resample = "mgamdata.process.itk_resample:main"
+itk_orient = "mgamdata.process.itk_orient:main"
+split3d = "mgamdata.process.Split3D:main"
+split2d = "mgamdata.process.Split2D:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["mgamdata"]
