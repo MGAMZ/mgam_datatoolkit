@@ -17,7 +17,15 @@ NOTE
 """
 
 
-class LoadImgFromOpenCV(BaseTransform):
+class BaseLoadBiomedicalData(BaseTransform):
+    def _label_remap(self, mask:np.ndarray, label_map:dict):
+        mask_copy = mask.copy()
+        for old_id, new_id in label_map.items():
+            mask[mask_copy == old_id] = new_id
+        return mask
+
+
+class LoadImgFromOpenCV(BaseLoadBiomedicalData):
     """
     Required Keys:
 
@@ -39,7 +47,7 @@ class LoadImgFromOpenCV(BaseTransform):
         return results
 
 
-class LoadAnnoFromOpenCV(BaseTransform):
+class LoadAnnoFromOpenCV(BaseLoadBiomedicalData):
     """
     Required Keys:
 
@@ -58,16 +66,14 @@ class LoadAnnoFromOpenCV(BaseTransform):
             if mask is None:
                 raise FileNotFoundError(f"File not found: {mask_path}")
             if results.get("label_map", None) is not None:
-                mask_copy = mask.copy()
-                for old_id, new_id in results["label_map"].items():
-                    mask[mask_copy == old_id] = new_id
+                mask = self._label_remap(mask, results["label_map"])
 
             results["gt_seg_map"] = mask
             results["seg_fields"].append("gt_seg_map")
         return results
 
 
-class LoadFromMHA(BaseTransform):
+class LoadFromMHA(BaseLoadBiomedicalData):
     def __init__(self, resample_spacing=None, resample_size=None):
         assert not ((resample_spacing is not None) and (resample_size is not None))
         self.resample_spacing = resample_spacing
@@ -126,15 +132,13 @@ class LoadMaskFromMHA(LoadFromMHA):
             mask_mha = sitk.DICOMOrient(mask_mha, "LPI")
             mask = self._process_mha(mask_mha, "mask")
             if results.get("label_map", None) is not None:
-                mask_copy = mask.copy()
-                for old_id, new_id in results["label_map"].items():
-                    mask[mask_copy == old_id] = new_id
+                mask = self._label_remap(mask, results["label_map"])
             results["gt_seg_map"] = mask  # output: [X, Y, Z]
             results["seg_fields"].append("gt_seg_map")
         return results
 
 
-class LoadCTPreCroppedSampleFromNpz(BaseTransform):
+class LoadCTPreCroppedSampleFromNpz(BaseLoadBiomedicalData):
     """
     Required Keys:
 
@@ -169,9 +173,7 @@ class LoadCTPreCroppedSampleFromNpz(BaseTransform):
             gt_seg_map = sample[self.DEFAULT_NPZ_FIELDS[1]]
             # Support mmseg dataset rule
             if results.get("label_map", None) is not None:
-                mask_copy = gt_seg_map.copy()
-                for old_id, new_id in results["label_map"].items():
-                    gt_seg_map[mask_copy == old_id] = new_id
+                gt_seg_map = self._label_remap(gt_seg_map, results["label_map"])
             results["gt_seg_map"] = sample["gt_seg_map"]
             results["seg_fields"].append("gt_seg_map")
 

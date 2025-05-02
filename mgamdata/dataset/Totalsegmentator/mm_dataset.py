@@ -84,3 +84,6 @@ class Tsd3D_PreCrop_Npz(Tsd_Mha):
                     if cropped_sample.endswith('.npz'):
                         yield (os.path.join(samples, cropped_sample),
                             os.path.join(samples, cropped_sample))
+
+
+
