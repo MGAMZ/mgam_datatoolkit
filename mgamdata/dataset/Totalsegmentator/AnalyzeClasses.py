@@ -1,8 +1,10 @@
 import os
 import argparse
+from tqdm import tqdm
+from multiprocessing import Pool, cpu_count
+
 import SimpleITK as sitk
 import pandas as pd
-from multiprocessing import Pool, cpu_count
 
 from mgamdata.dataset.Totalsegmentator import TSD_CLASS_INDEX_MAP as CLASS_INDEX_MAP
 
@@ -28,9 +30,10 @@ def analyze_mha_classes(directory, use_mp=False):
 
     if use_mp:
         with Pool(cpu_count()) as pool:
-            result = pool.map(analyze_single_file, [(path, class_names) for path in mha_paths])
+            for row in tqdm(pool.imap(analyze_single_file, [(path, class_names) for path in mha_paths]), total=len(mha_paths), desc="多进程分析中"):
+                result.append(row)
     else:
-        for file_path in mha_paths:
+        for file_path in tqdm(mha_paths, desc="单进程分析中"):
             result.append(analyze_single_file((file_path, class_names)))
 
     return class_names, mha_files, result
