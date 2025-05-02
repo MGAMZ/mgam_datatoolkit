@@ -41,8 +41,8 @@ def analyze_mha_classes(directory, use_mp=False):
 
 def main():
     parser = argparse.ArgumentParser(description="分析mha标签文件中的类别并保存为xlsx")
-    parser.add_argument('label_dir', type=str, required=True, help='mha标签文件所在根目录')
-    parser.add_argument('save_xlsx', type=str, required=True, help='结果保存的xlsx路径')
+    parser.add_argument('label_dir', type=str, help='mha标签文件所在根目录')
+    parser.add_argument('save_xlsx', type=str, help='结果保存的xlsx路径')
     parser.add_argument('--mp', action='store_true', help='是否使用多进程处理')
     args = parser.parse_args()
 
