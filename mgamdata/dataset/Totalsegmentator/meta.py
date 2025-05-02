@@ -120,50 +120,79 @@ CLASS_INDEX_MAP = {
     'vertebrae_T9': 118,
 }
 
-CLASS_SUBSET_MAP = {
-    'organ': [
-        'background',
-        'adrenal_gland_left',
-        'adrenal_gland_right',
-        'aorta',
-        'atrial_appendage_left',
-        'autochthon_left',
-        'autochthon_right',
-        'brachiocephalic_trunk',
-        'brachiocephalic_vein_left',
-        'brachiocephalic_vein_right',
-        'brain',
-        'colon',
-        'common_carotid_artery_left',
-        'common_carotid_artery_right',
-        'duodenum',
-        'esophagus',
-        'gallbladder',
-        'heart',
-        'inferior_vena_cava',
-        'kidney_cyst_left',
-        'kidney_cyst_right',
-        'kidney_left',
-        'kidney_right',
-        'liver',
-        'lung_lower_lobe_left',
-        'lung_lower_lobe_right',
-        'lung_middle_lobe_right',
-        'lung_upper_lobe_left',
-        'lung_upper_lobe_right',
-        'pancreas',
-        'portal_vein_and_splenic_vein',
-        'prostate',
-        'pulmonary_vein',
-        'small_bowel',
-        'spinal_cord',
-        'spleen',
-        'stomach',
-        'thyroid_gland',
-        'trachea',
-        'urinary_bladder'
+GENERAL_REDUCTION_REMAP = {
+    'adrenal_gland': [
+        'adrenal_gland_left', 'adrenal_gland_right'
     ],
+    'autochthon': [
+        'autochthon_left', 'autochthon_right'
+    ],
+    'brachiocephalic': [
+        'brachiocephalic_trunk', 'brachiocephalic_vein_left',
+        'brachiocephalic_vein_right'
+    ],
+    'clavicula': [
+        'clavicula_left', 'clavicula_right'
+    ],
+    'common_carotid_artery': [
+        'common_carotid_artery_left', 'common_carotid_artery_right'
+    ],
+    'femur': [
+        'femur_left', 'femur_right'
+    ],
+    'gluteus': [
+        'gluteus_maximus_left', 'gluteus_maximus_right',
+        'gluteus_medius_left', 'gluteus_medius_right',
+        'gluteus_minimus_left', 'gluteus_minimus_right'
+    ],
+    'hip': [
+        'hip_left', 'hip_right'
+    ],
+    'humerus': [
+        'humerus_left', 'humerus_right'
+    ],
+    'iliac': [
+        'iliac_artery_left', 'iliac_artery_right', 'iliac_vena_left',
+        'iliac_vena_right'
+    ],
+    'iliopsoas': [
+        'iliopsoas_left', 'iliopsoas_right'
+    ],
+    'kidney': [
+        'kidney_cyst_left', 'kidney_cyst_right', 'kidney_left',
+        'kidney_right'
+    ],
+    'lung': [
+        'lung_lower_lobe_left', 'lung_lower_lobe_right',
+        'lung_middle_lobe_right', 'lung_upper_lobe_left',
+        'lung_upper_lobe_right'
+    ],
+    'rib': [
+        'rib_left_1', 'rib_left_10', 'rib_left_11', 'rib_left_12',
+        'rib_left_2', 'rib_left_3', 'rib_left_4', 'rib_left_5',
+        'rib_left_6', 'rib_left_7', 'rib_left_8', 'rib_left_9',
+        'rib_right_1', 'rib_right_10', 'rib_right_11', 'rib_right_12',
+        'rib_right_2', 'rib_right_3', 'rib_right_4', 'rib_right_5',
+        'rib_right_6', 'rib_right_7', 'rib_right_8', 'rib_right_9'
+    ],
+    'scapula': [
+        'scapula_left', 'scapula_right'
+    ],
+    'subclavian_artery': [
+        'subclavian_artery_left', 'subclavian_artery_right'
+    ],
+    'vertebrae': [
+        'vertebrae_C1', 'vertebrae_C2', 'vertebrae_C3', 'vertebrae_C4',
+        'vertebrae_C5', 'vertebrae_C6', 'vertebrae_C7', 'vertebrae_L1',
+        'vertebrae_L2', 'vertebrae_L3', 'vertebrae_L4', 'vertebrae_L5',
+        'vertebrae_S1', 'vertebrae_T1', 'vertebrae_T10', 'vertebrae_T11',
+        'vertebrae_T12', 'vertebrae_T2', 'vertebrae_T3', 'vertebrae_T4',
+        'vertebrae_T5', 'vertebrae_T6', 'vertebrae_T7', 'vertebrae_T8',
+        'vertebrae_T9'
+    ],
+    
 }
+
 
 def get_subset_and_rectify_map(subset_name:str):
     subset_classes = CLASS_SUBSET_MAP[subset_name]

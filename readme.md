@@ -6,8 +6,6 @@
 
 本项目采用 **GNU General Public License v3.0** 开源协议。
 
-*版权所有 (c) 2024 暮光霭明*
-
 详细条款请参考 [GNU General Public License v3.0](https://www.gnu.org/licenses/gpl-3.0.html)。
 
 ## 简介
@@ -42,6 +40,10 @@
 
 加入git submodule，一键安装常见mm package。
 
-### V.1.1.0.241009
+### V1.1.0.241009
 
 同步readme，版本号格式更改。这十几天里加入了很多新的函数和方法，优化了整个项目的可读性和可维护性，但是依旧有很多不足。
+
+### V1.11.15.250502
+
+已包含了对多项相关研究的支持。
