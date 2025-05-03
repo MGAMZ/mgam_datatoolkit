@@ -120,7 +120,7 @@ CLASS_INDEX_MAP = {
     'vertebrae_T9': 118,
 }
 
-GENERAL_REDUCTION_REMAP = {
+GENERAL_REDUCTION = {
     'adrenal_gland': [
         'adrenal_gland_left', 'adrenal_gland_right'
     ],
@@ -189,16 +189,5 @@ GENERAL_REDUCTION_REMAP = {
         'vertebrae_T12', 'vertebrae_T2', 'vertebrae_T3', 'vertebrae_T4',
         'vertebrae_T5', 'vertebrae_T6', 'vertebrae_T7', 'vertebrae_T8',
         'vertebrae_T9'
-    ],
-    
+    ]
 }
-
-
-def get_subset_and_rectify_map(subset_name:str):
-    subset_classes = CLASS_SUBSET_MAP[subset_name]
-    subset_map = {name: i+1 for i, name in enumerate(subset_classes)}
-    
-    remap = [(original_index, subset_map[name])
-             for name, original_index in subset_map.items()]
-    
-    return subset_map, remap

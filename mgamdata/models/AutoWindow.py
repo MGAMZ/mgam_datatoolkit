@@ -483,8 +483,7 @@ class ParalleledMultiWindowProcessing(BaseModule):
         enable_TRec_loss: bool = False,
         enable_CWF: bool = True,
         lr_mult: float | None = None,
-        *args,
-        **kwargs,
+        *args, **kwargs,
     ):
         assert dim.lower() in ["2d", "3d"]
         super().__init__(*args, **kwargs)
