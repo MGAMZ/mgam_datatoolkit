@@ -311,12 +311,11 @@ class MixVisionTransformer(nn.Module):
 
 
 class SegFormerDecoderHead(nn.Module):
-
-
     def __init__(
         self,
         input_feature_dims: list, # Embed dims from encoder stages [C1, C2, C3, C4]
         decoder_head_embedding_dim: int,
+        final_upsampler_scale_factor: int|tuple[int],
         num_classes: int,
         dropout: float = 0.0,
     ):
@@ -363,7 +362,8 @@ class SegFormerDecoderHead(nn.Module):
         )
         self.dropout = nn.Dropout(dropout)
         self.predict = nn.Conv3d(decoder_head_embedding_dim, num_classes, kernel_size=1)
-        self.upsample = nn.Upsample(scale_factor=4.0, mode="trilinear", align_corners=False)
+        self.upsample = nn.Upsample(scale_factor=final_upsampler_scale_factor, 
+                                    mode="trilinear", align_corners=False)
 
     def forward(self, encoder_features):
         # encoder_features is a list [c1, c2, c3, c4] from MixVisionTransformer
@@ -405,10 +405,10 @@ class SegFormer3D(nn.Module):
         num_heads: list = [1, 2, 5, 8],
         mlp_ratios: list = [4, 4, 4, 4],
         depths: list = [2, 2, 2, 2],
-        sr_ratios: list = [4, 2, 1, 1], # Sequence reduction ratios per stage
-        patch_kernel_size: list = [7, 3, 3, 3],
-        patch_stride: list = [4, 2, 2, 2],
-        patch_padding: list = [3, 1, 1, 1],
+        sr_ratios: list[int|tuple[int,int,int]] = [4, 2, 1, 1], # Sequence reduction ratios per stage
+        patch_kernel_size: list[int|tuple[int,int,int]] = [7, 3, 3, 3],
+        patch_stride: list[int|tuple[int,int,int]] = [4, 2, 2, 2],
+        patch_padding: list[int|tuple[int,int,int]] = [3, 1, 1, 1],
         decoder_head_embedding_dim: int = 256,
         num_classes: int = 3,
         qkv_bias: bool = True,
@@ -439,6 +439,7 @@ class SegFormer3D(nn.Module):
             # Decoder receives features in the order they are output by encoder
             input_feature_dims=embed_dims,
             decoder_head_embedding_dim=decoder_head_embedding_dim,
+            final_upsampler_scale_factor=patch_stride[0],
             num_classes=num_classes,
             dropout=decoder_dropout,
         )
