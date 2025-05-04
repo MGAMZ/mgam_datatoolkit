@@ -174,7 +174,7 @@ class LoadCTPreCroppedSampleFromNpz(BaseLoadBiomedicalData):
             # Support mmseg dataset rule
             if results.get("label_map", None) is not None:
                 gt_seg_map = self._label_remap(gt_seg_map, results["label_map"])
-            results["gt_seg_map"] = sample["gt_seg_map"]
+            results["gt_seg_map"] = gt_seg_map
             results["seg_fields"].append("gt_seg_map")
 
         return results
