@@ -184,11 +184,11 @@ class PreCropper3D:
     ):
         # Load Image and Segmentations
         image_itk_image = sitk.ReadImage(image_itk_path)
-        image_itk_image = sitk.DICOMOrient('LPI')
+        image_itk_image = sitk.DICOMOrient(image_itk_image, 'LPI')
         image_array = sitk.GetArrayFromImage(image_itk_image)
         if anno_itk_path is not None:
             anno_itk_image = sitk.ReadImage(anno_itk_path)
-            anno_itk_image = sitk.DICOMOrient('LPI')
+            anno_itk_image = sitk.DICOMOrient(anno_itk_image, 'LPI')
             anno_array = sitk.GetArrayFromImage(anno_itk_image)
             assert (
                 image_array.shape == anno_array.shape
