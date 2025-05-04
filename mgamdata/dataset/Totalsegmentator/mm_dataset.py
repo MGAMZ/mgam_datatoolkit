@@ -1,4 +1,5 @@
 import os
+import pdb
 from tqdm import tqdm
 
 import orjson
@@ -91,9 +92,9 @@ class Tsd_base(mgam_BaseSegDataset):
 
         if class_reduction is not None:
             new_class_index_map, label_map = generate_reduced_class_map_and_label_map(class_reduction)
-            self.METAINFO = dict(classes=list(new_class_index_map.keys()))
+            Tsd_base.METAINFO = dict(classes=list(new_class_index_map.keys()))
 
-        super().__init__(**kwargs)
+        super().__init__(lazy_init=True, **kwargs)
 
         if class_reduction is not None:
             self.label_map = label_map

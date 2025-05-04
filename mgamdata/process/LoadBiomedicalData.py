@@ -10,7 +10,7 @@ from mgamdata.io.sitk_toolkit import sitk_resample_to_spacing, sitk_resample_to_
 
 
 """
-NOTE 
+NOTE
 规范化：在进入神经网络之前，
 所有预处理的对外特性都应当遵循
 [Z,Y,X]或[D,H,W]的维度定义
