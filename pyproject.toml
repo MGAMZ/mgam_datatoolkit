@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mgamdata"
-version = "1.11.17.250504"
+version = "1.11.18.250505"
 requires-python = ">= 3.10"
 description = "mgam's data toolkit for a better world!"
 readme = "README.md"
@@ -60,6 +60,7 @@ itk_resample = "mgamdata.process.itk_resample:main"
 itk_orient = "mgamdata.process.itk_orient:main"
 split3d = "mgamdata.process.Split3D:main"
 split2d = "mgamdata.process.Split2D:main"
+itk_patch = "mgamdata.process.itk_patch:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

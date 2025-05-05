@@ -4,7 +4,7 @@ import pdb
 import warnings
 from glob import glob
 from colorama import Style, Fore
-from typing_extensions import Literal, deprecated
+from typing_extensions import Literal
 
 import pydicom
 import numpy as np
