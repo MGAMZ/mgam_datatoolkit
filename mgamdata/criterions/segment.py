@@ -124,10 +124,6 @@ class DiceLoss_3D(torch.nn.Module):
         """Standard 3D Dice Loss with optional Z-axis chunking.
 
         Args:
-            ignore_1st_index (bool): If True, exclude the first class (index 0, usually background)
-                                     from the loss calculation. Default: False.
-            ignore_index (int | None): Specifies a class index to ignore. If set, this class's contribution
-                                       to the loss will be excluded during averaging. Default: None.
             loss_name (str): Name for the loss instance. Default: "loss_dice".
         """
         from monai.losses.dice import DiceLoss

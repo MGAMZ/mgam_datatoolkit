@@ -33,6 +33,8 @@ def generate_reduced_class_map_and_label_map(reduction):
         if name not in source_to_group:
             all_group_names.add(name)
     reduced_class_names = sorted(list(all_group_names))
+    reduced_class_names.remove('background')
+    reduced_class_names.insert(0, 'background')
     reduced_class_map = {name: idx for idx, name in enumerate(reduced_class_names)}
 
     # 3. 构建label_map
