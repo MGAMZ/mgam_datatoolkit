@@ -159,6 +159,26 @@ class DiceLoss_3D(torch.nn.Module):
             return self.monai_DiceLoss(pred, target)
 
 
+class DiceCELoss_3D(torch.nn.Module):
+    def __init__(
+        self,
+        loss_name = "loss_DiceCE",
+        split_Z:bool = False,
+        **kwargs,
+    ):
+        """Standard 3D Dice Loss with optional Z-axis chunking.
+
+        Args:
+            loss_name (str): Name for the loss instance. Default: "loss_dice".
+        """
+        from monai.losses.dice import DiceCELoss
+        super().__init__()
+        
+        self.loss_name = self._loss_name = loss_name
+        self.split_Z = split_Z
+        self.monai_DiceLoss = DiceCELoss(**kwargs)
+
+
 class CrossEntropyLoss_3D(torch.nn.CrossEntropyLoss):
     def __init__(
         self,
