@@ -3,7 +3,7 @@ import SimpleITK as sitk
 import argparse
 from pathlib import Path
 from multiprocessing import Pool, cpu_count
-from tqdm import tqdm  # 新增：引入tqdm
+from tqdm import tqdm
 
 
 def extract_patches(image: sitk.Image,
