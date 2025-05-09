@@ -3,6 +3,7 @@ import SimpleITK as sitk
 import argparse
 from pathlib import Path
 from multiprocessing import Pool, cpu_count
+from tqdm import tqdm  # 新增：引入tqdm
 
 
 def extract_patches(image: sitk.Image,
@@ -100,13 +101,13 @@ def parse_args():
                         help='Folder containing `image` and `label` subfolders')
     parser.add_argument('dst_folder', type=Path,
                         help='Destination root folder to save patches')
-    parser.add_argument('--patch_size', type=int, nargs='+', required=True,
+    parser.add_argument('--patch-size', type=int, nargs='+', required=True,
                         help='Patch size as int or three ints (Z Y X)')
-    parser.add_argument('--patch_stride', type=int, nargs='+', required=True,
+    parser.add_argument('--patch-stride', type=int, nargs='+', required=True,
                         help='Patch stride as int or three ints (Z Y X)')
-    parser.add_argument('--minimum_foreground_ratio', type=float, default=0.0,
+    parser.add_argument('--minimum-foreground-ratio', type=float, default=0.0,
                         help='Minimum label foreground ratio to keep patch')
-    parser.add_argument('--still_save_when_no_label', action='store_true',
+    parser.add_argument('--still-save-when-no-label', action='store_true',
                         help='If label missing, still extract patches unconditionally')
     parser.add_argument('--mp', action='store_true',
                         help='Use multiprocessing to process cases')
@@ -156,11 +157,17 @@ def main():
         args.minimum_foreground_ratio,
         args.still_save_when_no_label
     ) for img, lbl in tasks]
+    results = []
     if args.mp:
-        with Pool(cpu_count()) as pool:
-            results = pool.map(process_case, task_args)
+        with Pool(cpu_count()) as pool, tqdm(total=len(task_args), desc="Processing cases (mp)") as pbar:
+            for res in pool.imap_unordered(process_case, task_args):
+                results.append(res)
+                pbar.update(1)
     else:
-        results = [process_case(t) for t in task_args]
+        with tqdm(total=len(task_args), desc="Processing cases") as pbar:
+            for t in task_args:
+                results.append(process_case(t))
+                pbar.update(1)
     print(f"Processed {len(results)} cases:")
     for case, count in results:
         print(f"  {case}: {count} patches")
