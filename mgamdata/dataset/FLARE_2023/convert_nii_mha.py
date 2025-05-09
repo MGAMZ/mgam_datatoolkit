@@ -70,7 +70,7 @@ class FLARE2023_formetter(format_from_nnUNet):
                 # if the number of unique label <= 4, the label will be deprecated.
                 lbl_arr = sitk.GetArrayFromImage(input_label_mha)
                 unique_labels = np.unique(lbl_arr)
-                if len(unique_labels) <= 4:
+                if len(unique_labels) <= 3:
                     tqdm.write(f"{series_id} | Label {unique_labels} is deprecated.")
                     convertion_log["label_deprecated"] = str(unique_labels)
                     input_label_mha = None

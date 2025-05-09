@@ -114,25 +114,11 @@ def evaluation_hausdorff_distance_3D(gt,
     return value
 
 
-class DiceLoss_3D(torch.nn.Module):
-    def __init__(
-        self,
-        loss_name = "loss_dice",
-        split_Z:bool = False,
-        **kwargs,
-    ):
-        """Standard 3D Dice Loss with optional Z-axis chunking.
-
-        Args:
-            loss_name (str): Name for the loss instance. Default: "loss_dice".
-        """
-        from monai.losses.dice import DiceLoss
+class SplitZ_Loss(torch.nn.Module):
+    def __init__(self, split_Z:bool = False, **kwargs):
         super().__init__()
-        
-        self.loss_name = self._loss_name = loss_name
         self.split_Z = split_Z
-        self.monai_DiceLoss = DiceLoss(**kwargs)
-
+    
     def forward(self, pred: Tensor, target: Tensor, *args, **kwargs):
         """
         Args:
@@ -145,38 +131,34 @@ class DiceLoss_3D(torch.nn.Module):
         target_spatial_shape = target.shape[-3:]
         if pred_spatial_shape != target_spatial_shape:
              raise ValueError(f"Spatial dimensions of pred {pred.shape} and target {target.shape} must match.")
-        if self.monai_DiceLoss.to_onehot_y:
+        if self.monai_loss.to_onehot_y:
             target = target.unsqueeze(1) # ensure to [B, 1, Z, Y, X]
         
         if self.split_Z:
             z_slice_losses = [
-                self.monai_DiceLoss(p, t) 
+                self.monai_loss(p, t) 
                 for p, t in zip(pred.permute(2,0,1,3,4), target.permute(2,0,1,3,4))
             ]
             return torch.stack(z_slice_losses).mean()
 
         else:
-            return self.monai_DiceLoss(pred, target)
+            return self.monai_loss(pred, target)
 
 
-class DiceCELoss_3D(torch.nn.Module):
-    def __init__(
-        self,
-        loss_name = "loss_DiceCE",
-        split_Z:bool = False,
-        **kwargs,
-    ):
-        """Standard 3D Dice Loss with optional Z-axis chunking.
-
-        Args:
-            loss_name (str): Name for the loss instance. Default: "loss_dice".
-        """
-        from monai.losses.dice import DiceCELoss
-        super().__init__()
-        
+class DiceLoss_3D(SplitZ_Loss):
+    def __init__(self, loss_name = "loss_dice", **kwargs):
+        from monai.losses.dice import DiceLoss
+        super().__init__(split_Z=kwargs.pop("split_Z", False))
         self.loss_name = self._loss_name = loss_name
-        self.split_Z = split_Z
-        self.monai_DiceLoss = DiceCELoss(**kwargs)
+        self.monai_loss = DiceLoss(**kwargs)
+
+
+class DiceCELoss_3D(SplitZ_Loss):
+    def __init__(self, loss_name = "loss_DiceCE", **kwargs):
+        from monai.losses.dice import DiceCELoss
+        super().__init__(split_Z=kwargs.pop("split_Z", False))
+        self.loss_name = self._loss_name = loss_name
+        self.monai_loss = DiceCELoss(**kwargs)
 
 
 class CrossEntropyLoss_3D(torch.nn.CrossEntropyLoss):
