@@ -11,8 +11,7 @@ from mmengine.logging import print_log, MMLogger
 
 from . import CLASS_MAP, TEST_SERIES_UIDS, CLASS_MAP_AFTER_POSTSEG
 from ..base import (mgam_SemiSup_Precropped_Npz, mgam_SemiSup_3D_Mha, 
-                    mgam_SeriesVolume, mgam_2D_MhaVolumeSlices)
-
+                    mgam_SeriesVolume, mgam_2D_MhaVolumeSlices, mgam_Patched_Mha)
 
 
 class Sarcopenia_base(mgam_SeriesVolume):
@@ -107,6 +106,10 @@ class Sarcopenia_Precrop_Npz_V2(Sarcopenia_base_V2, mgam_SemiSup_Precropped_Npz)
     ...
 
 class Sarcopenia_2D_Tiff_V2(Sarcopenia_base_V2, mgam_2D_MhaVolumeSlices):
+    ...
+
+
+class Sarcopenia_Patch_V2(mgam_Patched_Mha, Sarcopenia_base_V2):
     ...
 
 class Sarcopenia_Mha_V2(Sarcopenia_base_V2, mgam_SemiSup_3D_Mha):

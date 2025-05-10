@@ -90,10 +90,7 @@ class BaseViser(Visualizer):
         try:
             fig.canvas.draw()
             
-            if hasattr(fig.canvas, 'tostring_rgb'):
-                data = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
-                channels = 3  # RGB
-            elif hasattr(fig.canvas, 'tostring_argb'):
+            if hasattr(fig.canvas, 'tostring_argb'):
                 data = np.frombuffer(fig.canvas.tostring_argb(), dtype=np.uint8)
                 # Properly handle ARGB format by rearranging channels
                 width, height = fig.canvas.get_width_height()
@@ -101,6 +98,9 @@ class BaseViser(Visualizer):
                 # Convert ARGB to RGB by dropping alpha or handling it
                 data = data[:, :, 1:4]  # Skip alpha channel (first channel)
                 return data
+            elif hasattr(fig.canvas, 'tostring_rgb'):
+                data = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+                channels = 3  # RGB
             elif hasattr(fig.canvas, 'buffer_rgba'):
                 data = np.asarray(fig.canvas.buffer_rgba())
                 channels = 4  # RGBA
