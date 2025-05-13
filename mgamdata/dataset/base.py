@@ -195,7 +195,7 @@ class mgam_SeriesPatched_Structure(mgam_SeriesVolume):
                 continue
             series_folder = os.path.join(self.data_root, series)
             try:
-                series_meta = orjson.loads(open(os.path.join(series_folder, "SeriesMeta.json"), "r").read())
+                series_meta = json.loads(open(os.path.join(series_folder, "SeriesMeta.json"), "r").read())
             except FileNotFoundError:
                 print_log(f"{series} not found.", MMLogger.get_current_instance())
                 continue

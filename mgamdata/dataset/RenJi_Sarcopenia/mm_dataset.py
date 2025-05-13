@@ -18,11 +18,11 @@ class Sarcopenia_base(mgam_SeriesVolume):
     METAINFO = dict(classes=list(CLASS_MAP.values()))
 
     def __init__(self, L3_anno_xlsx:str|None=None, ensure_L3_anno=None, *args, **kwargs):
-        super().__init__(*args, **kwargs)
         self.L3_anno_xlsx = L3_anno_xlsx
         self.ensure_L3_anno = ensure_L3_anno if (ensure_L3_anno is not None) else (L3_anno_xlsx is not None)
         self.L3_anno = pd.read_excel(L3_anno_xlsx, usecols=['序列编号', 'L3节段起始层数', 'L3节段终止层数', 'L3节段椎弓根层面层数']) \
                        if L3_anno_xlsx is not None else None
+        super().__init__(*args, **kwargs)
 
     def _split(self):
         # Indexing `SeriesUIDs` according to original mha files.
