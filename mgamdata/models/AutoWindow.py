@@ -216,9 +216,6 @@ class DynamicParam(BaseModule):
     def status(self):
         return self.param.detach().cpu().numpy()
 
-    def __repr__(self):
-        return "{:.3f}".format(self.param.item())
-
     def __getattr__(self, name):
         if name == "device":
             return self.param.device
@@ -780,7 +777,33 @@ class AutoWindowLite(mgam_Seg3D_Lite):
         self.inference_EmptyCache = inference_EmptyCache
         self.pmwp:ParalleledMultiWindowProcessing = MODELS.build(pmwp) if pmwp is not None else None
 
+    @torch.no_grad()
+    def get_param(self, inputs:Tensor):
+        # inputs: [N, C, Z, Y, X]
+        
+        from torchinfo import summary
+        pmwp_param = summary(
+            self.pmwp,
+            input_size=(1, *inputs.shape[-3:]),
+            col_names=["input_size", "output_size", "num_params", "mult_adds"],
+            row_settings=["var_names"],
+            dtypes=[torch.float16],
+            col_width=15,
+        )
+        backbone_param = summary(
+            self.backbone,
+            input_size=(1, self.pmwp.num_windows, *inputs.shape[-3:]),
+            col_names=["input_size", "output_size", "num_params", "mult_adds"],
+            row_settings=["var_names"],
+            dtypes=[torch.float16],
+            col_width=15,
+        )
+        
+        pdb.set_trace()
+
     def loss(self, inputs: Tensor, data_samples: list[Seg3DDataSample]):
+        # self.get_param(inputs)
+        
         losses = {}
         if self.pmwp is not None:
             inputs, pmwp_losses = self.pmwp(inputs, data_samples)

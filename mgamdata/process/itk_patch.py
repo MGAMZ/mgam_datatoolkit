@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 from multiprocessing import Pool, cpu_count
 from tqdm import tqdm
+import json
 
 
 def extract_patches(image: sitk.Image,
@@ -133,6 +134,10 @@ def process_case(args):
     out_case.mkdir(parents=True, exist_ok=True)
     image = sitk.ReadImage(str(img_path))
     label = sitk.ReadImage(str(lbl_path))
+    # load image array for metadata
+    img_arr = sitk.GetArrayFromImage(image)
+    shape = list(img_arr.shape)
+    class_within_patch = {}
     patches = extract_patches(image, label,
                               patch_size, patch_stride,
                               min_fg, still_save)
@@ -142,7 +147,20 @@ def process_case(args):
         sitk.WriteImage(img_patch, str(out_case / fname_img), True)
         if lbl_patch is not None:
             fname_lbl = f"{case_name}_{idx}_label.mha"
+            # compute unique classes in this patch
+            lbl_np = sitk.GetArrayFromImage(lbl_patch)
+            class_within_patch[fname_lbl] = np.unique(lbl_np).tolist()
             sitk.WriteImage(lbl_patch, str(out_case / fname_lbl), True)
+    # write series metadata
+    series_meta = {
+        "series_id": case_name,
+        "shape": shape,
+        "num_patches": len(patches),
+        "anno_available": True,
+        "class_within_patch": class_within_patch
+    }
+    with open(out_case / "SeriesMeta.json", "w") as f:
+        json.dump(series_meta, f, indent=4)
     return case_name, len(patches)
 
 
@@ -171,6 +189,16 @@ def main():
     print(f"Processed {len(results)} cases:")
     for case, count in results:
         print(f"  {case}: {count} patches")
+    # write overall crop metadata
+    crop_meta = {
+        "src_folder": str(args.src_folder),
+        "dst_folder": str(args.dst_folder),
+        "patch_size": args.patch_size,
+        "patch_stride": args.patch_stride,
+        "anno_available": [case for case, count in results]
+    }
+    with open(args.dst_folder / "crop_meta.json", "w") as f:
+        json.dump(crop_meta, f, indent=4)
 
 
 if __name__ == '__main__':
