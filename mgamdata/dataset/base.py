@@ -92,8 +92,8 @@ class mgam_BaseSegDataset(BaseSegDataset):
 
 
 class mgam_SeriesVolume(mgam_BaseSegDataset):
-    def __init__(self, 
-                 data_root_mha:str, 
+    def __init__(self,
+                 data_root_mha:str,
                  mode:Literal["semi", "sup"]="sup",
                  *args, **kwargs):
         # `Semi` mode will still include those samples without labels
@@ -112,7 +112,7 @@ class mgam_SeriesVolume(mgam_BaseSegDataset):
         ]
         all_series = sorted(all_series, key=lambda x: abs(int(re.search(r"\d+", x).group())))
         train_end = int(len(all_series) * self.SPLIT_RATIO[0])
-        val_end = train_end + int(len(all_series) * self.SPLIT_RATIO[1])
+        val_end = train_end + int(len(all_series) * self.SPLIT_RATIO[1]) + 1
 
         if self.split == "train":
             return all_series[:train_end]
