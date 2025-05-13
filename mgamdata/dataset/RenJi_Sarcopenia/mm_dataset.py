@@ -22,7 +22,6 @@ class Sarcopenia_base(mgam_SeriesVolume):
         self.ensure_L3_anno = ensure_L3_anno if (ensure_L3_anno is not None) else (L3_anno_xlsx is not None)
         self.L3_anno = pd.read_excel(L3_anno_xlsx, usecols=['序列编号', 'L3节段起始层数', 'L3节段终止层数', 'L3节段椎弓根层面层数']) \
                        if L3_anno_xlsx is not None else None
-        super().__init__(*args, **kwargs)
 
     def _split(self):
         # Indexing `SeriesUIDs` according to original mha files.
@@ -109,7 +108,8 @@ class Sarcopenia_2D_Tiff_V2(Sarcopenia_base_V2, mgam_2D_MhaVolumeSlices):
     ...
 
 
-class Sarcopenia_Patch_V2(mgam_Patched_Mha, Sarcopenia_base_V2):
+# Update 250513
+class Sarcopenia_Patch_V2(Sarcopenia_base_V2, mgam_SemiSup_3D_Mha):
     ...
 
 class Sarcopenia_Mha_V2(Sarcopenia_base_V2, mgam_SemiSup_3D_Mha):
