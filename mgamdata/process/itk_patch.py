@@ -123,7 +123,7 @@ def find_pairs(src_folder: Path):
         lbl_path = label_dir / img_path.name
         if lbl_path.exists():
             pairs.append((img_path, lbl_path))
-    return pairs[0:10]
+    return pairs
 
 
 def process_case(args):
