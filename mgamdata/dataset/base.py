@@ -152,6 +152,34 @@ class mgam_SemiSup_3D_Mha(mgam_SeriesVolume):
             yield (image_mha_path, label_mha_path)
 
 
+class mgam_SemiSup_Precropped_Npz(mgam_SemiSup_3D_Mha):
+    def __init__(self, *args, **kwargs) -> None:
+        self.precrop_meta = json.load(open(os.path.join(kwargs["data_root"], "crop_meta.json"), "r"))
+        super().__init__(*args, **kwargs)
+
+    def sample_iterator(self) -> Generator[tuple[str, str], None, None]:
+        for series in tqdm(self._split(),
+                           desc=f"Indexing {self.split} samples of all series of {self.__class__.__name__}",
+                           leave=False,
+                           dynamic_ncols=True):
+            # Check usability.
+            if self.mode == "sup" and series not in self.precrop_meta["anno_available"]:
+                continue
+            series_folder = os.path.join(self.data_root, series)
+            try:
+                series_meta = orjson.loads(open(os.path.join(series_folder, "SeriesMeta.json"), "r").read())
+            except FileNotFoundError:
+                print_log(f"{series} not found.", MMLogger.get_current_instance())
+                continue
+            
+            patch_npz_files = series_meta["class_within_patch"].keys()
+            for sample in [os.path.join(series_folder, file) 
+                           for file in patch_npz_files]:
+                if sample.endswith(".npz"):
+                    yield (os.path.join(series_folder, sample),
+                           os.path.join(series_folder, sample))
+
+
 class mgam_SeriesPatched_Structure(mgam_SeriesVolume):
     def __init__(self, *args, **kwargs) -> None:
         self.precrop_meta = json.load(open(os.path.join(kwargs["data_root"], "crop_meta.json"), "r"))
