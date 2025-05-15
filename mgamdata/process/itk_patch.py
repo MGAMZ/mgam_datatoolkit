@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 from multiprocessing import Pool, cpu_count
 from tqdm import tqdm
+import json
 
 
 def extract_patches(image: sitk.Image,
@@ -128,22 +129,43 @@ def find_pairs(src_folder: Path):
 def process_case(args):
     img_path, lbl_path, dst_folder, patch_size, patch_stride, min_fg, still_save = args
     case_name = img_path.stem
-    # create one folder per case
-    out_case = dst_folder / case_name
-    out_case.mkdir(parents=True, exist_ok=True)
-    image = sitk.ReadImage(str(img_path))
-    label = sitk.ReadImage(str(lbl_path))
-    patches = extract_patches(image, label,
-                              patch_size, patch_stride,
-                              min_fg, still_save)
-    for idx, (img_patch, lbl_patch) in enumerate(patches):
-        # write image and label patches with explicit suffix
-        fname_img = f"{case_name}_{idx}_image.mha"
-        sitk.WriteImage(img_patch, str(out_case / fname_img), True)
-        if lbl_patch is not None:
-            fname_lbl = f"{case_name}_{idx}_label.mha"
-            sitk.WriteImage(lbl_patch, str(out_case / fname_lbl), True)
-    return case_name, len(patches)
+    try:
+        # create one folder per case
+        out_case = dst_folder / case_name
+        out_case.mkdir(parents=True, exist_ok=True)
+        image = sitk.ReadImage(str(img_path))
+        label = sitk.ReadImage(str(lbl_path))
+        # load image array for metadata
+        img_arr = sitk.GetArrayFromImage(image)
+        shape = list(img_arr.shape)
+        class_within_patch = {}
+        patches = extract_patches(image, label,
+                                  patch_size, patch_stride,
+                                  min_fg, still_save)
+        for idx, (img_patch, lbl_patch) in enumerate(patches):
+            # write image and label patches with explicit suffix
+            fname_img = f"{case_name}_{idx}_image.mha"
+            sitk.WriteImage(img_patch, str(out_case / fname_img), True)
+            if lbl_patch is not None:
+                fname_lbl = f"{case_name}_{idx}_label.mha"
+                # compute unique classes in this patch
+                lbl_np = sitk.GetArrayFromImage(lbl_patch)
+                class_within_patch[fname_lbl] = np.unique(lbl_np).tolist()
+                sitk.WriteImage(lbl_patch, str(out_case / fname_lbl), True)
+        # write series metadata
+        series_meta = {
+            "series_id": case_name,
+            "shape": shape,
+            "num_patches": len(patches),
+            "anno_available": True,
+            "class_within_patch": class_within_patch
+        }
+        with open(out_case / "SeriesMeta.json", "w") as f:
+            json.dump(series_meta, f, indent=4)
+        return case_name, len(patches)
+    except Exception as e:
+        print(f"Failed processing case {case_name}: {e}")
+        return None
 
 
 def main():
@@ -168,9 +190,19 @@ def main():
             for t in task_args:
                 results.append(process_case(t))
                 pbar.update(1)
-    print(f"Processed {len(results)} cases:")
-    for case, count in results:
-        print(f"  {case}: {count} patches")
+    # removed summary prints
+    # filter out failed cases
+    valid_results = [r for r in results if r is not None]
+    # write overall crop metadata
+    crop_meta = {
+        "src_folder": str(args.src_folder),
+        "dst_folder": str(args.dst_folder),
+        "patch_size": args.patch_size,
+        "patch_stride": args.patch_stride,
+        "anno_available": [case for case, count in valid_results]
+    }
+    with open(args.dst_folder / "crop_meta.json", "w") as f:
+        json.dump(crop_meta, f, indent=4)
 
 
 if __name__ == '__main__':
