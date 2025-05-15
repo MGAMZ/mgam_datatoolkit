@@ -29,7 +29,7 @@ class mgam_BaseSegDataset(BaseSegDataset):
 
     def __init__(
         self,
-        split: str,
+        split: str|None,
         debug: bool = False,
         dataset_name: str | None = None,
         *args, **kwargs,
@@ -217,6 +217,8 @@ class mgam_Standard_Patched_Npz(mgam_Standard_Npz_Structure, mgam_BaseSegDataset
             return all_series[train_end:val_end]
         elif self.split == "test":
             return all_series[val_end:]
+        elif self.split == "all":
+            return all_series
         else:
             raise RuntimeError(f"Unsupported split: {self.split}")
 

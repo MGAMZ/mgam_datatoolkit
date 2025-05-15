@@ -14,6 +14,10 @@ from mgamdata.mm import MM_WORK_DIR_ROOT, MM_TEST_DIR_ROOT, MM_CONFIG_ROOT
 SUPPORTED_MODELS = os.environ["supported_models"].split(",")
 
 
+def is_in_torch_distributed_mode():
+    return "LOCAL_RANK" in os.environ
+
+
 class auto_runner:
 
     def __init__(

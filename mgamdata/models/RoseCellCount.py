@@ -12,7 +12,7 @@ from mmcv.transforms import BaseTransform
 from mmengine.logging import print_log, MMLogger
 from mmengine.evaluator.metric import BaseMetric
 from mmengine.structures import PixelData
-from mmpretrain.registry import MODELS
+from mmengine.registry import MODELS
 from mmseg.structures import SegDataSample
 from mmseg.models.segmentors import EncoderDecoder
 
@@ -134,7 +134,7 @@ class CellCounter(EncoderDecoder):
 
 class CellCounterLite(mgam_Seg2D_Lite):
     def __init__(self, amplify:int, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+        super().__init__(num_classes=1, *args, **kwargs)
         self.amplify = amplify
     
     def predict(self, inputs:Tensor, data_samples:Sequence[BaseDataElement]|None=None) -> Sequence[BaseDataElement]:
@@ -150,7 +150,7 @@ class CellCounterLite(mgam_Seg2D_Lite):
     def inference(self, inputs: Tensor, data_samples:Sequence[BaseDataElement]|None=None) -> Tensor:
         seg_logits = super().inference(inputs, data_samples)
         seg_logits /= self.amplify
-        return seg_logits * 2
+        return seg_logits
 
 
 class CellCounterClassifier(CellCounter):
