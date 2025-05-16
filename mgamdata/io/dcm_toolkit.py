@@ -5,7 +5,8 @@ import pydicom
 import SimpleITK as sitk
 
 
-def read_dcm_as_sitk(data_directory: str) -> tuple[list[pydicom.FileDataset]|None, sitk.Image|None]:
+def read_dcm_as_sitk(data_directory: str, need_dcms:bool=True
+                     ) -> tuple[list[pydicom.FileDataset]|None, sitk.Image|None]:
     """
     [SimpleITK: Dicom Series Read Modify Write](https://simpleitk.readthedocs.io/en/master/link_DicomSeriesReadModifyWrite_docs.html)
     
@@ -30,5 +31,9 @@ def read_dcm_as_sitk(data_directory: str) -> tuple[list[pydicom.FileDataset]|Non
     # series_reader.LoadPrivateTagsOn() # disable private tags
     image3D = series_reader.Execute()
 
-    dcms = [pydicom.dcmread(dcm) for dcm in series_file_names]
+    if need_dcms:
+        dcms = [pydicom.dcmread(dcm) for dcm in series_file_names]
+    else:
+        dcms = None
+    
     return dcms, image3D
