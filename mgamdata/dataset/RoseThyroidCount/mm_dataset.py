@@ -5,7 +5,7 @@ from typing_extensions import Literal, Sequence
 
 import numpy as np
 from mmcv.transforms import BaseTransform
-from ..base import mgam_Standard_Patched_Npz
+from ..base import mgam_BaseSegDataset
 from .meta import CLASS_INDEX_MAP
 
 
@@ -13,21 +13,33 @@ class RoseThyroidCount_base:
     METAINFO = dict(classes=list(CLASS_INDEX_MAP.keys()))
 
 
-class RoseThyroidCount_Precrop_Npz(RoseThyroidCount_base, mgam_Standard_Patched_Npz):
-    SPLIT_RATIO = [0.7, 0.1, 0.2]
+class RoseThyroidCount_Precrop_Npz(RoseThyroidCount_base, mgam_BaseSegDataset):
+    SPLIT_RATIO = [0.7, 0.3]
 
     def _split(self):
-        slide_meta = json.load(open(os.path.join(self.data_root, "slide_stats.json"), 'r'))['slide_details']
-        slide_ids = list(slide_meta.keys())
+        with open(os.path.join(self.data_root, "slide_stats.json"), 'r') as f:
+            slide_meta = json.load(f)['slide_details']
+        slide_ids = [slide_id for slide_id in list(slide_meta.keys()) 
+                     if os.path.exists(os.path.join(self.data_root, slide_id))]
         
         if self.split == 'train':
             return slide_ids[:int(len(slide_ids) * self.SPLIT_RATIO[0])]
-        elif self.split == 'val':
-            return slide_ids[int(len(slide_ids) * self.SPLIT_RATIO[0]):int(len(slide_ids) * (self.SPLIT_RATIO[0] + self.SPLIT_RATIO[1]))]
-        elif self.split == 'test':
-            return slide_ids[int(len(slide_ids) * (self.SPLIT_RATIO[0] + self.SPLIT_RATIO[1])):]
+        elif self.split == 'val' or self.split == 'test':
+            return slide_ids[int(len(slide_ids) * self.SPLIT_RATIO[0]):]
+        elif self.split == 'all':
+            return slide_ids
         else:
             raise ValueError(f"Invalid split: {self.split}. Expected one of ['train', 'val', 'test']")
+    
+    def sample_iterator(self):
+        for series in self._split():
+            series_folder: str = os.path.join(self.data_root, series)
+            for sample in os.listdir(series_folder):
+                if sample.endswith(".npz"):
+                    yield (
+                        os.path.join(series_folder, sample),
+                        os.path.join(series_folder, sample),
+                    )
 
 
 class LoadRoseThyroidSampleFromNpz(BaseTransform):

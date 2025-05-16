@@ -23,7 +23,7 @@ class mgam_BaseSegDataset(BaseSegDataset):
 
     def __init__(
         self,
-        split: str,
+        split: str|None,
         debug: bool = False,
         dataset_name: str | None = None,
         *args, **kwargs,
@@ -154,7 +154,8 @@ class mgam_SemiSup_3D_Mha(mgam_SeriesVolume):
 
 class mgam_SemiSup_Precropped_Npz(mgam_SemiSup_3D_Mha):
     def __init__(self, *args, **kwargs) -> None:
-        self.precrop_meta = json.load(open(os.path.join(kwargs["data_root"], "crop_meta.json"), "r"))
+        with open(os.path.join(kwargs["data_root"], "crop_meta.json"), "r") as f:
+            self.precrop_meta = json.load(f)
         super().__init__(*args, **kwargs)
 
     def sample_iterator(self) -> Generator[tuple[str, str], None, None]:
@@ -182,7 +183,8 @@ class mgam_SemiSup_Precropped_Npz(mgam_SemiSup_3D_Mha):
 
 class mgam_SeriesPatched_Structure(mgam_SeriesVolume):
     def __init__(self, *args, **kwargs) -> None:
-        self.precrop_meta = json.load(open(os.path.join(kwargs["data_root"], "crop_meta.json"), "r"))
+        with open(os.path.join(kwargs["data_root"], "crop_meta.json"), "r") as f:
+            self.precrop_meta = json.load(f)
         super().__init__(*args, **kwargs)
 
     def sample_iterator(self) -> Generator[tuple[str, str], None, None]:
@@ -195,7 +197,8 @@ class mgam_SeriesPatched_Structure(mgam_SeriesVolume):
                 continue
             series_folder = os.path.join(self.data_root, series)
             try:
-                series_meta = json.loads(open(os.path.join(series_folder, "SeriesMeta.json"), "r").read())
+                with open(os.path.join(series_folder, "SeriesMeta.json"), "r") as f:
+                    series_meta = json.load(f)
             except FileNotFoundError:
                 print_log(f"{series} not found.", MMLogger.get_current_instance())
                 continue
@@ -203,7 +206,7 @@ class mgam_SeriesPatched_Structure(mgam_SeriesVolume):
             patch_npz_files = series_meta["class_within_patch"].keys()
             for sample in [os.path.join(series_folder, file) 
                            for file in patch_npz_files]:
-                yield (os.path.join(series_folder, sample),
+                yield (os.path.join(series_folder, sample.replace('_label', '_image')),
                        os.path.join(series_folder, sample))
 
 

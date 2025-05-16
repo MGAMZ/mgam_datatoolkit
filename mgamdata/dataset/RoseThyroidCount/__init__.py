@@ -148,3 +148,6 @@ class ClusterReader:
         # 如果无法明确转换，返回None或打印警告
         print(Fore.YELLOW + f"警告: 无法将分类标注值 '{val}' 转换为布尔值 (SeriesUID: {SeriesUID})" + Style.RESET_ALL)
         return None
+
+    def check_has_anno(self, SeriesUID:str):
+        return not self.ann[self.ann["序列编号"] == str(SeriesUID)].empty
