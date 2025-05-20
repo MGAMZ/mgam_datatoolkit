@@ -203,8 +203,13 @@ class Inferencer_3D_ONNX(SegInferencer):
         patch_stride:list[int],
         ww:int,
         wl:int,
+<<<<<<< HEAD
         patch_accumulate_device='cpu',
         allow_tqdm:bool=True
+=======
+        allow_tqdm:bool=True,
+        input_dtype=np.float32,
+>>>>>>> Alpha_Lightning
     ):
         import onnxruntime as ort
         self.allow_tqdm = allow_tqdm
@@ -212,6 +217,7 @@ class Inferencer_3D_ONNX(SegInferencer):
         self.wl = wl
         self.model = ort.InferenceSession(
             onnx_path,
+<<<<<<< HEAD
             providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
         self.inference_PatchSize = patch_size
         self.inference_PatchStride = patch_stride
@@ -219,6 +225,15 @@ class Inferencer_3D_ONNX(SegInferencer):
 
     @torch.inference_mode()
     def Inference_FromNDArray(self, image_array: np.ndarray) -> Tensor:
+=======
+            providers=['CUDAExecutionProvider'])
+        self.inference_PatchSize = patch_size
+        self.inference_PatchStride = patch_stride
+        self.input_dtype = input_dtype
+
+    @torch.inference_mode()
+    def Inference_FromNDArray(self, image_array: np.ndarray) -> np.ndarray:
+>>>>>>> Alpha_Lightning
         """
         image_array: np.ndarray, shape [Z, Y, X] or [C, Z, Y, X]
         Returns: torch.Tensor, shape [C, Z, Y, X]
@@ -230,6 +245,7 @@ class Inferencer_3D_ONNX(SegInferencer):
             image_array = image_array[None]        # [1, C, Z, Y, X]
         else:
             raise ValueError(f"Unsupported input shape: {image_array.shape}")
+<<<<<<< HEAD
         
         # set window
         image_array = SetWindow(image_array, self.ww, self.wl)
@@ -245,6 +261,16 @@ class Inferencer_3D_ONNX(SegInferencer):
         return torch.from_numpy(result[0])
 
     def slide_inference(self, inputs: torch.Tensor) -> torch.Tensor:
+=======
+        image_array = SetWindow(image_array, self.ww, self.wl).astype(self.input_dtype)  # [1, C, Z, Y, X]
+        seg_logits = self.slide_inference(image_array)
+        return seg_logits.squeeze(0)  # [C, Z, Y, X]
+
+    def _forward(self, patch_np: np.ndarray) -> np.ndarray:
+        return self.model.run(['OUTPUT__0'], {'INPUT__0': patch_np})[0]
+
+    def slide_inference(self, inputs: np.ndarray) -> np.ndarray:
+>>>>>>> Alpha_Lightning
         """
         滑动窗口推理，输入[N, C, Z, Y, X]，输出[N, C, Z, Y, X]
         """
@@ -252,18 +278,27 @@ class Inferencer_3D_ONNX(SegInferencer):
             f"滑动窗口采样必须指定inference_PatchSize({self.inference_PatchSize})和inference_PatchStride({self.inference_PatchStride})"
         z_stride, y_stride, x_stride = self.inference_PatchStride
         z_crop, y_crop, x_crop = self.inference_PatchSize
+<<<<<<< HEAD
         batch_size, in_channels, z_img, y_img, x_img = inputs.size()
+=======
+        batch_size, in_channels, z_img, y_img, x_img = inputs.shape
+>>>>>>> Alpha_Lightning
 
         # 获取输出通道数（类别数）
         with torch.no_grad():
             temp_output = self._forward(inputs[:, :, :min(z_crop, z_img), :min(y_crop, y_img), :min(x_crop, x_img)])
+<<<<<<< HEAD
             out_channels = temp_output.size(1)
+=======
+            out_channels = temp_output.shape[1]
+>>>>>>> Alpha_Lightning
 
         # 计算网格数
         z_grids = max(z_img - z_crop + z_stride - 1, 0) // z_stride + 1
         y_grids = max(y_img - y_crop + y_stride - 1, 0) // y_stride + 1
         x_grids = max(x_img - x_crop + x_stride - 1, 0) // x_stride + 1
 
+<<<<<<< HEAD
         input_device = inputs.device
         accumulate_device = torch.device(self.inference_PatchAccumulateDevice)
 
@@ -279,6 +314,16 @@ class Inferencer_3D_ONNX(SegInferencer):
         )
 
         for z_idx in range(z_grids):
+=======
+        preds = np.zeros((batch_size, out_channels, z_img, y_img, x_img), dtype=np.float16)
+        count_mat = np.zeros((batch_size, 1, z_img, y_img, x_img), dtype=np.uint8)
+        for z_idx in tqdm(range(z_grids),
+                          desc="SlideWindow Infer",
+                          disable=not self.allow_tqdm,
+                          leave=False,
+                          dynamic_ncols=True,
+                          position=1):
+>>>>>>> Alpha_Lightning
             for y_idx in range(y_grids):
                 for x_idx in range(x_grids):
                     z1 = z_idx * z_stride
@@ -290,6 +335,7 @@ class Inferencer_3D_ONNX(SegInferencer):
                     z1 = max(z2 - z_crop, 0)
                     y1 = max(y2 - y_crop, 0)
                     x1 = max(x2 - x_crop, 0)
+<<<<<<< HEAD
 
                     crop_vol = inputs[:, :, z1:z2, y1:y2, x1:x2]
                     crop_seg_logit = self._forward(crop_vol)
@@ -306,6 +352,22 @@ class Inferencer_3D_ONNX(SegInferencer):
         image_array = sitk.GetArrayFromImage(itk_image)  # [Z, Y, X]
         pred = self.Inference_FromNDArray(image_array)   # [C, Z, Y, X]
         pred = pred.argmax(dim=0).to(dtype=torch.uint8, device='cpu').numpy()  # [Z, Y, X]
+=======
+                    crop_vol = inputs[:, :, z1:z2, y1:y2, x1:x2]
+                    crop_seg_logit = self._forward(crop_vol).astype(np.float16)
+                    preds[:, :, z1:z2, y1:y2, x1:x2] += crop_seg_logit
+                    count_mat[:, :, z1:z2, y1:y2, x1:x2] += 1
+
+        assert np.all(count_mat > 0), "存在未被滑动窗口覆盖的区域"
+        seg_logits = preds / count_mat
+        return seg_logits
+
+    def Inference_FromITK(self, itk_image:sitk.Image) -> tuple[sitk.Image, sitk.Image]:
+        itk_image = sitk.DICOMOrient(itk_image, 'LPI')
+        image_array = sitk.GetArrayFromImage(itk_image) # [Z, Y, X]
+        pred = self.Inference_FromNDArray(image_array)  # [C, Z, Y, X]
+        pred = pred.argmax(axis=0) # [Z, Y, X]
+>>>>>>> Alpha_Lightning
         itk_pred = sitk.GetImageFromArray(pred)
         itk_pred.CopyInformation(itk_image)
         return itk_image, itk_pred
